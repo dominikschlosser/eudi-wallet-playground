@@ -1,0 +1,26 @@
+server:
+  port: ${PORT:3000}
+  max-http-request-header-size: ${MAX_HTTP_REQUEST_HEADER_SIZE:64KB} # allow large OID4VP request objects with verifier attestation
+spring:
+  main:
+    allow-bean-definition-overriding: true
+
+wallet:
+  keycloak-base-url: ${KEYCLOAK_BASE_URL:http://localhost:8080}
+  realm: ${KEYCLOAK_REALM:wallet-demo}
+  client-id: ${OIDC_CLIENT_ID:wallet-mock}
+  client-secret: ${OIDC_CLIENT_SECRET:secret-wallet}
+  wallet-did: ${WALLET_DID:did:example:mock-wallet}
+  storage-dir: ${CREDENTIAL_STORAGE_DIR:data/credentials}
+  wallet-key-file: ${WALLET_KEY_FILE:config/wallet-keys.json}
+  tls-key-store: ${WALLET_TLS_KEY_STORE:}
+  tls-key-store-password: ${WALLET_TLS_KEY_STORE_PASSWORD:}
+  tls-key-store-type: ${WALLET_TLS_KEY_STORE_TYPE:PKCS12}
+  trusted-attestation-issuers:
+    - ${WALLET_TRUSTED_ATTESTATION_ISSUERS:demo-attestation-issuer}
+verifier:
+  dcql-query-file: ${DCQL_QUERY_FILE:}
+  default-dcql-query: ${DEFAULT_DCQL_QUERY:}
+  wallet-auth-endpoint: ${VERIFIER_WALLET_AUTH_ENDPOINT:}
+  client-id: ${VERIFIER_CLIENT_ID:wallet-verifier}
+  encryption-key-file: ${VERIFIER_ENCRYPTION_KEY_FILE:config/verifier-enc-key.json}

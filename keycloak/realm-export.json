@@ -1,0 +1,530 @@
+{
+  "realm": "wallet-demo",
+  "enabled": true,
+  "displayName": "OID4VCI Wallet Demo",
+  "attributes": {
+    "preAuthorizedCodeLifespanS": "300",
+    "cNonceLifespanSec": "300",
+    "oid4vciEnabled": "true",
+    "userProfileEnabled": "true",
+    "userProfileUnmanagedAttributes": "true"
+  },
+  "users": [
+    {
+      "username": "test",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Wallet",
+      "email": "alice.test@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "test",
+          "temporary": false
+        }
+      ],
+      "attributes": {
+        "personal_id": [
+          "ID-123"
+        ],
+        "birthdate": [
+          "1992-04-12"
+        ],
+        "nationalities": [
+          "DE"
+        ],
+        "address.street_address": [
+          "Prenzlauer Allee 1"
+        ],
+        "address.locality": [
+          "Berlin"
+        ],
+        "address.region": [
+          "Berlin"
+        ],
+        "address.postal_code": [
+          "10405"
+        ],
+        "address.country": [
+          "DE"
+        ],
+        "document_number": [
+          "DOC-123-A"
+        ],
+        "issuing_country": [
+          "DE"
+        ],
+        "issuing_authority": [
+          "Stadt Berlin"
+        ],
+        "favorite_color": [
+          "Blue"
+        ]
+      }
+    },
+    {
+      "username": "test2",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Wallet",
+      "email": "bob.test@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "test2",
+          "temporary": false
+        }
+      ],
+      "attributes": {
+        "personal_id": [
+          "ID-124"
+        ],
+        "birthdate": [
+          "1990-09-30"
+        ],
+        "nationalities": [
+          "FR"
+        ],
+        "address.street_address": [
+          "5 Rue de Demo"
+        ],
+        "address.locality": [
+          "Paris"
+        ],
+        "address.region": [
+          "Ile-de-France"
+        ],
+        "address.postal_code": [
+          "75001"
+        ],
+        "address.country": [
+          "FR"
+        ],
+        "document_number": [
+          "DOC-124-B"
+        ],
+        "issuing_country": [
+          "FR"
+        ],
+        "issuing_authority": [
+          "Ville de Paris"
+        ],
+        "favorite_color": [
+          "Green"
+        ]
+      }
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "mock-identity-credential",
+      "description": "Scope that triggers issuance of the Mock Identity credential",
+      "protocol": "oid4vc",
+      "attributes": {
+        "consent.screen.text": "Issue mock identity credential",
+        "display.on.consent.screen": "true",
+        "include.in.token.scope": "true",
+        "vc.credential_configuration_id": "mock-identity-credential",
+        "vc.credential_identifier": "mock-identity-credential",
+        "vc.verifiable_credential_type": "MockIdentityCredential",
+        "vc.supported_credential_types": "VerifiableCredential,MockIdentityCredential",
+        "vc.credential_contexts": "https://www.w3.org/2018/credentials/v1,https://example.org/credentials/mock-identity",
+        "vc.format": "dc+sd-jwt",
+        "vc.proof_signing_alg_values_supported": "ES256",
+        "vc.display": "[{\"name\":\"Mock Identity Credential\",\"locale\":\"en\"}]",
+        "vc.credential_build_config.hash_algorithm": "SHA-256",
+        "vc.credential_build_config.token_jws_type": "JWS"
+      },
+      "protocolMappers": [
+        {
+          "name": "first-name",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "given_name",
+            "userAttribute": "firstName",
+            "jsonType.label": "String",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"First name\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "last-name",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "family_name",
+            "userAttribute": "lastName",
+            "jsonType.label": "String",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"Last name\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "personal-id",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "personal_id",
+            "userAttribute": "personal_id",
+            "jsonType.label": "String",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"Identifier\",\"locale\":\"en\"}]"
+          }
+        }
+      ]
+    },
+    {
+      "name": "mock-alternate-credential",
+      "description": "Alternate credential for demo",
+      "protocol": "oid4vc",
+      "attributes": {
+        "consent.screen.text": "Issue alternate credential",
+        "display.on.consent.screen": "true",
+        "include.in.token.scope": "true",
+        "vc.credential_configuration_id": "mock-alternate-credential",
+        "vc.credential_identifier": "mock-alternate-credential",
+        "vc.verifiable_credential_type": "AlternateCredential",
+        "vc.supported_credential_types": "VerifiableCredential,AlternateCredential",
+        "vc.credential_contexts": "https://www.w3.org/2018/credentials/v1,https://example.org/credentials/alternate",
+        "vc.format": "dc+sd-jwt",
+        "vc.proof_signing_alg_values_supported": "ES256",
+        "vc.display": "[{\"name\":\"Alternate Credential\",\"locale\":\"en\"}]",
+        "vc.credential_build_config.hash_algorithm": "SHA-256",
+        "vc.credential_build_config.token_jws_type": "JWS"
+      },
+      "protocolMappers": [
+        {
+          "name": "favorite-color",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "favorite_color",
+            "userAttribute": "favorite_color",
+            "jsonType.label": "String",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"Favorite color\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "personal-id-alt",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "personal_id",
+            "userAttribute": "personal_id",
+            "jsonType.label": "String",
+            "vc.mandatory": "false",
+            "vc.display": "[{\"name\":\"Identifier\",\"locale\":\"en\"}]"
+          }
+        }
+      ]
+    },
+    {
+      "name": "pid-credential",
+      "description": "Person Identification Data credential",
+      "protocol": "oid4vc",
+      "attributes": {
+        "consent.screen.text": "Issue PID credential",
+        "display.on.consent.screen": "true",
+        "include.in.token.scope": "true",
+        "vc.credential_configuration_id": "pid-credential",
+        "vc.credential_identifier": "pid-credential",
+        "vc.verifiable_credential_type": "urn:eudi:pid:1",
+        "vc.supported_credential_types": "VerifiableCredential,urn:eudi:pid:1",
+        "vc.credential_contexts": "https://www.w3.org/2018/credentials/v1,https://example.org/credentials/pid",
+        "vc.format": "dc+sd-jwt",
+        "vc.proof_signing_alg_values_supported": "ES256",
+        "vc.display": "[{\"name\":\"Person Identification Data\",\"locale\":\"en\"}]",
+        "vc.credential_build_config.hash_algorithm": "SHA-256",
+        "vc.credential_build_config.token_jws_type": "JWS"
+      },
+      "protocolMappers": [
+        {
+          "name": "pid-given-name",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "given_name",
+            "userAttribute": "firstName",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"Given name\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-family-name",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "family_name",
+            "userAttribute": "lastName",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"Family name\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-birthdate",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "birthdate",
+            "userAttribute": "birthdate",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"Date of birth\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-nationalities",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "nationalities",
+            "userAttribute": "nationalities",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"Nationality\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-address-street",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "address.street_address",
+            "userAttribute": "address.street_address",
+            "vc.mandatory": "false",
+            "vc.display": "[{\"name\":\"Street address\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-address-locality",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "address.locality",
+            "userAttribute": "address.locality",
+            "vc.mandatory": "false",
+            "vc.display": "[{\"name\":\"Locality\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-address-region",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "address.region",
+            "userAttribute": "address.region",
+            "vc.mandatory": "false",
+            "vc.display": "[{\"name\":\"Region\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-address-postal",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "address.postal_code",
+            "userAttribute": "address.postal_code",
+            "vc.mandatory": "false",
+            "vc.display": "[{\"name\":\"Postal code\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-address-country",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "address.country",
+            "userAttribute": "address.country",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"Country\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-document-number",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "document_number",
+            "userAttribute": "document_number",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"Document number\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-issuing-country",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "issuing_country",
+            "userAttribute": "issuing_country",
+            "vc.mandatory": "true",
+            "vc.display": "[{\"name\":\"Issuing country\",\"locale\":\"en\"}]"
+          }
+        },
+        {
+          "name": "pid-issuing-authority",
+          "protocol": "oid4vc",
+          "protocolMapper": "oid4vc-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "issuing_authority",
+            "userAttribute": "issuing_authority",
+            "vc.mandatory": "false",
+            "vc.display": "[{\"name\":\"Issuing authority\",\"locale\":\"en\"}]"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "wallet-mock",
+      "name": "Wallet Mock UI",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "secret": "secret-wallet",
+      "serviceAccountsEnabled": false,
+      "authorizationServicesEnabled": false,
+      "redirectUris": [
+        "*"
+      ],
+      "webOrigins": [
+        "*"
+      ],
+      "optionalClientScopes": [
+        "mock-identity-credential",
+        "mock-alternate-credential",
+        "pid-credential"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "*",
+        "client.secret.creation.time": "1731395000",
+        "oid4vci.enabled": "true"
+      }
+    }
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\":[{\"name\":\"username\",\"displayName\":\"${username}\",\"validations\":{\"length\":{\"min\":3,\"max\":255},\"username-prohibited-characters\":{},\"up-username-not-idn-homograph\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"email\",\"displayName\":\"${email}\",\"validations\":{\"email\":{},\"length\":{\"max\":255}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"firstName\",\"displayName\":\"${firstName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"lastName\",\"displayName\":\"${lastName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false}],\"groups\":[{\"name\":\"user-metadata\",\"displayHeader\":\"User metadata\",\"displayDescription\":\"Attributes, which refer to user metadata\"}],\"unmanagedAttributePolicy\":\"ENABLED\"}"
+          ]
+        }
+      }
+    ],
+    "org.keycloak.keys.KeyProvider": [
+      {
+        "name": "wallet-demo-rsa",
+        "providerId": "rsa",
+        "config": {
+          "priority": [
+            "100"
+          ],
+          "enabled": [
+            "true"
+          ],
+          "active": [
+            "true"
+          ],
+          "algorithm": [
+            "RS256"
+          ],
+          "privateKey": [
+            "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDGv16dc77qT8aj\n5espoY2/Gsa8nYNyfvbwddaFoNzbYVcC2FpEPqXTlsdBsHUAngsz0a8Eb8H1g/7K\n5pXWsNkuYl2MQOIzdZZ9ll16WdpK8tNcUqJm9zxmGQq22sIYitOWg/CBEUL0SAzi\njnk5gr8hNM1IchEx4I13IxN8dAYIP1JRp99a78GAmO0d0pCzr/cMXHKLsQwbvqc4\n0YmxU1Gc9AUEmaECnUyV1RjoLjkvcw8JeW6qxR+S6tGanMJnGZC+m6RdPMViC5CT\n5C5cKtzM0gUHYDgwAXpJuOu4n28vCWYgqDPPSrdQcX+cW+aY7ztBtPnnpD0SBtyZ\nfoqcBm3zAgMBAAECggEAOR8/flmKAaY0HV8zm5+HMensPMG4yeub5bi4k2eMkrED\nZRnxt7OZzZqEYmjo9+h0p8wYVVoZkQsC7CYh4rapdR9oa6sqWEfvnODetQ+mIexw\nuxQ1AQsGHQINhkiRiKQ99ACv2yiu6a7bpTH1vYXKkSyv46aFMqSrhBZcv2RJZ4zo\n1ScrN9Edsxo9L+9TEHkRtk6bWPNh1mnecrT/99HqFDRW6adMSb5JFkllntTfe6Hg\nxXmHD277p1+Hj9A2fM865VkABJumNs397/GEGVTtXdXN7IHFnmroiN7P+kYnhqTS\nv6Nq1+BhhzxRVzBWQqP/Er4HKzgr8EeUty4BT8psIQKBgQD/9cCIO8O1pJonIbBa\nBbfM+Ilu5KVBFxESBJD7vKKhCq/gDtpDvwpiT19NhFoWznLjAgtlAQobF7IoOS7p\nuk2OhP8Y01WXzuHkVlBYtoCQ6roxfMpUIsbQbD15JqddwSGBpbKaC3o8h593WNJK\n2MJfSsW7f3dKIYdqQy7PbCRSTQKBgQDGx1OuxTHzjkFrcHcytrhdn3sju7i9yI4z\n/lSiAUbtDLci3fXdcKk4Y3TtCcSb7g6EwoT42fpdK9xrocySUGi+esubEJ8bfh8B\n5FG6NX+VgkK5COCO3FlI4gDYYREa/I1bh/owF0YMwchLFXfroBHfFJoxScuKSFtH\n8zkp2QNhPwKBgQDzi0w01Fj1vrcGwOFh5srqdxmdsGUlN+OAN2QUg3pirR6HnNpF\nV8Nzo35U7bgitzFNmqZo5sJM4REdgLuInUIqd5Wac4uftLPvZclxf8V5Hj8n00tZ\nHvX5XuRnIEZjyN4u1BDKzlzyt0EeeB8wJGtd7HGUZEaG/LwyedZSet1ciQKBgCuZ\ntxJDsLQyhMjzL0IRcBkhDRqGZ3xBTGe9JoUucIc4XccpFm/O8V8r+Y6wsM5fBhI6\ntH39GfxrzXpSUBPbzU3Sk2xc1flqzZRVp1OHvodlvgrmFpNfY7on0HWlvOHFeaAV\nEFySDkxoCO3nNJmbT7A1zah3/kxDmLoMcIJsVmBzAoGAdZNHVVysPzNErl1Dl548\nmatCcSXin+bbSvmtkYWFRu5delZ5Rvcb9AU8+ccq33edjQUmRAeJ8/X8JzGJwseS\nv7cY69FZR9TNj6os7OZHore7ngVeVKoLQSwjg4Ara6l4eUxJfeserR3u0NI1gdOM\nh/HXLYymdbEPea+dGgR4NVo=\n-----END PRIVATE KEY-----"
+          ],
+          "certificate": [
+            "-----BEGIN CERTIFICATE-----\nMIICsDCCAZgCCQDjQQTPjaYWmDANBgkqhkiG9w0BAQsFADAaMRgwFgYDVQQDDA9X\nYWxsZXQtS2V5Y2xvYWswHhcNMjUxMTIwMTI0OTI2WhcNMzUxMTE4MTI0OTI2WjAa\nMRgwFgYDVQQDDA9XYWxsZXQtS2V5Y2xvYWswggEiMA0GCSqGSIb3DQEBAQUAA4IB\nDwAwggEKAoIBAQDGv16dc77qT8aj5espoY2/Gsa8nYNyfvbwddaFoNzbYVcC2FpE\nPqXTlsdBsHUAngsz0a8Eb8H1g/7K5pXWsNkuYl2MQOIzdZZ9ll16WdpK8tNcUqJm\n9zxmGQq22sIYitOWg/CBEUL0SAzijnk5gr8hNM1IchEx4I13IxN8dAYIP1JRp99a\n78GAmO0d0pCzr/cMXHKLsQwbvqc40YmxU1Gc9AUEmaECnUyV1RjoLjkvcw8JeW6q\nxR+S6tGanMJnGZC+m6RdPMViC5CT5C5cKtzM0gUHYDgwAXpJuOu4n28vCWYgqDPP\nSrdQcX+cW+aY7ztBtPnnpD0SBtyZfoqcBm3zAgMBAAEwDQYJKoZIhvcNAQELBQAD\nggEBAItlQ1/czOf7nxoDSoaUTtvt+XMWP6ds8B8IYlPMx8X0vxCH6ivdPuLAPEHp\nq9HJSaZ6hmJlr44ynjPvaVfPqUH1FfvvsZRbUBg7OeVk9aysaUftcw85yRd/AWgo\n3t0D+hJ7IKIetE6rk2PJ90jfdu/hxrHmPS59cMTUyy7SnKH+NOzH/8bCYLVJKSG0\n3FKlzPeZ27N120ubmTT86eYeQMF/fCdnJEpKcLEcwQn+2asxE7gnoYLk17dHThUa\n+VlUyuIcVG802zN2XteN40vNpYYigvPk04lpmeyx8rL9BgI2JBOK5kXbZJizkyMz\nmbgL+vA5sXE4I6rDd5gzEsWPPA8=\n-----END CERTIFICATE-----"
+          ],
+          "kid": [
+            "wallet-demo-key"
+          ]
+        }
+      },
+      {
+        "name": "wallet-demo-ec",
+        "providerId": "ecdsa-generated",
+        "config": {
+          "priority": [
+            "110"
+          ],
+          "enabled": [
+            "true"
+          ],
+          "active": [
+            "true"
+          ],
+          "ecdsaEllipticCurveKey": [
+            "P-256"
+          ],
+          "ecdsaPrivateKey": [
+            "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgaYt5AWrT1JNJXN/3U/R2YCNIpaR8ZLx6BB11RP2djdmhRANCAAQp3dqd4g9tSJc2yTFVFFU8hNhQ10Gt3ssWEwkmpP4RLW3QXW1ph9JypHfWJJVaiFFQ+FaZCw2144brhN/AfKUE"
+          ],
+          "ecdsaPublicKey": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEKd3aneIPbUiXNskxVRRVPITYUNdBrd7LFhMJJqT+ES1t0F1taYfScqR31iSVWohRUPhWmQsNteOG64TfwHylBA=="
+          ],
+          "certificate": [
+            "MIIBKDCB0AIJAMWyff2HSfBqMAoGCCqGSM49BAMCMB0xGzAZBgNVBAMMEldhbGxldC1LZXljbG9hay1FUzAeFw0yNTExMjAyMTM2MDlaFw0zNTExMTgyMTM2MDlaMB0xGzAZBgNVBAMMEldhbGxldC1LZXljbG9hay1FUzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABCnd2p3iD21IlzbJMVUUVTyE2FDXQa3eyxYTCSak/hEtbdBdbWmH0nKkd9YklVqIUVD4VpkLDbXjhuuE38B8pQQwCgYIKoZIzj0EAwIDRwAwRAIgLd3B7Vw2OqZJiRzWc3SA52fCFZmDLqAuK4qJ/OOBMEECIDXD3RlynumLDTPm+YQtv6kpsNoTPccoMH7i50+TvmdF"
+          ],
+          "ecGenerateCertificate": [
+            "false"
+          ],
+          "algorithm": [
+            "ES256"
+          ]
+        }
+      },
+      {
+        "name": "wallet-demo-rsa-enc",
+        "providerId": "rsa-enc",
+        "config": {
+          "priority": [
+            "90"
+          ],
+          "enabled": [
+            "true"
+          ],
+          "active": [
+            "true"
+          ],
+          "algorithm": [
+            "RSA-OAEP-256"
+          ],
+          "privateKey": [
+            "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDGv16dc77qT8aj\n5espoY2/Gsa8nYNyfvbwddaFoNzbYVcC2FpEPqXTlsdBsHUAngsz0a8Eb8H1g/7K\n5pXWsNkuYl2MQOIzdZZ9ll16WdpK8tNcUqJm9zxmGQq22sIYitOWg/CBEUL0SAzi\njnk5gr8hNM1IchEx4I13IxN8dAYIP1JRp99a78GAmO0d0pCzr/cMXHKLsQwbvqc4\n0YmxU1Gc9AUEmaECnUyV1RjoLjkvcw8JeW6qxR+S6tGanMJnGZC+m6RdPMViC5CT\n5C5cKtzM0gUHYDgwAXpJuOu4n28vCWYgqDPPSrdQcX+cW+aY7ztBtPnnpD0SBtyZ\nfoqcBm3zAgMBAAECggEAOR8/flmKAaY0HV8zm5+HMensPMG4yeub5bi4k2eMkrED\nZRnxt7OZzZqEYmjo9+h0p8wYVVoZkQsC7CYh4rapdR9oa6sqWEfvnODetQ+mIexw\nuxQ1AQsGHQINhkiRiKQ99ACv2yiu6a7bpTH1vYXKkSyv46aFMqSrhBZcv2RJZ4zo\n1ScrN9Edsxo9L+9TEHkRtk6bWPNh1mnecrT/99HqFDRW6adMSb5JFkllntTfe6Hg\nxXmHD277p1+Hj9A2fM865VkABJumNs397/GEGVTtXdXN7IHFnmroiN7P+kYnhqTS\nv6Nq1+BhhzxRVzBWQqP/Er4HKzgr8EeUty4BT8psIQKBgQD/9cCIO8O1pJonIbBa\nBbfM+Ilu5KVBFxESBJD7vKKhCq/gDtpDvwpiT19NhFoWznLjAgtlAQobF7IoOS7p\nuk2OhP8Y01WXzuHkVlBYtoCQ6roxfMpUIsbQbD15JqddwSGBpbKaC3o8h593WNJK\n2MJfSsW7f3dKIYdqQy7PbCRSTQKBgQDGx1OuxTHzjkFrcHcytrhdn3sju7i9yI4z\n/lSiAUbtDLci3fXdcKk4Y3TtCcSb7g6EwoT42fpdK9xrocySUGi+esubEJ8bfh8B\n5FG6NX+VgkK5COCO3FlI4gDYYREa/I1bh/owF0YMwchLFXfroBHfFJoxScuKSFtH\n8zkp2QNhPwKBgQDzi0w01Fj1vrcGwOFh5srqdxmdsGUlN+OAN2QUg3pirR6HnNpF\nV8Nzo35U7bgitzFNmqZo5sJM4REdgLuInUIqd5Wac4uftLPvZclxf8V5Hj8n00tZ\nHvX5XuRnIEZjyN4u1BDKzlzyt0EeeB8wJGtd7HGUZEaG/LwyedZSet1ciQKBgCuZ\ntxJDsLQyhMjzL0IRcBkhDRqGZ3xBTGe9JoUucIc4XccpFm/O8V8r+Y6wsM5fBhI6\ntH39GfxrzXpSUBPbzU3Sk2xc1flqzZRVp1OHvodlvgrmFpNfY7on0HWlvOHFeaAV\nEFySDkxoCO3nNJmbT7A1zah3/kxDmLoMcIJsVmBzAoGAdZNHVVysPzNErl1Dl548\nmatCcSXin+bbSvmtkYWFRu5delZ5Rvcb9AU8+ccq33edjQUmRAeJ8/X8JzGJwseS\nv7cY69FZR9TNj6os7OZHore7ngVeVKoLQSwjg4Ara6l4eUxJfeserR3u0NI1gdOM\nh/HXLYymdbEPea+dGgR4NVo=\n-----END PRIVATE KEY-----"
+          ],
+          "certificate": [
+            "-----BEGIN CERTIFICATE-----\nMIICsDCCAZgCCQDjQQTPjaYWmDANBgkqhkiG9w0BAQsFADAaMRgwFgYDVQQDDA9X\nYWxsZXQtS2V5Y2xvYWswHhcNMjUxMTIwMTI0OTI2WhcNMzUxMTE4MTI0OTI2WjAa\nMRgwFgYDVQQDDA9XYWxsZXQtS2V5Y2xvYWswggEiMA0GCSqGSIb3DQEBAQUAA4IB\nDwAwggEKAoIBAQDGv16dc77qT8aj5espoY2/Gsa8nYNyfvbwddaFoNzbYVcC2FpE\nPqXTlsdBsHUAngsz0a8Eb8H1g/7K5pXWsNkuYl2MQOIzdZZ9ll16WdpK8tNcUqJm\n9zxmGQq22sIYitOWg/CBEUL0SAzijnk5gr8hNM1IchEx4I13IxN8dAYIP1JRp99a\n78GAmO0d0pCzr/cMXHKLsQwbvqc40YmxU1Gc9AUEmaECnUyV1RjoLjkvcw8JeW6q\nxR+S6tGanMJnGZC+m6RdPMViC5CT5C5cKtzM0gUHYDgwAXpJuOu4n28vCWYgqDPP\nSrdQcX+cW+aY7ztBtPnnpD0SBtyZfoqcBm3zAgMBAAEwDQYJKoZIhvcNAQELBQAD\nggEBAItlQ1/czOf7nxoDSoaUTtvt+XMWP6ds8B8IYlPMx8X0vxCH6ivdPuLAPEHp\nq9HJSaZ6hmJlr44ynjPvaVfPqUH1FfvvsZRbUBg7OeVk9aysaUftcw85yRd/AWgo\n3t0D+hJ7IKIetE6rk2PJ90jfdu/hxrHmPS59cMTUyy7SnKH+NOzH/8bCYLVJKSG0\n3FKlzPeZ27N120ubmTT86eYeQMF/fCdnJEpKcLEcwQn+2asxE7gnoYLk17dHThUa\n+VlUyuIcVG802zN2XteN40vNpYYigvPk04lpmeyx8rL9BgI2JBOK5kXbZJizkyMz\nmbgL+vA5sXE4I6rDd5gzEsWPPA8=\n-----END CERTIFICATE-----"
+          ],
+          "kid": [
+            "wallet-demo-enc"
+          ]
+        }
+      }
+    ]
+  }
+}

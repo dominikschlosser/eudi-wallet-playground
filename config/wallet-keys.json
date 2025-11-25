@@ -1,0 +1,19 @@
+{
+  "privateJwk": {
+    "kty": "EC",
+    "x": "gNvrHahqN-n-Y0mYyQ7MvBM9Qqld-OZtjOGBnZJ-Xek",
+    "y": "eZSaziy1hDXdF5C_iXlJdp69yQ92Zwy56Dm1dOYmDSg",
+    "crv": "P-256",
+    "d": "S05NI_ysdQgKjkdY1lbKpTb8QcWvoHkxF6h3L5qQMWg",
+    "kid": "wallet-es256",
+    "alg": "ES256"
+  },
+  "publicJwk": {
+    "kty": "EC",
+    "x": "gNvrHahqN-n-Y0mYyQ7MvBM9Qqld-OZtjOGBnZJ-Xek",
+    "y": "eZSaziy1hDXdF5C_iXlJdp69yQ92Zwy56Dm1dOYmDSg",
+    "crv": "P-256",
+    "kid": "wallet-es256",
+    "alg": "ES256"
+  }
+}

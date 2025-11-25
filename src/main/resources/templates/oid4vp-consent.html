@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Share credential</title>
+    <link rel="stylesheet" th:href="@{/css/consent.css}" />
+
+  </head>
+  <body>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+        <div>
+          <div class="wallet-brand">Wallet Consent</div>
+          <h1 style="margin:0.35rem 0 0;">Share credential</h1>
+          <p style="margin:0;">Rendered by the wallet. Review the verifier request and choose whether to share.</p>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+          <span class="tag" th:text="'State: ' + ${state}">State</span>
+          <div class="user-chip-wrapper" th:if="${userName}">
+            <div class="user-chip user-chip-toggle" tabindex="0">
+              <div class="label">Logged in</div>
+              <div class="name" th:text="${userName}">User</div>
+              <div class="email" th:text="${userEmail}">user@example.com</div>
+            </div>
+            <div class="user-dropdown">
+              <form method="post" action="/auth/logout" style="margin:0;">
+                <button type="submit">Logout</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <form method="post" action="/oid4vp/consent" style="margin-top:1rem;display:flex;flex-direction:column;gap:1rem;">
+        <div th:each="opt : ${descriptorOptions}" class="descriptor">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+            <div>
+              <h3 th:text="'Credential request: ' + ${opt.request().id()}">Descriptor</h3>
+              <small style="color:#475569;">Select a credential to fulfill this request</small>
+              <div style="display:flex;align-items:center;gap:0.35rem;margin-top:0.35rem;"
+                   th:with="requestedVct=${descriptorVcts != null ? descriptorVcts[opt.request().id()] : null}"
+                   th:if="${requestedVct}">
+                <span style="color:#94a3b8;font-size:0.9rem;">Requested VCT</span>
+                <span class="badge secondary" th:text="${requestedVct}">vct</span>
+              </div>
+            </div>
+          </div>
+          <div class="disclosed" style="margin-top:0.5rem;">
+            <strong>Values to be shared</strong>
+            <div th:each="cand,iter : ${opt.candidates()}" class="claim candidate-card" style="border:1px solid #e2e8f0;border-radius:8px;padding:0.5rem;margin-bottom:0.35rem;">
+              <div th:if="${#lists.size(opt.candidates()) > 1}">
+                <label style="display:flex;gap:0.5rem;align-items:flex-start;width:100%;">
+                  <input type="radio"
+                         th:name="'selection-' + ${opt.request().id()}"
+                         th:value="${cand.credentialFileName()}"
+                         th:attr="required=${#lists.size(opt.candidates()) > 1}" />
+                  <div style="flex:1;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+                      <div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                        <small style="color:#475569;" th:text="${cand.credentialFileName()}">credential.json</small>
+                        <span class="badge secondary" th:if="${candidateVcts[cand.credentialFileName()]}" th:text="${candidateVcts[cand.credentialFileName()]}">vct</span>
+                      </div>
+                    </div>
+                    <div style="margin-top:0.35rem;">
+                      <div class="claim" th:each="entry : ${cand.disclosedClaims().entrySet()}">
+                        <span th:text="${entry.key}"></span>
+                        <small th:text="${entry.value}"></small>
+                      </div>
+                    </div>
+                  </div>
+                </label>
+              </div>
+              <div th:unless="${#lists.size(opt.candidates()) > 1}">
+                <input type="hidden" th:name="'selection-' + ${opt.request().id()}" th:value="${cand.credentialFileName()}" />
+                <div style="display:flex;flex-direction:column;gap:0.35rem;">
+                  <div style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                    <small style="color:#475569;" th:text="${cand.credentialFileName()}">credential.json</small>
+                    <span class="badge secondary" th:if="${candidateVcts[cand.credentialFileName()]}" th:text="${candidateVcts[cand.credentialFileName()]}">vct</span>
+                  </div>
+                  <div class="claim" th:each="entry : ${cand.disclosedClaims().entrySet()}">
+                    <span th:text="${entry.key}"></span>
+                    <small th:text="${entry.value}"></small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <details style="margin-top:0.5rem;">
+          <summary>View dcql_query</summary>
+          <pre th:text="${dcqlQuery}"></pre>
+        </details>
+
+        <div class="actions" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <button class="btn" type="submit" name="decision" value="accept">Share credential(s)</button>
+          <button class="btn secondary" type="submit" name="decision" value="deny">Deny request</button>
+        </div>
+      </form>
+    </div>
+    <script>
+      document.querySelectorAll(".user-chip-wrapper").forEach((wrapper) => {
+        const chip = wrapper.querySelector(".user-chip-toggle");
+        const dropdown = wrapper.querySelector(".user-dropdown");
+        if (!chip || !dropdown) return;
+        const toggle = () => {
+          const open = dropdown.style.display !== "block";
+          dropdown.style.display = open ? "block" : "none";
+          chip.classList.toggle("open", open);
+        };
+        chip.addEventListener("click", toggle);
+        chip.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+          }
+        });
+        chip.addEventListener("blur", () => {
+          setTimeout(() => {
+            dropdown.style.display = "none";
+            chip.classList.remove("open");
+          }, 150);
+        });
+      });
+    </script>
+  </body>
+</html>

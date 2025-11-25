@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Verifier Result</title>
+    <link rel="stylesheet" th:href="@{/css/verifier-result.css}" />
+
+  </head>
+  <body>
+    <div class="card">
+      <div th:if="${#lists.isEmpty(vpTokens)}" style="margin-top:1rem;">
+        <p style="font-size:1.05rem;"><strong th:text="${message}">No credential found.</strong></p>
+        <a class="btn" href="/verifier">&larr; Back to verifier</a>
+      </div>
+
+      <div th:unless="${#lists.isEmpty(vpTokens)}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+          <div>
+            <h2 th:text="${title}">Verifier Result</h2>
+            <div th:if="${title=='Presentation Verified'}" class="pill success">Success</div>
+            <div th:if="${title!='Presentation Verified'}" class="pill error">Failed</div>
+          </div>
+          <a class="btn" href="/verifier">&larr; Back to verifier</a>
+        </div>
+        <p th:text="${message}">Message</p>
+
+        <h3>Verification Steps</h3>
+        <div class="step-accordion" th:if="${!#lists.isEmpty(stepDetails)}">
+          <details th:each="step : ${stepDetails}" open>
+            <summary>
+              <span th:text="${step.title()}">Step</span>
+              <span class="chip" th:if="${step.specLink()}">Spec</span>
+            </summary>
+            <div class="step-detail-body">
+              <p style="margin:0;" th:text="${step.detail()}"></p>
+              <div th:if="${step.specLink()}" style="margin-top:0.35rem;">
+                <a th:href="${step.specLink()}" target="_blank" rel="noreferrer">Spec reference</a>
+              </div>
+            </div>
+          </details>
+        </div>
+        <ul class="steps" th:if="${#lists.isEmpty(stepDetails)}">
+          <li th:each="step : ${steps}" th:text="${step}">Step</li>
+        </ul>
+
+        <div class="grid">
+          <div>
+            <h4>Wallet Response</h4>
+            <div class="token-section">
+              <div class="token-header">
+                <div class="token-title">
+                  <small style="color:#475569;">vp_token</small>
+                  <a class="token-hint" href="https://sdjwt.co" target="_blank" rel="noreferrer">sdjwt.co</a>
+                </div>
+                <div class="token-actions">
+                  <button type="button" class="btn tertiary" data-copy-scope="vp">Copy all</button>
+                </div>
+              </div>
+              <div class="token-list" th:if="${!#lists.isEmpty(vpTokens)}">
+                <div class="token-item" th:each="token,iter : ${vpTokens}">
+                  <div class="token-meta">Credential [[${iter.index + 1}]]</div>
+                  <div class="token-box"
+                       th:id="'vp-token-' + ${iter.index}"
+                       data-vp-token="true"
+                       th:attr="data-token-raw=${vpTokensRawList[iter.index]},data-token-plain=${token}"
+                       th:text="${token}">vp_token</div>
+                  <div class="token-actions">
+                    <button type="button" class="btn tertiary copy-btn" th:attr="data-copy-target='vp-token-' + ${iter.index}">Copy</button>
+                    <button type="button" class="btn secondary mini vp-token-toggle" th:if="${hasEncryptedVpToken}">Show decrypted</button>
+                  </div>
+                </div>
+              </div>
+              <div th:if="${#lists.isEmpty(vpTokens)}">
+                <div class="token-meta">vp_token</div>
+                <div class="token-box"
+                     id="vp-token-fallback"
+                     data-vp-token="true"
+                     th:attr="data-token-raw=${vpTokenRaw},data-token-plain=${vpTokenRawDisplay}"
+                     th:text="${vpTokenRawDisplay}">vp_token</div>
+                <div class="token-actions" style="margin-top:0.35rem;">
+                  <button type="button" class="btn tertiary copy-btn" data-copy-target="vp-token-fallback">Copy</button>
+                  <button type="button" class="btn secondary mini vp-token-toggle" th:if="${hasEncryptedVpToken}">Show decrypted</button>
+                </div>
+              </div>
+            </div>
+            <div class="token-section" th:if="${idToken != null and !#strings.isEmpty(idToken)}">
+              <div class="token-header">
+                <div class="token-title">
+                  <small style="color:#475569;">id_token</small>
+                  <a class="token-hint" href="https://jwt.io" target="_blank" rel="noreferrer">jwt.io</a>
+                </div>
+                <div class="token-actions">
+                  <button type="button" class="btn tertiary copy-btn" data-copy-target="id-token">Copy</button>
+                </div>
+              </div>
+              <div class="token-box" id="id-token" th:text="${idToken}">id_token</div>
+            </div>
+            <div class="token-section" th:if="${keyBindingJwt != null and !#strings.isEmpty(keyBindingJwt)}">
+              <div class="token-header">
+                <div class="token-title">
+                  <small style="color:#475569;">key_binding_jwt / holder binding</small>
+                  <a class="token-hint" href="https://jwt.io" target="_blank" rel="noreferrer">jwt.io</a>
+                </div>
+                <div class="token-actions">
+                  <button type="button" class="btn tertiary copy-btn" data-copy-target="key-binding-jwt">Copy</button>
+                </div>
+              </div>
+              <div class="token-box" id="key-binding-jwt" th:text="${keyBindingJwt}">key_binding_jwt</div>
+            </div>
+            <div class="token-section" th:if="${dpopToken != null and !#strings.isEmpty(dpopToken)}">
+              <div class="token-header">
+                <div class="token-title">
+                  <small style="color:#475569;">DPoP / proof-of-possession</small>
+                  <a class="token-hint" href="https://www.rfc-editor.org/rfc/rfc9449" target="_blank" rel="noreferrer">rfc9449</a>
+                </div>
+                <div class="token-actions">
+                  <button type="button" class="btn tertiary copy-btn" data-copy-target="dpop-token">Copy</button>
+                </div>
+              </div>
+              <div class="token-box" id="dpop-token" th:text="${dpopToken}">dpop_token</div>
+            </div>
+          </div>
+          <div>
+            <h4>Extracted Claims</h4>
+            <pre th:text="${claimsJson}">claims</pre>
+          </div>
+        </div>
+
+        <div class="debug" style="margin-top:1.5rem;border-top:1px solid #e2e8f0;padding-top:1rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+            <h3 style="margin:0;">Verification Debug</h3>
+            <button id="debug-toggle" class="btn" style="background:#1f2937;">Toggle</button>
+          </div>
+          <div id="debug-pane" style="display:none;">
+            <div th:if="${verificationDebug == null or #lists.isEmpty(verificationDebug)}"><em>No debug entries yet.</em></div>
+            <div class="debug-group" th:each="groupEntry : ${verificationDebugGrouped}">
+              <details>
+                <summary>
+                  <span class="summary-title" th:text="'Request ' + ${groupEntry.key}"></span>
+                </summary>
+                <div class="subgroup" th:each="subgroup : ${groupEntry.value}">
+                  <details>
+                    <summary>
+                      <span class="summary-title" th:text="${subgroup.key != '' ? subgroup.key : 'General'}"></span>
+                      <span class="entry-count" th:text="${#lists.size(subgroup.value)} + ' entries'">0 entries</span>
+                    </summary>
+                    <div class="log-item" th:each="entry : ${subgroup.value}">
+                      <details>
+                        <summary>
+                          <span th:text="${entry.title()}"></span>
+                          <div class="log-meta">
+                            <span th:text="${entry.timestamp()}"></span>
+                            <span class="chip" th:if="${entry.specLink()}">Spec</span>
+                          </div>
+                        </summary>
+                        <div class="debug-entry">
+                        <div class="debug-meta">
+                          <span th:if="${entry.specLink()}"><a th:href="${entry.specLink()}" target="_blank" rel="noreferrer">Open spec</a></span>
+                        </div>
+                          <details style="margin-top:0.25rem;">
+                            <summary>Request</summary>
+                          <div class="http-block">
+                            <div><strong th:text="${entry.method()} + ' ' + ${entry.url()}">GET /</strong></div>
+                            <div class="http-headers" th:if="${entry.requestHeaders()}">
+                              <div class="http-header" th:each="hdr : ${entry.requestHeaders()}" th:text="${hdr.key + ': ' + hdr.value}"></div>
+                            </div>
+                            <pre class="http-body" th:if="${entry.requestBody()}" th:text="${entry.requestBody()}"></pre>
+                          </div>
+                          </details>
+                          <details style="margin-top:0.25rem;">
+                            <summary>Response / Outcome</summary>
+                          <div class="http-block">
+                            <div><strong th:text="${entry.responseStatus() != null ? 'HTTP ' + entry.responseStatus() : 'Result'}">HTTP</strong></div>
+                            <div class="http-headers" th:if="${entry.responseHeaders()}">
+                              <div class="http-header" th:each="hdr : ${entry.responseHeaders()}" th:text="${hdr.key + ': ' + hdr.value}"></div>
+                            </div>
+                            <pre class="http-body" th:if="${entry.responseBody()}" th:text="${entry.responseBody()}"></pre>
+                          </div>
+                          </details>
+                          <details style="margin-top:0.25rem;" th:if="${entry.decoded()}">
+                            <summary>Decoded</summary>
+                          <pre class="http-body" style="margin:0;" th:text="${entry.decoded()}"></pre>
+                          </details>
+                      </div>
+                    </details>
+                  </div>
+                  </details>
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const debugToggle = document.getElementById("debug-toggle");
+      const debugPane = document.getElementById("debug-pane");
+      if (debugToggle && debugPane) {
+        debugToggle.addEventListener("click", () => {
+          debugPane.style.display = debugPane.style.display === "none" ? "block" : "none";
+        });
+      }
+
+      let showDecrypted = true;
+
+      function showCopied(btn) {
+        if (!btn) return;
+        const original = btn.dataset.originalLabel || btn.textContent;
+        btn.dataset.originalLabel = original;
+        btn.textContent = "Copied";
+        btn.disabled = true;
+        window.setTimeout(() => {
+          btn.textContent = btn.dataset.originalLabel || original;
+          btn.disabled = false;
+        }, 1200);
+      }
+
+      document.querySelectorAll("[data-copy-target]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const targetId = btn.dataset.copyTarget;
+          if (!targetId) {
+            return;
+          }
+          const target = document.getElementById(targetId);
+          if (!target) {
+            return;
+          }
+          let text = (target.textContent || "").trim();
+          if (target.dataset.tokenRaw) {
+            const raw = target.dataset.tokenRaw || "";
+            const plain = target.dataset.tokenPlain || raw;
+            text = showDecrypted ? plain : raw;
+          }
+          if (!text) {
+            return;
+          }
+          try {
+            await navigator.clipboard.writeText(text);
+            showCopied(btn);
+          } catch (e) {
+            console.error("Failed to copy", e);
+          }
+        });
+      });
+
+      document.querySelectorAll("[data-copy-scope]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const scope = btn.dataset.copyScope;
+          if (scope === "vp") {
+            const tokens = Array.from(document.querySelectorAll("[data-vp-token]"))
+              .map((el) => {
+                if (el.dataset.tokenRaw) {
+                  const raw = el.dataset.tokenRaw || "";
+                  const plain = el.dataset.tokenPlain || raw;
+                  return showDecrypted ? plain : raw;
+                }
+                return (el.textContent || "").trim();
+              })
+              .filter((t) => t);
+            if (!tokens.length) {
+              return;
+            }
+            try {
+              await navigator.clipboard.writeText(tokens.join("\n\n"));
+              showCopied(btn);
+            } catch (e) {
+              console.error("Failed to copy tokens", e);
+            }
+          }
+        });
+      });
+
+      const vpToggles = Array.from(document.querySelectorAll(".vp-token-toggle"));
+      if (vpToggles.length) {
+        const refreshToggleLabels = () => {
+          vpToggles.forEach((btn) => {
+            btn.textContent = showDecrypted ? "Show encrypted" : "Show decrypted";
+          });
+        };
+        const updateTokens = () => {
+          document.querySelectorAll("[data-token-raw]").forEach((el) => {
+            const raw = el.getAttribute("data-token-raw") || "";
+            const plain = el.getAttribute("data-token-plain") || raw;
+            el.textContent = showDecrypted ? plain : raw;
+          });
+        };
+        // Default to showing decrypted if available.
+        updateTokens();
+        refreshToggleLabels();
+        vpToggles.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            showDecrypted = !showDecrypted;
+            updateTokens();
+            refreshToggleLabels();
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

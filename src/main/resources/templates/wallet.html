@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wallet Overview</title>
+    <link rel="stylesheet" th:href="@{/css/wallet.css}" />
+  </head>
+  <body>
+    <div class="card">
+      <div class="page-header">
+        <div>
+          <div class="wallet-brand">Wallet</div>
+          <h1>Wallet Overview</h1>
+          <p>Manage your stored credentials and issue new ones for presentations.</p>
+        </div>
+        <div th:if="${authenticated}" class="user-chip-wrapper">
+          <div class="user-chip user-chip-toggle" tabindex="0">
+            <div class="label">Logged in</div>
+            <div class="name" th:text="${userName}">User</div>
+            <div class="email" th:text="${userEmail}">user@example.com</div>
+          </div>
+          <div class="user-dropdown">
+            <form method="post" action="/auth/logout" style="margin:0;">
+              <button type="submit">Logout</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div th:if="${error}" class="alert error" th:text="${error}"></div>
+      <div th:if="${message}" class="alert success" th:text="${message}"></div>
+
+      <div class="actions">
+        <a th:if="${!authenticated}" class="btn" href="/auth/login">Sign in with Keycloak</a>
+        <form th:if="${authenticated}" method="post" action="/issue" style="margin:0;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <select name="credentialConfigurationId" style="padding:0.5rem;border-radius:8px;border:1px solid #1f2937;">
+            <option th:each="opt : ${credentialOptions}"
+                    th:value="${opt.configurationId()}"
+                    th:text="${opt.label() + ' (' + opt.scope() + ')'}"></option>
+          </select>
+          <button class="btn" type="submit">Issue Credential</button>
+        </form>
+        <a class="btn secondary" href="/verifier">Open Verifier</a>
+      </div>
+
+      <h2 style="margin-top:2rem;">Stored Credentials</h2>
+      <div th:if="${#lists.isEmpty(credentials)}"><em>No credentials stored yet.</em></div>
+      <div class="grid" th:if="${!#lists.isEmpty(credentials)}">
+        <div class="credential" th:each="cred : ${credentials}">
+          <div class="row">
+            <div>
+              <span class="badge" th:text="${cred.prettyFormat()}">SD-JWT</span>
+              <span class="badge secondary" th:if="${cred.vct()}" th:text="${cred.vct()}">vct</span>
+              <div th:text="'Stored at ' + ${cred.storedAt()}">Stored at</div>
+              <div style="color:#475569;font-size:0.9rem;" th:text="${cred.fileName()}">filename.json</div>
+            </div>
+            <form method="post" th:action="@{/credentials/delete}" style="margin:0">
+              <input type="hidden" name="file" th:value="${cred.fileName()}" />
+              <button class="btn secondary" type="submit">Delete</button>
+            </form>
+          </div>
+          <div style="margin-top:0.5rem;">
+            <div style="display:flex;align-items:center;gap:0.5rem;color:#94a3b8;font-size:0.9rem;">
+              <span>Disclosed claims</span>
+              <small style="color:#64748b;">Metadata such as iss/cnf is hidden.</small>
+            </div>
+            <div style="margin-top:0.35rem;" th:if="${!cred.claims().isEmpty()}">
+              <span class="pill" th:each="entry : ${cred.claims().entrySet()}"
+                    th:text="${entry.key + ': ' + entry.value}"></span>
+            </div>
+            <div th:if="${#maps.isEmpty(cred.claims())}">
+              <em>No disclosed claims available</em>
+            </div>
+          </div>
+          <details style="margin-top:0.75rem;">
+            <summary>Raw credential</summary>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+              <a class="sdjwt-link" href="https://sdjwt.co" target="_blank" rel="noreferrer">Open sdjwt.co</a>
+              <button class="btn secondary mini copy-btn" type="button" th:attr="data-raw=${cred.rawCredential()}">Copy</button>
+            </div>
+            <code th:text="${cred.rawCredential()}">raw</code>
+          </details>
+          <details th:if="${!#lists.isEmpty(cred.disclosures())}">
+            <summary>Disclosures</summary>
+            <code th:text="${#strings.arrayJoin(cred.disclosures().toArray(), '\n')}"></code>
+          </details>
+        </div>
+      </div>
+
+      <div class="debug">
+        <div class="actions" style="justify-content: space-between;">
+          <div>
+            <h3 style="margin:0;">Issuance Debug</h3>
+            <small style="color:#475569;">Recent HTTP calls during OIDC login and OID4VCI issuance.</small>
+          </div>
+          <button id="issuance-debug-toggle" class="btn secondary" type="button">Toggle Debug Pane</button>
+        </div>
+        <div id="issuance-debug-pane" style="display:none;">
+          <div th:if="${#lists.isEmpty(issuanceDebug)}" style="margin-top:0.5rem;"><em>No debug entries yet.</em></div>
+          <div class="debug-group" th:each="groupEntry : ${issuanceDebugGrouped}">
+            <details>
+              <summary>
+                <span class="summary-title" th:text="${groupEntry.key}">Group</span>
+              </summary>
+              <div class="subgroup" th:each="subgroup : ${groupEntry.value}">
+                <details>
+                  <summary>
+                    <span class="summary-title" th:text="${subgroup.key != '' ? subgroup.key : 'General'}">Sub</span>
+                    <span class="entry-count" th:text="${#lists.size(subgroup.value)} + ' entries'">0 entries</span>
+                  </summary>
+                  <div class="log-item" th:each="entry : ${subgroup.value}">
+                    <details>
+                      <summary>
+                        <span th:text="${entry.title()}">Step</span>
+                        <div class="log-meta">
+                          <span th:text="${entry.timestamp()}"></span>
+                          <span class="chip" th:if="${entry.specLink()}">Spec</span>
+                        </div>
+                      </summary>
+                      <div class="debug-entry">
+                        <div class="debug-meta">
+                          <span th:if="${entry.specLink()}"><a th:href="${entry.specLink()}" target="_blank" rel="noreferrer">Open spec</a></span>
+                        </div>
+                        <details style="margin-top:0.25rem;">
+                          <summary>Request</summary>
+                          <div class="http-block">
+                            <div><strong th:text="${entry.method()} + ' ' + ${entry.url()}">GET /</strong></div>
+                            <div class="http-headers" th:if="${entry.requestHeaders()}">
+                              <div class="http-header" th:each="hdr : ${entry.requestHeaders()}" th:text="${hdr.key + ': ' + hdr.value}"></div>
+                            </div>
+                            <pre class="http-body" th:if="${entry.requestBody()}" th:text="${entry.requestBody()}"></pre>
+                          </div>
+                        </details>
+                        <details style="margin-top:0.25rem;">
+                          <summary>Response</summary>
+                          <div class="http-block">
+                            <div><strong th:text="${entry.responseStatus() != null ? 'HTTP ' + entry.responseStatus() : 'Result'}">HTTP</strong></div>
+                            <div class="http-headers" th:if="${entry.responseHeaders()}">
+                              <div class="http-header" th:each="hdr : ${entry.responseHeaders()}" th:text="${hdr.key + ': ' + hdr.value}"></div>
+                            </div>
+                            <pre class="http-body" th:if="${entry.responseBody()}" th:text="${entry.responseBody()}"></pre>
+                          </div>
+                        </details>
+                        <details style="margin-top:0.25rem;" th:if="${entry.decoded()}">
+                          <summary>Decoded</summary>
+                          <pre class="http-body" style="margin:0;" th:text="${entry.decoded()}"></pre>
+                        </details>
+                      </div>
+                    </details>
+                  </div>
+                </details>
+              </div>
+            </details>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const issuanceToggle = document.getElementById("issuance-debug-toggle");
+      const issuancePane = document.getElementById("issuance-debug-pane");
+      if (issuanceToggle && issuancePane) {
+        issuanceToggle.addEventListener("click", () => {
+          issuancePane.style.display = issuancePane.style.display === "none" ? "block" : "none";
+        });
+      }
+      document.querySelectorAll(".copy-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const raw = btn.getAttribute("data-raw") || "";
+          navigator.clipboard.writeText(raw).then(() => {
+            btn.textContent = "Copied!";
+            setTimeout(() => btn.textContent = "Copy", 1500);
+          });
+        });
+      });
+      document.querySelectorAll(".user-chip-wrapper").forEach((wrapper) => {
+        const chip = wrapper.querySelector(".user-chip-toggle");
+        const dropdown = wrapper.querySelector(".user-dropdown");
+        if (!chip || !dropdown) return;
+        const toggle = () => {
+          const open = dropdown.style.display !== "block";
+          dropdown.style.display = open ? "block" : "none";
+          chip.classList.toggle("open", open);
+        };
+        chip.addEventListener("click", toggle);
+        chip.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+          }
+        });
+        chip.addEventListener("blur", () => {
+          setTimeout(() => {
+            dropdown.style.display = "none";
+            chip.classList.remove("open");
+          }, 150);
+        });
+      });
+    </script>
+  </body>
+</html>

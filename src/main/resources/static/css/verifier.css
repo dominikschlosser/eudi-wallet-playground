@@ -1,0 +1,318 @@
+:root {
+  font-family: "Source Sans Pro", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  background: radial-gradient(circle at 20% 20%, #f5f8ff, #eef2f7 60%);
+  color: #0f172a;
+  --debug-surface: #f8fafc;
+  --debug-border: #d9e3f0;
+  --debug-text: #0f172a;
+  --debug-muted: #475569;
+  --debug-body-bg: #0f172a;
+  --debug-body-text: #e2e8f0;
+}
+body {
+  margin: 0;
+  padding: 2rem;
+}
+.card {
+  background: white;
+  border-radius: 16px;
+  padding: 2rem;
+  box-shadow: 0 14px 45px rgba(15, 23, 42, 0.14);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+h1 {
+  margin-top: 0;
+  font-size: 2rem;
+}
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.btn {
+  border: none;
+  border-radius: 999px;
+  padding: 0.75rem 1.4rem;
+  background-color: #1d4ed8;
+  color: white;
+  cursor: pointer;
+  font-size: 1rem;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: all 0.2s ease;
+}
+.btn.secondary {
+  background: white;
+  color: #1d4ed8;
+  border: 1px solid rgba(29, 78, 216, 0.3);
+}
+label {
+  font-weight: 600;
+  display: block;
+  margin: 0.5rem 0;
+}
+textarea {
+  width: 100%;
+  min-height: 160px;
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  background: #fbfdff;
+}
+iframe {
+  width: 100%;
+  min-height: 240px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.stack {
+  display: grid;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+.debug {
+  margin-top: 2rem;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 1rem;
+}
+.debug-entry {
+  border: 1px solid var(--debug-border);
+  border-radius: 10px;
+  padding: 0.65rem;
+  margin-top: 0.65rem;
+  background: var(--debug-surface);
+  color: var(--debug-text);
+}
+.debug-group details,
+.subgroup details,
+.log-item details {
+  border: 1px solid var(--debug-border);
+  border-radius: 12px;
+  padding: 0.5rem 0.65rem;
+  margin-top: 0.5rem;
+  background: var(--debug-surface);
+}
+.debug-group summary,
+.subgroup summary,
+.log-item summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.debug-group summary::-webkit-details-marker,
+.subgroup summary::-webkit-details-marker,
+.log-item summary::-webkit-details-marker {
+  display: none;
+}
+.summary-title {
+  font-weight: 700;
+}
+.entry-count {
+  background: #e2e8f0;
+  color: #0f172a;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.85rem;
+}
+.log-item summary {
+  font-weight: 600;
+  color: #0f172a;
+}
+.log-meta {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  color: var(--debug-muted);
+  font-size: 0.9rem;
+}
+.chip {
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-size: 0.85rem;
+}
+.builder {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1rem;
+  background: #f8fafc;
+  margin-top: 0.75rem;
+}
+.builder-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.descriptor-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.85rem;
+  background: #fff;
+  margin-top: 0.75rem;
+}
+.descriptor-card h4 {
+  margin: 0 0 0.35rem 0;
+}
+.descriptor-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+.claim-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  align-items: center;
+}
+.claim-row input {
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+.tag {
+  display: inline-block;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #0ea5e9;
+  font-size: 0.9rem;
+}
+.tag-row {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+.tag-row input {
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+.mini {
+  padding: 0.35rem 0.85rem;
+  font-size: 0.9rem;
+}
+.soft {
+  background: #f1f5f9;
+  color: #0f172a;
+  border: 1px solid #e2e8f0;
+}
+.dcql-preview {
+  background: #0f172a;
+  color: #cbd5f5;
+  border-radius: 10px;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
+.debug-group > details {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.75rem;
+  background: #f8fafc;
+}
+.debug-group > details > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.debug-group > details > summary::-webkit-details-marker {
+  display: none;
+}
+.debug-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.debug-summary .hint {
+  color: #475569;
+  font-size: 0.85rem;
+}
+.http-block {
+  background: var(--debug-surface);
+  border: 1px solid var(--debug-border);
+  border-radius: 10px;
+  padding: 0.4rem 0.5rem;
+  margin-top: 0.2rem;
+  color: var(--debug-text);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  line-height: 1.45;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.http-block strong {
+  color: var(--debug-text);
+}
+.http-headers {
+  display: grid;
+  gap: 0.12rem;
+  margin: 0.15rem 0 0.05rem;
+  color: var(--debug-muted);
+}
+.http-header {
+  margin: 0;
+  padding: 0;
+}
+.http-body {
+  background: var(--debug-body-bg);
+  color: var(--debug-body-text);
+  border: 1px solid var(--debug-border);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  margin-top: 0.2rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  line-height: 1.45;
+}
+.subgroup > details {
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  padding: 0.5rem 0.65rem;
+  margin-top: 0.6rem;
+  background: #fff;
+}
+.subgroup > details > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.subgroup > details > summary::-webkit-details-marker {
+  display: none;
+}
+.summary-title {
+  font-weight: 700;
+}
+.entry-count {
+  background: #e2e8f0;
+  color: #0f172a;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.85rem;
+}
+.builder input,
+.builder select {
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
