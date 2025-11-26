@@ -1,6 +1,7 @@
 server:
   port: ${PORT:3000}
   max-http-request-header-size: ${MAX_HTTP_REQUEST_HEADER_SIZE:64KB} # allow large OID4VP request objects with verifier attestation
+  max-http-response-header-size: ${MAX_HTTP_RESPONSE_HEADER_SIZE:64KB} # allow large Location headers when redirecting with request objects
 spring:
   main:
     allow-bean-definition-overriding: true
@@ -18,9 +19,11 @@ wallet:
   tls-key-store-type: ${WALLET_TLS_KEY_STORE_TYPE:PKCS12}
   trusted-attestation-issuers:
     - ${WALLET_TRUSTED_ATTESTATION_ISSUERS:demo-attestation-issuer}
+  request-uri-wallet-metadata-enabled: ${WALLET_REQUEST_URI_WALLET_METADATA_ENABLED:true}
 verifier:
   dcql-query-file: ${DCQL_QUERY_FILE:}
   default-dcql-query: ${DEFAULT_DCQL_QUERY:}
   wallet-auth-endpoint: ${VERIFIER_WALLET_AUTH_ENDPOINT:}
   client-id: ${VERIFIER_CLIENT_ID:wallet-verifier}
-  encryption-key-file: ${VERIFIER_ENCRYPTION_KEY_FILE:config/verifier-enc-key.json}
+  keys-file: ${VERIFIER_KEYS_FILE:config/verifier-keys.json}
+  max-request-object-inline-bytes: ${VERIFIER_MAX_REQUEST_OBJECT_INLINE_BYTES:12000}

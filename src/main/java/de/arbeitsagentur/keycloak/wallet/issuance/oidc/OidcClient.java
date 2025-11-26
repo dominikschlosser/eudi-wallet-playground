@@ -21,6 +21,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
@@ -44,11 +45,12 @@ public class OidcClient {
 
     public URI buildAuthorizationUrl(String state, String nonce, String codeChallenge, URI redirectUri) {
         String scope = combineScopes();
+        String encodedScope = UriUtils.encode(scope, StandardCharsets.UTF_8);
         String authorizationDetails = buildAuthorizationDetailsArray();
         UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(properties.authorizeEndpoint())
                 .queryParam("client_id", qp(properties.clientId()))
                 .queryParam("response_type", qp("code"))
-                .queryParam("scope", qp(scope))
+                .queryParam("scope", encodedScope)
                 .queryParam("state", qp(state))
                 .queryParam("nonce", qp(nonce))
                 .queryParam("redirect_uri", qp(redirectUri.toString()))
@@ -139,6 +141,18 @@ public class OidcClient {
         headers.setBearerAuth(accessToken);
         HttpEntity<Void> request = new HttpEntity<>(headers);
         ResponseEntity<Map> response = restTemplate.exchange(properties.userInfoEndpoint(), HttpMethod.GET, request, Map.class);
+        Map<String, Object> body = response.getBody() != null ? response.getBody() : Map.of();
+        Map<String, Object> tokenClaims = parseJwtClaims(accessToken);
+        String username = firstNonBlank(
+                (String) body.get("preferred_username"),
+                (String) body.get("username"),
+                (String) tokenClaims.getOrDefault("preferred_username", null),
+                (String) tokenClaims.getOrDefault("username", null)
+        );
+        String name = firstNonBlank(
+                (String) body.get("name"),
+                (String) tokenClaims.getOrDefault("name", null)
+        );
         logIssuance("UserInfo endpoint",
                 "GET",
                 properties.userInfoEndpoint(),
@@ -146,22 +160,13 @@ public class OidcClient {
                 "",
                 response.getStatusCodeValue(),
                 response.getHeaders().toSingleValueMap(),
-                prettyJson(response.getBody()),
+                prettyJson(body),
                 "https://openid.net/specs/openid-connect-core-1_0.html#UserInfo",
-                null,
+                decodeJwt(accessToken),
                 "OIDC Login");
-        Map<String, Object> body = response.getBody();
-        String full = ("%s %s".formatted(body.getOrDefault("given_name", ""), body.getOrDefault("family_name", ""))).trim();
-        String name = firstNonBlank(
-                (String) body.get("preferred_username"),
-                (String) body.get("username"),
-                (String) body.get("name"),
-                full,
-                (String) body.get("email"),
-                (String) body.get("sub")
-        );
         return new UserProfile(
-                (String) body.get("sub"),
+                firstNonBlank((String) body.get("sub"), (String) tokenClaims.getOrDefault("sub", "")),
+                username,
                 name,
                 (String) body.get("email"),
                 (String) body.get("given_name"),
@@ -178,22 +183,24 @@ public class OidcClient {
         return "";
     }
 
-    private String qp(String value) {
-        return UriUtils.encodeQueryParam(value, StandardCharsets.UTF_8);
+    private Map<String, Object> parseJwtClaims(String token) {
+        if (token == null || !token.contains(".")) {
+            return Map.of();
+        }
+        try {
+            String[] parts = token.split("\\.");
+            if (parts.length < 2) {
+                return Map.of();
+            }
+            byte[] payload = Base64.getUrlDecoder().decode(parts[1]);
+            return objectMapper.readValue(payload, LinkedHashMap.class);
+        } catch (Exception e) {
+            return Map.of();
+        }
     }
 
-    public String buildAuthorizationDetails(String credentialConfigurationId) {
-        try {
-            ObjectNode descriptor = objectMapper.createObjectNode();
-            descriptor.put("type", "openid_credential");
-            descriptor.put("format", "dc+sd-jwt");
-            descriptor.put("credential_configuration_id", credentialConfigurationId);
-            ArrayNode arr = objectMapper.createArrayNode();
-            arr.add(descriptor);
-            return objectMapper.writeValueAsString(arr);
-        } catch (Exception e) {
-            return null;
-        }
+    private String qp(String value) {
+        return UriUtils.encodeQueryParam(value, StandardCharsets.UTF_8);
     }
 
     private String buildAuthorizationDetailsArray() {
@@ -230,8 +237,9 @@ public class OidcClient {
     }
 
     private String combineScopes() {
-        StringBuilder sb = new StringBuilder("openid");
         Set<String> scopes = new LinkedHashSet<>();
+        scopes.add("openid");
+        scopes.add("profile");
         try {
             for (var opt : credentialMetadataService.availableCredentials()) {
                 if (opt.scope() != null && !opt.scope().isBlank()) {
@@ -245,8 +253,7 @@ public class OidcClient {
                 scopes.add(scope);
             }
         }
-        scopes.forEach(scope -> sb.append(" ").append(scope));
-        return sb.toString().trim().replaceAll("\\s+", " ");
+        return String.join(" ", scopes);
     }
 
     private String safeDefaultConfigurationId() {

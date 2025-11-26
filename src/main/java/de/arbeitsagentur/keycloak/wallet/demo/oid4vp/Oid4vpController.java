@@ -27,14 +27,18 @@ import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
+import com.nimbusds.jwt.JWTParser;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.web.servlet.ModelAndView;
 import jakarta.servlet.http.HttpSession;
 import jakarta.servlet.http.HttpServletRequest;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -57,6 +61,7 @@ public class Oid4vpController {
     private final ObjectMapper objectMapper;
     private final DebugLogService debugLogService;
     private final SessionService sessionService;
+    private final RestTemplate restTemplate;
     private static final String SESSION_REQUEST = "oid4vp_request";
     private static final String POST_LOGIN_REDIRECT = "postLoginRedirect";
 
@@ -65,36 +70,53 @@ public class Oid4vpController {
                             WalletProperties walletProperties,
                             ObjectMapper objectMapper,
                             DebugLogService debugLogService,
-                            SessionService sessionService) {
+                            SessionService sessionService,
+                            RestTemplate restTemplate) {
         this.presentationService = presentationService;
         this.walletKeyService = walletKeyService;
         this.walletProperties = walletProperties;
         this.objectMapper = objectMapper;
         this.debugLogService = debugLogService;
         this.sessionService = sessionService;
+        this.restTemplate = restTemplate;
     }
 
     @GetMapping("/oid4vp/auth")
     public ModelAndView handleAuth(@RequestParam(name = "response_uri", required = false) String responseUri,
                                    @RequestParam(name = "redirect_uri", required = false) String redirectUri,
-                                   @RequestParam("state") String state,
+                                   @RequestParam(name = "state", required = false) String state,
                                    @RequestParam(name = "dcql_query", required = false) String dcqlQuery,
                                    @RequestParam(name = "nonce", required = false) String nonce,
                                    @RequestParam(name = "client_id", required = false) String clientId,
                                    @RequestParam(name = "client_metadata", required = false) String clientMetadata,
                                    @RequestParam(name = "request", required = false) String requestObject,
+                                   @RequestParam(name = "request_uri", required = false) String requestUri,
                                    @RequestParam(name = "client_cert", required = false) String clientCert,
                                    HttpSession httpSession) {
         WalletSession walletSession = sessionService.getSession(httpSession);
         String targetResponseUri = responseUri != null && !responseUri.isBlank() ? responseUri : redirectUri;
         PendingRequest pending;
-        if (requestObject != null && !requestObject.isBlank()) {
+        String resolvedRequestObject = requestObject;
+        RequestObjectResolution requestResolution = null;
+        if ((resolvedRequestObject == null || resolvedRequestObject.isBlank()) && requestUri != null && !requestUri.isBlank()) {
             try {
-                pending = parseRequestObject(requestObject, state, targetResponseUri);
+                requestResolution = resolveRequestUri(requestUri);
+                resolvedRequestObject = requestResolution.requestObject();
+            } catch (IllegalStateException e) {
+                return errorView(e.getMessage());
+            }
+        }
+        if (resolvedRequestObject != null && !resolvedRequestObject.isBlank()) {
+            try {
+                pending = parseRequestObject(resolvedRequestObject, state, targetResponseUri,
+                        requestResolution != null ? requestResolution.walletNonce() : null);
             } catch (Exception e) {
                 return errorView("Invalid request object: " + e.getMessage());
             }
         } else {
+            if (state == null || state.isBlank()) {
+                return errorView("Missing state parameter");
+            }
             try {
                 validateClientBinding(clientId, clientMetadata, clientCert);
             } catch (IllegalStateException e) {
@@ -109,6 +131,22 @@ public class Oid4vpController {
                     clientMetadata,
                     null,
                     null
+            );
+        }
+        if (requestResolution != null) {
+            debugLogService.addVerification(
+                    pending.state(),
+                    "Wallet",
+                    "request_uri retrieval",
+                    requestResolution.usedPost() ? "POST" : "GET",
+                    requestUri,
+                    Map.of(),
+                    requestResolution.requestLog(),
+                    200,
+                    Map.of(),
+                    "signed=%s encrypted=%s".formatted(requestResolution.signed(), requestResolution.encrypted()),
+                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-request-parameter",
+                    decodeJwtLike(resolvedRequestObject)
             );
         }
         httpSession.setAttribute(SESSION_REQUEST, pending);
@@ -243,7 +281,7 @@ public class Oid4vpController {
         }
         mv.addObject("candidateVcts", candidateVcts);
         if (walletSession.getUserProfile() != null) {
-            mv.addObject("userName", walletSession.getUserProfile().name());
+            mv.addObject("userName", walletSession.getUserProfile().displayName());
             mv.addObject("userEmail", walletSession.getUserProfile().email());
         }
         return mv;
@@ -288,9 +326,124 @@ public class Oid4vpController {
         }
     }
 
-    private PendingRequest parseRequestObject(String requestObject, String expectedState, String incomingRedirectUri) throws Exception {
-        SignedJWT requestJwt = SignedJWT.parse(requestObject);
-        JWTClaimsSet claims = requestJwt.getJWTClaimsSet();
+    private RequestObjectResolution resolveRequestUri(String requestUri) {
+        try {
+            URI uri = URI.create(requestUri);
+            String scheme = uri.getScheme();
+            if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+                throw new IllegalStateException("Unsupported request_uri scheme");
+            }
+            if (!walletProperties.requestUriWalletMetadataEnabledOrDefault()) {
+                ResponseEntity<String> response = restTemplate.getForEntity(uri, String.class);
+                if (!response.getStatusCode().is2xxSuccessful()) {
+                    throw new IllegalStateException("Failed to resolve request_uri (HTTP " + response.getStatusCode() + ")");
+                }
+                String body = response.getBody();
+                if (body == null || body.isBlank()) {
+                    throw new IllegalStateException("request_uri did not return a request object");
+                }
+                String trimmed = body.trim();
+                return new RequestObjectResolution(trimmed, null, false, looksLikeSignedJwt(trimmed), null, false);
+            }
+            String walletNonce = generateWalletNonce();
+            String walletMetadata = buildWalletMetadata();
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.setContentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED);
+            org.springframework.util.MultiValueMap<String, String> form = new org.springframework.util.LinkedMultiValueMap<>();
+            if (walletMetadata != null && !walletMetadata.isBlank()) {
+                form.add("wallet_metadata", walletMetadata);
+            }
+            form.add("wallet_nonce", walletNonce);
+            org.springframework.http.HttpEntity<org.springframework.util.MultiValueMap<String, String>> entity = new org.springframework.http.HttpEntity<>(form, headers);
+            ResponseEntity<String> response = restTemplate.postForEntity(uri, entity, String.class);
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new IllegalStateException("Failed to resolve request_uri (HTTP " + response.getStatusCode() + ")");
+            }
+            String body = response.getBody();
+            if (body == null || body.isBlank()) {
+                throw new IllegalStateException("request_uri did not return a request object");
+            }
+            String trimmed = body.trim();
+            boolean encrypted = isEncryptedJwe(trimmed);
+            String requestObject = encrypted ? decryptRequestObject(trimmed) : trimmed;
+            return new RequestObjectResolution(requestObject, walletNonce, encrypted, looksLikeSignedJwt(requestObject), walletMetadata, true);
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to resolve request_uri", e);
+        }
+    }
+
+    private String buildWalletMetadata() {
+        try {
+            ECKey key = walletKeyService.loadOrCreateKey();
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("jwks", new JWKSet(key.toPublicJWK()).toJSONObject(false));
+            meta.put("request_object_signing_alg_values_supported", List.of("RS256"));
+            meta.put("request_object_encryption_alg_values_supported", List.of("ECDH-ES+A256KW"));
+            meta.put("request_object_encryption_enc_values_supported", List.of("A256GCM"));
+            Map<String, Object> formats = new LinkedHashMap<>();
+            Map<String, Object> sdJwt = new LinkedHashMap<>();
+            sdJwt.put("sd-jwt_alg_values", List.of("ES256"));
+            sdJwt.put("kb-jwt_alg_values", List.of("ES256"));
+            formats.put("dc+sd-jwt", sdJwt);
+            meta.put("vp_formats_supported", formats);
+            return objectMapper.writeValueAsString(meta);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String generateWalletNonce() {
+        byte[] random = new byte[24];
+        new java.security.SecureRandom().nextBytes(random);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(random);
+    }
+
+    private boolean isEncryptedJwe(String token) {
+        if (token == null) {
+            return false;
+        }
+        if (token.chars().filter(c -> c == '.').count() == 4) {
+            return true;
+        }
+        try {
+            com.nimbusds.jose.JWEObject.parse(token);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private String decryptRequestObject(String token) {
+        try {
+            com.nimbusds.jose.JWEObject jwe = com.nimbusds.jose.JWEObject.parse(token);
+            jwe.decrypt(new com.nimbusds.jose.crypto.ECDHDecrypter(walletKeyService.loadOrCreateKey()));
+            return jwe.getPayload().toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to decrypt request object", e);
+        }
+    }
+
+    private boolean looksLikeSignedJwt(String token) {
+        if (token == null || token.isBlank()) {
+            return false;
+        }
+        if (token.chars().filter(c -> c == '.').count() == 2) {
+            return true;
+        }
+        try {
+            SignedJWT.parse(token);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private PendingRequest parseRequestObject(String requestObject, String expectedState, String incomingRedirectUri, String expectedWalletNonce) throws Exception {
+        com.nimbusds.jwt.JWT parsed = com.nimbusds.jwt.JWTParser.parse(requestObject);
+        SignedJWT requestJwt = parsed instanceof SignedJWT sj ? sj : null;
+        JWTClaimsSet claims = parsed.getJWTClaimsSet();
         String clientId = claims.getStringClaim("client_id");
         String responseUri = claims.getStringClaim("response_uri");
         if (responseUri == null || responseUri.isBlank()) {
@@ -299,12 +452,27 @@ public class Oid4vpController {
         String dcqlQuery = claims.getStringClaim("dcql_query");
         String nonce = claims.getStringClaim("nonce");
         String state = claims.getStringClaim("state");
-        if (state == null || !state.equals(expectedState)) {
+        if (state == null || state.isBlank()) {
+            throw new IllegalStateException("Missing state in request object");
+        }
+        if (expectedState != null && !expectedState.isBlank() && !state.equals(expectedState)) {
             throw new IllegalStateException("State mismatch in request object");
+        }
+        if (expectedWalletNonce != null && !expectedWalletNonce.isBlank()) {
+            String walletNonce = claims.getStringClaim("wallet_nonce");
+            if (walletNonce == null || walletNonce.isBlank()) {
+                throw new IllegalStateException("Missing wallet_nonce in request object");
+            }
+            if (!expectedWalletNonce.equals(walletNonce)) {
+                throw new IllegalStateException("wallet_nonce mismatch in request object");
+            }
         }
         String clientMetadata = extractClientMetadata(claims.getClaim("client_metadata"));
         String authType = clientId != null && clientId.startsWith("verifier_attestation:") ? "verifier_attestation" : "plain";
         if ("verifier_attestation".equals(authType)) {
+            if (requestJwt == null) {
+                throw new IllegalStateException("Request object must be signed for verifier_attestation");
+            }
             String attestationJwt = (String) requestJwt.getHeader().getCustomParam("jwt");
             if (attestationJwt == null || attestationJwt.isBlank()) {
                 throw new IllegalStateException("Missing verifier_attestation JWT header");
@@ -312,6 +480,9 @@ public class Oid4vpController {
             verifyAttestationRequest(clientId, attestationJwt, requestJwt, responseUri);
         }
         if (clientId != null && clientId.startsWith("x509_hash:")) {
+            if (requestJwt == null) {
+                throw new IllegalStateException("Request object must be signed for x509_hash client_id");
+            }
             verifyX509HashRequest(clientId, requestJwt);
         }
         return new PendingRequest(
@@ -610,6 +781,27 @@ public class Oid4vpController {
             return objectMapper.writeValueAsString(claim);
         } catch (Exception e) {
             return claim.toString();
+        }
+    }
+
+    private record RequestObjectResolution(String requestObject,
+                                           String walletNonce,
+                                           boolean encrypted,
+                                           boolean signed,
+                                           String walletMetadata,
+                                           boolean usedPost) {
+        String requestLog() {
+            StringBuilder sb = new StringBuilder();
+            if (walletMetadata != null && !walletMetadata.isBlank()) {
+                sb.append("wallet_metadata=").append(walletMetadata);
+            }
+            if (walletNonce != null && !walletNonce.isBlank()) {
+                if (sb.length() > 0) {
+                    sb.append("\n");
+                }
+                sb.append("wallet_nonce=").append(walletNonce);
+            }
+            return sb.toString();
         }
     }
 

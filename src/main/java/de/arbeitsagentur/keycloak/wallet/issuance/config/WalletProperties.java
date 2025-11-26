@@ -20,7 +20,8 @@ public record WalletProperties(
         Path tlsKeyStore,
         String tlsKeyStorePassword,
         String tlsKeyStoreType,
-        java.util.List<String> trustedAttestationIssuers
+        java.util.List<String> trustedAttestationIssuers,
+        Boolean requestUriWalletMetadataEnabled
 ) {
     public record CredentialOption(String scope, String configurationId, String label) {
     }
@@ -47,5 +48,9 @@ public record WalletProperties(
 
     public String nonceEndpoint() {
         return "%s/realms/%s/protocol/oid4vc/nonce".formatted(keycloakBaseUrl, realm);
+    }
+
+    public boolean requestUriWalletMetadataEnabledOrDefault() {
+        return requestUriWalletMetadataEnabled == null || requestUriWalletMetadataEnabled;
     }
 }

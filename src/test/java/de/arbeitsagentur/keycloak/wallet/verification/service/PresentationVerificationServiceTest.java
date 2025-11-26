@@ -49,7 +49,7 @@ class PresentationVerificationServiceTest {
     @BeforeEach
     void setUp() {
         properties = new VerifierProperties(null, "{}", null, "wallet-verifier",
-                tempDir.resolve("enc-key.json"));
+                tempDir.resolve("verifier-keys.json"), null);
         verifierKeyService = new VerifierKeyService(properties, new ObjectMapper());
         verificationService = new PresentationVerificationService(trustListService, properties, new ObjectMapper(), verifierKeyService);
         when(trustListService.verify(any(SignedJWT.class), anyString())).thenReturn(true);
@@ -126,7 +126,7 @@ class PresentationVerificationServiceTest {
     @Test
     void decryptsEncryptedVpToken() throws Exception {
         String token = buildJwt("nonce-enc", "wallet-verifier", Instant.now().plusSeconds(60), null);
-        RSAKey rsaKey = verifierKeyService.loadOrCreateKey();
+        RSAKey rsaKey = verifierKeyService.loadOrCreateEncryptionKey();
         JWEObject jwe = new JWEObject(
                 new JWEHeader.Builder(JWEAlgorithm.RSA_OAEP_256, EncryptionMethod.A256GCM)
                         .keyID(rsaKey.getKeyID())

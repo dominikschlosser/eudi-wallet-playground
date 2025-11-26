@@ -42,6 +42,14 @@
             </select>
             <small style="color:#475569;">Choose how the verifier authenticates; for attestation or x509 you must provide the required material.</small>
           </div>
+          <div id="request-object-mode" style="display:none;">
+            <label for="requestObjectMode">Request object delivery</label>
+            <select id="requestObjectMode" name="requestObjectMode" style="width:100%;padding:0.65rem;border-radius:10px;border:1px solid #1f2937;">
+              <option value="request" selected>Embed in request parameter</option>
+              <option value="request_uri">Pass by reference (request_uri)</option>
+            </select>
+            <small style="color:#475569;">Available for x509_hash. verifier_attestation is always sent via <code>request_uri</code> hosted by this verifier.</small>
+          </div>
           <div>
             <label for="responseType">Response Type</label>
             <select id="responseType" name="responseType" style="width:100%;padding:0.65rem;border-radius:10px;border:1px solid #1f2937;">
@@ -253,6 +261,8 @@
         const clientCertInput = document.getElementById("walletClientCert");
         const deriveX509Btn = document.getElementById("derive-x509-hash");
         const authTypeSelect = document.getElementById("authType");
+        const requestObjectModeContainer = document.getElementById("request-object-mode");
+        const requestObjectMode = document.getElementById("requestObjectMode");
         const attestationIssuerInput = document.getElementById("attestationIssuer");
         const attestationCertInput = document.getElementById("attestationCert");
         const authX509 = document.getElementById("auth-x509");
@@ -352,6 +362,18 @@
           const mode = authTypeSelect?.value || "plain";
           if (authX509) authX509.style.display = mode === "x509_hash" ? "block" : "none";
           if (authAttestation) authAttestation.style.display = mode === "verifier_attestation" ? "block" : "none";
+          const supportsRequestObject = mode === "x509_hash" || mode === "verifier_attestation";
+          const forceRequestUri = mode === "verifier_attestation";
+          if (requestObjectModeContainer) requestObjectModeContainer.style.display = supportsRequestObject ? "block" : "none";
+          if (requestObjectMode) {
+            requestObjectMode.disabled = !supportsRequestObject || forceRequestUri;
+            if (!supportsRequestObject || forceRequestUri) {
+              requestObjectMode.value = "request";
+            }
+            if (forceRequestUri) {
+              requestObjectMode.value = "request_uri";
+            }
+          }
           refreshBindingInsights();
         }
         authTypeSelect?.addEventListener("change", refreshAuthSections);

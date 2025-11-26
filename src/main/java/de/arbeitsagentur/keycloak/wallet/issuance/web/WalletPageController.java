@@ -54,7 +54,7 @@ public class WalletPageController {
         model.addAttribute("authenticated", session.isAuthenticated());
         model.addAttribute("credentialOptions", credentialOptions());
         if (session.isAuthenticated() && session.getUserProfile() != null) {
-            model.addAttribute("userName", session.getUserProfile().name());
+            model.addAttribute("userName", session.getUserProfile().displayName());
             model.addAttribute("userEmail", session.getUserProfile().email());
             model.addAttribute("credentials", loadDisplayCredentials(session));
         } else {

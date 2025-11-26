@@ -3,7 +3,11 @@ package de.arbeitsagentur.keycloak.wallet.verification.web;
 import de.arbeitsagentur.keycloak.wallet.verification.config.VerifierProperties;
 import de.arbeitsagentur.keycloak.wallet.verification.service.DcqlService;
 import de.arbeitsagentur.keycloak.wallet.verification.service.PresentationVerificationService;
+import de.arbeitsagentur.keycloak.wallet.verification.service.TokenViewService;
 import de.arbeitsagentur.keycloak.wallet.verification.service.TrustListService;
+import de.arbeitsagentur.keycloak.wallet.verification.service.VerifierAuthService;
+import de.arbeitsagentur.keycloak.wallet.verification.service.VerifierCryptoService;
+import de.arbeitsagentur.keycloak.wallet.verification.service.RequestObjectService;
 import de.arbeitsagentur.keycloak.wallet.verification.service.VerifierKeyService;
 import de.arbeitsagentur.keycloak.wallet.verification.service.VerificationSteps;
 import de.arbeitsagentur.keycloak.wallet.verification.session.VerifierSession;
@@ -12,24 +16,29 @@ import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.EncryptionMethod;
+import com.nimbusds.jose.JWEAlgorithm;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.jwk.Curve;
+import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWK;
+import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
-import org.bouncycastle.cert.X509CertificateHolder;
-import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
-import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.operator.ContentSigner;
-import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -39,20 +48,9 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.util.UriUtils;
 
-import java.io.ByteArrayInputStream;
-import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyFactory;
-import java.security.MessageDigest;
-import java.security.PrivateKey;
-import java.security.SecureRandom;
-import java.security.cert.CertificateFactory;
-import java.security.cert.X509Certificate;
-import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.ArrayList;
-import java.util.Base64;
-import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,13 +59,17 @@ import java.util.UUID;
 @Controller
 @RequestMapping("/verifier")
 public class VerifierController {
-    private static final BouncyCastleProvider BC_PROVIDER = new BouncyCastleProvider();
+    private static final Logger LOG = LoggerFactory.getLogger(VerifierController.class);
 
     private final DcqlService dcqlService;
     private final VerifierSessionService verifierSessionService;
     private final TrustListService trustListService;
     private final PresentationVerificationService verificationService;
     private final VerifierKeyService verifierKeyService;
+    private final VerifierAuthService verifierAuthService;
+    private final VerifierCryptoService verifierCryptoService;
+    private final TokenViewService tokenViewService;
+    private final RequestObjectService requestObjectService;
     private final ObjectMapper objectMapper;
     private final VerifierProperties properties;
     private final DebugLogService debugLogService;
@@ -77,6 +79,10 @@ public class VerifierController {
                               TrustListService trustListService,
                               PresentationVerificationService verificationService,
                               VerifierKeyService verifierKeyService,
+                              VerifierAuthService verifierAuthService,
+                              VerifierCryptoService verifierCryptoService,
+                              TokenViewService tokenViewService,
+                              RequestObjectService requestObjectService,
                               ObjectMapper objectMapper,
                               VerifierProperties properties,
                               DebugLogService debugLogService) {
@@ -85,6 +91,10 @@ public class VerifierController {
         this.trustListService = trustListService;
         this.verificationService = verificationService;
         this.verifierKeyService = verifierKeyService;
+        this.verifierAuthService = verifierAuthService;
+        this.verifierCryptoService = verifierCryptoService;
+        this.tokenViewService = tokenViewService;
+        this.requestObjectService = requestObjectService;
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.debugLogService = debugLogService;
@@ -104,8 +114,8 @@ public class VerifierController {
         model.addAttribute("defaultWalletAuthEndpoint", defaultWalletAuth);
         model.addAttribute("defaultWalletClientId", properties.clientId());
         model.addAttribute("defaultClientMetadata", defaultClientMetadata());
-        X509Material defaultX509 = resolveX509Material(null);
-        model.addAttribute("defaultX509ClientId", deriveX509ClientId(null, defaultX509.certificatePem()));
+        VerifierCryptoService.X509Material defaultX509 = verifierCryptoService.resolveX509Material(null);
+        model.addAttribute("defaultX509ClientId", verifierCryptoService.deriveX509ClientId(null, defaultX509.certificatePem()));
         model.addAttribute("defaultX509Cert", defaultX509.certificatePem());
         model.addAttribute("defaultX509Source", defaultX509.source());
         model.addAttribute("verificationDebug", debugLogService.verification());
@@ -120,6 +130,68 @@ public class VerifierController {
     public Map<String, String> defaultDcqlQuery() {
         String dcql = dcqlService.defaultDcqlQuery();
         return Map.of("dcql_query", dcql);
+    }
+
+    @GetMapping(value = "/request-object/{id}", produces = "application/oauth-authz-req+jwt")
+    public ResponseEntity<String> requestObject(@PathVariable("id") String id, HttpServletRequest request) {
+        return handleRequestObject(id, null, null, request);
+    }
+
+    @PostMapping(value = "/request-object/{id}", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE, produces = "application/oauth-authz-req+jwt")
+    public ResponseEntity<String> requestObjectPost(@PathVariable("id") String id,
+                                                    @RequestParam(name = "wallet_metadata", required = false) String walletMetadata,
+                                                    @RequestParam(name = "wallet_nonce", required = false) String walletNonce,
+                                                    HttpServletRequest request) {
+        return handleRequestObject(id, walletMetadata, walletNonce, request);
+    }
+
+    private ResponseEntity<String> handleRequestObject(String id, String walletMetadata, String walletNonce, HttpServletRequest request) {
+        JsonNode walletMeta = parseWalletMetadata(walletMetadata);
+        RequestObjectService.SigningRequest signingRequest = determineSigningRequest(walletMeta);
+        LOG.info("request_uri {} {} wallet_nonce={} signing_alg={} encryption_requested={} body={} headers={}",
+                request.getMethod(),
+                request.getRequestURI(),
+                walletNonce != null && !walletNonce.isBlank(),
+                signingRequest != null ? signingRequest.alg() : "none",
+                walletMeta != null && walletMeta.has("jwks"),
+                walletRequestLog(walletMetadata, walletNonce),
+                request.getHeaderNames() != null ? java.util.Collections.list(request.getHeaderNames()).stream().collect(java.util.stream.Collectors.toMap(h -> h, request::getHeader)) : Map.of());
+        RequestObjectService.ResolvedRequestObject resolved = requestObjectService.resolve(id, walletNonce, signingRequest);
+        if (resolved == null || resolved.serialized() == null || resolved.serialized().isBlank()) {
+            LOG.info("request_uri {} not found or expired", id);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("request object not found or expired");
+        }
+        JWK encryptionKey = selectEncryptionKey(walletMeta);
+        EncryptionPreferences prefs = extractEncryptionPreferences(walletMeta);
+        EncryptionResult encryption = encryptRequestObject(resolved.serialized(), encryptionKey, prefs.alg(), prefs.enc());
+        String payload = encryption.payload();
+        String state = extractState(resolved.claims());
+        String decoded = buildDecodedForLog(resolved.serialized(), encryption);
+        String responseSummary = "signed=%s wallet_nonce_applied=%s encrypted=%s".formatted(
+                resolved.signed(), resolved.walletNonceApplied(), encryption.encrypted());
+        LOG.info("request_uri {} response signed={} encrypted={} state={} payload={}",
+                request.getRequestURI(),
+                resolved.signed(),
+                encryption.encrypted(),
+                state,
+                payload);
+        debugLogService.addVerification(
+                state,
+                "Authorization",
+                "request_uri retrieval",
+                request.getMethod(),
+                request.getRequestURI(),
+                Map.of(),
+                walletRequestLog(walletMetadata, walletNonce),
+                HttpStatus.OK.value(),
+                Map.of("Content-Type", "application/oauth-authz-req+jwt"),
+                responseSummary + "\n" + payload,
+                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-request-parameter",
+                decoded
+        );
+        return ResponseEntity.ok()
+                .contentType(MediaType.valueOf("application/oauth-authz-req+jwt"))
+                .body(payload);
     }
 
     @PostMapping("/start")
@@ -143,6 +215,8 @@ public class VerifierController {
                                                   String attestationIssuer,
                                                   @RequestParam(name = "responseType", required = false)
                                                   String responseType,
+                                                  @RequestParam(name = "requestObjectMode", required = false)
+                                                  String requestObjectMode,
                                                   @RequestParam(name = "trustList", required = false)
                                                   String trustList,
                                                   HttpServletRequest request) {
@@ -152,11 +226,11 @@ public class VerifierController {
         String effectiveClientId = walletClientId != null && !walletClientId.isBlank()
                 ? walletClientId
                 : properties.clientId();
-        X509Material x509Material = null;
+        VerifierCryptoService.X509Material x509Material = null;
         if ("x509_hash".equalsIgnoreCase(authType)) {
-            x509Material = resolveX509Material(walletClientCert);
+            x509Material = verifierCryptoService.resolveX509Material(walletClientCert);
             walletClientCert = x509Material.combinedPem();
-            effectiveClientId = deriveX509ClientId(effectiveClientId, x509Material.certificatePem());
+            effectiveClientId = verifierCryptoService.deriveX509ClientId(effectiveClientId, x509Material.certificatePem());
         }
         if ("verifier_attestation".equalsIgnoreCase(authType)
                 && (effectiveClientId == null || !effectiveClientId.startsWith("verifier_attestation:"))) {
@@ -192,7 +266,7 @@ public class VerifierController {
                 .path("/verifier/callback")
                 .build()
                 .toUri();
-        WalletAuthRequest walletAuth = buildWalletAuthorizationUrl(
+        VerifierAuthService.WalletAuthRequest walletAuth = verifierAuthService.buildWalletAuthorizationUrl(
                 callback,
                 state,
                 nonce,
@@ -205,6 +279,7 @@ public class VerifierController {
                 attestationCert,
                 attestationIssuer,
                 responseType,
+                requestObjectMode,
                 baseUri
         );
         debugLogService.addVerification(
@@ -217,7 +292,7 @@ public class VerifierController {
                 "",
                 302,
                 Map.of("Location", walletAuth.uri().toString()),
-                "state=" + state + "\nnonce=" + nonce + "\ntrust_list=" + (trustList != null ? trustList : trustListService.defaultTrustListId()),
+                "state=" + state + "\nnonce=" + nonce + "\ntrust_list=" + (trustList != null ? trustList : trustListService.defaultTrustListId()) + "\nrequest_mode=" + (walletAuth.usedRequestUri() ? "request_uri" : "request"),
                 "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#vp_token_request",
                 null);
         if ("verifier_attestation".equalsIgnoreCase(authType) && walletAuth.attestationJwt() != null && !walletAuth.attestationJwt().isBlank()) {
@@ -233,7 +308,7 @@ public class VerifierController {
                     Map.of(),
                     "",
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#verifier_attestation_jwt",
-                    decodeJwtLike(walletAuth.attestationJwt()));
+                    tokenViewService.decodeJwtLike(walletAuth.attestationJwt()));
             verifierSessionService.saveSession(request.getSession(),
                     new VerifierSession(state, nonce, resolvedDcql,
                             trustList != null && !trustList.isBlank() ? trustList : trustListService.defaultTrustListId(),
@@ -243,69 +318,6 @@ public class VerifierController {
                             walletAuth.attestationJwt()));
         }
         return ResponseEntity.status(302).location(walletAuth.uri()).build();
-    }
-
-    private WalletAuthRequest buildWalletAuthorizationUrl(URI callback, String state, String nonce,
-                                                          String dcqlQuery,
-                                                          String walletAuthOverride,
-                                                          String effectiveClientId,
-                                                          String authType,
-                                                          String clientMetadata,
-                                                          String walletClientCert,
-                                                          String attestationCert,
-                                                          String attestationIssuer,
-                                                          String responseTypeOverride,
-                                                          UriComponentsBuilder baseUri) {
-        UriComponentsBuilder builder;
-        String effectiveWalletAuth = walletAuthOverride != null && !walletAuthOverride.isBlank()
-                ? walletAuthOverride
-                : properties.walletAuthEndpoint();
-        String attestationValue = null;
-        String effectiveResponseType = responseTypeOverride != null && !responseTypeOverride.isBlank()
-                ? responseTypeOverride
-                : "vp_token";
-        if (effectiveWalletAuth != null && !effectiveWalletAuth.isBlank()) {
-            builder = UriComponentsBuilder.fromUriString(effectiveWalletAuth)
-                    .queryParam("response_type", qp(effectiveResponseType));
-        } else {
-            builder = baseUri.cloneBuilder().path("/oid4vp/auth");
-        }
-        boolean includeClientCertParam = true;
-        UriComponentsBuilder populated = builder
-                .queryParam("client_id", qp(effectiveClientId))
-                .queryParam("nonce", qp(nonce))
-                .queryParam("response_mode", qp("direct_post"))
-                .queryParam("response_uri", qp(callback.toString()))
-                .queryParam("state", qp(state))
-                .queryParam("dcql_query", qp(dcqlQuery));
-        if ("x509_hash".equalsIgnoreCase(authType) && walletClientCert != null && walletClientCert.contains("PRIVATE KEY")) {
-            try {
-                RSAKey popKey = parseAttestationKey(walletClientCert);
-                List<com.nimbusds.jose.util.Base64> x5c = extractCertChain(walletClientCert);
-                String requestObject = buildRequestObject(callback.toString(), state, nonce, effectiveClientId, effectiveResponseType, dcqlQuery, clientMetadata, null, x5c, popKey);
-                populated.queryParam("request", qp(requestObject));
-                includeClientCertParam = false;
-            } catch (Exception ignored) {
-                includeClientCertParam = true;
-            }
-        }
-        if ("verifier_attestation".equalsIgnoreCase(authType)) {
-            RSAKey verifierKey = verifierKeyService.loadOrCreateKey();
-            RSAKey attestationKey = verifierKey;
-            if (attestationCert != null && !attestationCert.isBlank()) {
-                attestationKey = parseAttestationKey(attestationCert);
-            }
-            attestationValue = createVerifierAttestation(effectiveClientId, attestationIssuer, attestationKey, callback.toString());
-            String requestObject = buildRequestObject(callback.toString(), state, nonce, effectiveClientId, effectiveResponseType, dcqlQuery, clientMetadata, attestationValue, null, attestationKey);
-            populated.queryParam("request", qp(requestObject));
-        }
-        if (clientMetadata != null && !clientMetadata.isBlank()) {
-            populated.queryParam("client_metadata", qp(clientMetadata));
-        }
-        if (includeClientCertParam && walletClientCert != null && !walletClientCert.isBlank()) {
-            populated.queryParam("client_cert", qp(walletClientCert));
-        }
-        return new WalletAuthRequest(populated.build(true).toUri(), authType != null && authType.equalsIgnoreCase("verifier_attestation") ? attestationValue : null);
     }
 
     @PostMapping(value = "/callback")
@@ -320,16 +332,19 @@ public class VerifierController {
                                        @RequestParam(name = "error", required = false) String error,
                                        @RequestParam(name = "error_description", required = false) String errorDescription,
                                        HttpSession httpSession) {
+        LOG.info("direct_post callback received state={} error={}", state, error);
         VerificationSteps steps = new VerificationSteps();
         String vpTokenRaw = vpToken;
         String keyBindingJwt = firstNonBlank(keyBindingTokenAlt, keyBindingToken);
         String effectiveDpop = firstNonBlank(dpopToken, dpopTokenAlt);
         String callbackRequestBody = formBody(state, vpTokenRaw, idToken, responseNonce, error, errorDescription, keyBindingJwt, effectiveDpop);
+        LOG.info("direct_post callback request body:\n{}", callbackRequestBody);
         VerifierSession verifierSession = verifierSessionService.getSession(httpSession);
         if (verifierSession == null || !verifierSession.state().equals(state)) {
             steps.add("Verifier session and state validation failed",
                     "Verifier session not found or state mismatch.",
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
+            LOG.info("direct_post callback invalid session state={}", state);
             logCallback(state, "direct_post callback (invalid session)",
                     "POST",
                     "/verifier/callback",
@@ -349,6 +364,7 @@ public class VerifierController {
             steps.add("Wallet returned error: " + error,
                     "Wallet returned error: " + error,
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
+            LOG.info("direct_post callback error state={} error={} desc={}", state, error, errorDescription);
             logCallback(state, "direct_post callback (error)",
                     "POST",
                     "/verifier/callback",
@@ -366,6 +382,7 @@ public class VerifierController {
                 steps.add("vp_token missing or empty",
                         "Wallet response did not include a vp_token.",
                         "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
+                LOG.info("direct_post callback missing vp_token state={}", state);
                 logCallback(state, "direct_post callback (missing vp_token)",
                         "POST",
                         "/verifier/callback",
@@ -406,7 +423,13 @@ public class VerifierController {
                             vpTokenRaw != null ? vpTokenRaw.length() : 0,
                             keyBindingJwt != null ? keyBindingJwt.length() : 0),
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6",
-                    assembleDecodedForDebug(tokensToJson(vpTokens.stream().map(VpTokenEntry::token).toList()), keyBindingJwt));
+                    tokenViewService.assembleDecodedForDebug(
+                            tokensToJson(vpTokens.stream().map(VpTokenEntry::token).toList()),
+                            keyBindingJwt,
+                            effectiveDpop));
+            LOG.info("direct_post callback verified state={} tokens={} key_binding_present={} encrypted_vp={}", state, vpTokens.size(), keyBindingJwt != null && !keyBindingJwt.isBlank(),
+                    tokenViewService.hasEncryptedToken(vpTokens.stream().map(VpTokenEntry::token).toList()));
+            LOG.info("direct_post callback response body:\n{}", formBody(state, vpTokenRaw, idToken, responseNonce, error, errorDescription, keyBindingJwt, effectiveDpop));
             Map<String, Object> combined = new LinkedHashMap<>();
             String kbFromPayload = null;
             for (int i = 0; i < payloads.size(); i++) {
@@ -439,6 +462,7 @@ public class VerifierController {
                     Map.of(),
                     e.getMessage(),
                     parseVpTokens(vpTokenRaw), vpTokenRaw, keyBindingJwt, effectiveDpop);
+            LOG.info("direct_post callback verification failed state={} message={}", state, e.getMessage());
             return resultView("Unable to verify credential: " + e.getMessage(), false, steps.titles(), parseVpTokens(vpTokenRaw), vpTokenRaw, idToken,
                     Map.of(), steps.details());
         }
@@ -452,18 +476,21 @@ public class VerifierController {
         mv.addObject("steps", steps);
         mv.addObject("stepDetails", stepDetails);
         List<String> tokens = vpTokens == null ? List.of() : vpTokens;
-        mv.addObject("vpTokens", presentableTokens(tokens));
+        mv.addObject("vpTokens", tokenViewService.presentableTokens(tokens));
         mv.addObject("vpTokensRawList", tokens);
-        mv.addObject("hasEncryptedVpToken", hasEncryptedToken(tokens));
+        mv.addObject("hasEncryptedVpToken", tokenViewService.hasEncryptedToken(tokens));
         mv.addObject("vpTokenRaw", vpTokenRaw);
-        mv.addObject("vpTokenRawDisplay", presentableToken(vpTokenRaw));
+        mv.addObject("vpTokenRawDisplay", tokenViewService.presentableToken(vpTokenRaw));
         mv.addObject("idToken", idToken);
-        mv.addObject("claims", payload);
+        Map<String, Object> claimsOnly = payload == null ? Map.of() : new LinkedHashMap<>(payload);
+        claimsOnly.remove("key_binding_jwt");
+        claimsOnly.remove("dpop_token");
+        mv.addObject("claims", claimsOnly);
         mv.addObject("keyBindingJwt", payload.getOrDefault("key_binding_jwt", null));
         mv.addObject("dpopToken", payload.getOrDefault("dpop_token", null));
         mv.addObject("verificationDebug", debugLogService.verification());
         try {
-            mv.addObject("claimsJson", objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(payload));
+            mv.addObject("claimsJson", objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(claimsOnly));
         } catch (Exception ignored) {
             mv.addObject("claimsJson", "{}");
         }
@@ -536,57 +563,6 @@ public class VerifierController {
         return null;
     }
 
-    private record WalletAuthRequest(URI uri, String attestationJwt) {
-    }
-
-    private String decodeJwtLike(String token) {
-        if (token == null || token.isBlank()) {
-            return "";
-        }
-        try {
-            JsonNode node = null;
-            try {
-                node = objectMapper.readTree(token);
-            } catch (Exception ignored) {
-            }
-            if (node != null && node.isArray() && node.size() > 0) {
-                token = node.get(0).asText();
-            }
-            if (token.contains("~")) {
-                String signed = token.split("~")[0];
-                token = signed;
-            }
-            if (!token.contains(".")) {
-                return "";
-            }
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) {
-                return "";
-            }
-            byte[] payload = Base64.getUrlDecoder().decode(parts[1]);
-            return objectMapper.writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(objectMapper.readTree(payload));
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private String assembleDecodedForDebug(String vpTokensJson, String keyBindingToken) {
-        StringBuilder sb = new StringBuilder();
-        String vpDecoded = decodeJwtLike(vpTokensJson);
-        if (vpDecoded != null && !vpDecoded.isBlank()) {
-            sb.append("vp_token:\n").append(vpDecoded);
-        }
-        String kbDecoded = decodeJwtLike(keyBindingToken);
-        if (kbDecoded != null && !kbDecoded.isBlank()) {
-            if (!sb.isEmpty()) {
-                sb.append("\n\n");
-            }
-            sb.append("key_binding_jwt:\n").append(kbDecoded);
-        }
-        return sb.toString();
-    }
-
     private Map<String, Map<String, List<de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService.DebugEntry>>> groupBy(
             List<de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService.DebugEntry> entries) {
         Map<String, Map<String, List<de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService.DebugEntry>>> grouped = new LinkedHashMap<>();
@@ -629,6 +605,9 @@ public class VerifierController {
         }
         entries.removeIf(entry -> entry.token() == null || entry.token().isBlank());
         return entries;
+    }
+
+    private record VpTokenEntry(String queryId, String token) {
     }
 
     private String asTokenString(JsonNode node) {
@@ -692,25 +671,6 @@ public class VerifierController {
         if (tokensForDebug.isBlank()) {
             tokensForDebug = vpTokenRaw;
         }
-        StringBuilder decoded = new StringBuilder();
-        String vpDecoded = decodeJwtLike(tokensForDebug);
-        if (vpDecoded != null && !vpDecoded.isBlank()) {
-            decoded.append("vp_token:\n").append(vpDecoded);
-        }
-        String kbDecoded = decodeJwtLike(keyBindingToken);
-        if (kbDecoded != null && !kbDecoded.isBlank()) {
-            if (!decoded.isEmpty()) {
-                decoded.append("\n\n");
-            }
-            decoded.append("key_binding_jwt:\n").append(kbDecoded);
-        }
-        String dpopDecoded = decodeJwtLike(dpopToken);
-        if (dpopDecoded != null && !dpopDecoded.isBlank()) {
-            if (!decoded.isEmpty()) {
-                decoded.append("\n\n");
-            }
-            decoded.append("dpop:\n").append(dpopDecoded);
-        }
         debugLogService.addVerification(
                 state,
                 "direct_post",
@@ -723,331 +683,168 @@ public class VerifierController {
                 responseHeaders,
                 responseBody,
                 "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6",
-                decoded.toString());
+                tokenViewService.assembleDecodedForDebug(tokensForDebug, keyBindingToken, dpopToken));
     }
 
-    private List<String> decryptTokensForView(List<String> tokens) {
-        if (tokens == null || tokens.isEmpty()) {
-            return List.of();
-        }
-        List<String> decrypted = new ArrayList<>(tokens.size());
-        for (String token : tokens) {
-            decrypted.add(decryptTokenForView(token));
-        }
-        return decrypted;
-    }
-
-    private boolean hasEncryptedToken(List<String> tokens) {
-        return tokens != null && tokens.stream().anyMatch(this::isEncryptedJwe);
-    }
-
-    private String decryptTokenForView(String token) {
-        if (token == null || token.isBlank()) {
-            return "";
-        }
-        if (!isEncryptedJwe(token)) {
-            return token;
-        }
-        try {
-            return verifierKeyService.decrypt(token);
-        } catch (Exception e) {
-            return token;
-        }
-    }
-
-    private String presentableToken(String token) {
-        String decrypted = decryptTokenForView(token);
-        String embedded = extractEmbeddedVpToken(decrypted);
-        if (embedded != null && !embedded.isBlank()) {
-            return embedded;
-        }
-        return decrypted == null ? "" : decrypted;
-    }
-
-    private List<String> presentableTokens(List<String> tokens) {
-        if (tokens == null || tokens.isEmpty()) {
-            return List.of();
-        }
-        List<String> result = new ArrayList<>(tokens.size());
-        for (String token : tokens) {
-            result.add(presentableToken(token));
-        }
-        return result;
-    }
-
-    private String extractEmbeddedVpToken(String token) {
-        if (token == null || token.isBlank()) {
-            return null;
-        }
-        if (!token.contains(".")) {
+    private JsonNode parseWalletMetadata(String walletMetadata) {
+        if (walletMetadata == null || walletMetadata.isBlank()) {
             return null;
         }
         try {
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) {
-                return null;
-            }
-            byte[] payload = Base64.getUrlDecoder().decode(parts[1]);
-            JsonNode node = objectMapper.readTree(payload);
-            JsonNode vp = node.path("vp_token");
-            if (vp.isMissingNode() || vp.isNull()) {
-                return null;
-            }
-            if (vp.isTextual()) {
-                return vp.asText();
-            }
-            if (vp.isArray() && vp.size() > 0) {
-                JsonNode first = vp.get(0);
-                return first.isTextual() ? first.asText() : first.toString();
-            }
-            if (vp.isObject()) {
-                return vp.toString();
-            }
-            return vp.asText(null);
+            return objectMapper.readTree(walletMetadata);
         } catch (Exception e) {
             return null;
         }
     }
 
-    private boolean isEncryptedJwe(String token) {
-        if (token == null) {
-            return false;
-        }
-        return token.chars().filter(c -> c == '.').count() == 4;
-    }
-
-    private RSAKey parseAttestationKey(String pem) {
-        try {
-            String privBase64 = extractPemBlock(pem, "PRIVATE KEY");
-            String certBase64 = extractPemBlock(pem, "CERTIFICATE");
-            if (privBase64 == null) {
-                throw new IllegalStateException("Attestation certificate must include a private key (PKCS8)");
-            }
-            byte[] privBytes = Base64.getMimeDecoder().decode(privBase64);
-            PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(privBytes);
-            KeyFactory kf = KeyFactory.getInstance("RSA");
-            PrivateKey privateKey = kf.generatePrivate(spec);
-            java.security.PublicKey publicKey = null;
-            if (certBase64 != null) {
-                byte[] certBytes = Base64.getMimeDecoder().decode(certBase64);
-                CertificateFactory cf = CertificateFactory.getInstance("X.509");
-                X509Certificate cert = (X509Certificate) cf.generateCertificate(new java.io.ByteArrayInputStream(certBytes));
-                publicKey = cert.getPublicKey();
-            }
-            if (publicKey == null) {
-                publicKey = kf.generatePublic(new java.security.spec.RSAPublicKeySpec(
-                        ((java.security.interfaces.RSAPrivateCrtKey) privateKey).getModulus(),
-                        ((java.security.interfaces.RSAPrivateCrtKey) privateKey).getPublicExponent()
-                ));
-            }
-            return new RSAKey.Builder((java.security.interfaces.RSAPublicKey) publicKey)
-                    .privateKey(privateKey)
-                    .build();
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to parse attestation certificate/key", e);
-        }
-    }
-
-    private List<com.nimbusds.jose.util.Base64> extractCertChain(String pem) {
-        if (pem == null || pem.isBlank()) {
-            return List.of();
-        }
-        List<com.nimbusds.jose.util.Base64> chain = new ArrayList<>();
-        int idx = 0;
-        while (true) {
-            int start = pem.indexOf("-----BEGIN CERTIFICATE-----", idx);
-            if (start < 0) {
-                break;
-            }
-            int end = pem.indexOf("-----END CERTIFICATE-----", start);
-            if (end < 0) {
-                break;
-            }
-            String body = pem.substring(start + "-----BEGIN CERTIFICATE-----".length(), end)
-                    .replaceAll("\\s+", "")
-                    .replace(' ', '+');
-            try {
-                chain.add(com.nimbusds.jose.util.Base64.encode(java.util.Base64.getDecoder().decode(body)));
-            } catch (Exception ignored) {
-            }
-            idx = end + "-----END CERTIFICATE-----".length();
-        }
-        return chain;
-    }
-
-    private String extractPemBlock(String pem, String type) {
-        if (pem == null) {
+    private JWK selectEncryptionKey(JsonNode walletMeta) {
+        if (walletMeta == null || walletMeta.isMissingNode()) {
             return null;
         }
-        String begin = "-----BEGIN " + type + "-----";
-        String end = "-----END " + type + "-----";
-        int start = pem.indexOf(begin);
-        int stop = pem.indexOf(end);
-        if (start >= 0 && stop > start) {
-            String body = pem.substring(start + begin.length(), stop);
-            return body.replaceAll("\\s+", "");
+        JsonNode jwksNode = walletMeta.get("jwks");
+        if (jwksNode == null || jwksNode.isMissingNode()) {
+            return null;
+        }
+        try {
+            JWKSet set = JWKSet.parse(jwksNode.toString());
+            return set.getKeys().stream()
+                    .filter(jwk -> jwk instanceof RSAKey || jwk instanceof ECKey)
+                    .findFirst()
+                    .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private EncryptionPreferences extractEncryptionPreferences(JsonNode walletMeta) {
+        if (walletMeta == null || walletMeta.isMissingNode()) {
+            return new EncryptionPreferences(null, null);
+        }
+        return new EncryptionPreferences(
+                firstSupported(walletMeta.get("request_object_encryption_alg_values_supported")),
+                firstSupported(walletMeta.get("request_object_encryption_enc_values_supported"))
+        );
+    }
+
+    private String firstSupported(JsonNode node) {
+        if (node != null && node.isArray() && node.size() > 0 && node.get(0).isTextual()) {
+            return node.get(0).asText();
         }
         return null;
     }
 
-    private String createVerifierAttestation(String clientIdWithPrefix, String issuerOverride, RSAKey signerKey, String responseUri) {
-        try {
-            String issuer = issuerOverride != null && !issuerOverride.isBlank() ? issuerOverride : "demo-attestation-issuer";
-            String baseClientId = clientIdWithPrefix.startsWith("verifier_attestation:")
-                    ? clientIdWithPrefix.substring("verifier_attestation:".length())
-                    : clientIdWithPrefix;
-            String kid = signerKey.getKeyID();
-            if (kid == null || kid.isBlank()) {
-                kid = com.nimbusds.jose.util.Base64URL.encode(signerKey.toRSAPublicKey().getEncoded()).toString();
-                signerKey = new RSAKey.Builder(signerKey.toRSAPublicKey())
-                        .privateKey(signerKey.toRSAPrivateKey())
-                        .keyID(kid)
-                        .build();
-            }
-            JWSHeader header = new JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.RS256)
-                    .type(com.nimbusds.jose.JOSEObjectType.JWT)
-                    .jwk(signerKey.toPublicJWK())
-                    .build();
-            JWTClaimsSet claims = new JWTClaimsSet.Builder()
-                    .issuer(issuer)
-                    .subject(baseClientId)
-                    .issueTime(new java.util.Date())
-                    .expirationTime(java.util.Date.from(java.time.Instant.now().plusSeconds(600)))
-                    .claim("cnf", Map.of("jwk", signerKey.toPublicJWK().toJSONObject()))
-                    .claim("redirect_uris", responseUri != null && !responseUri.isBlank() ? java.util.List.of(responseUri) : java.util.List.of())
-                    .build();
-            SignedJWT att = new SignedJWT(header, claims);
-            att.sign(new com.nimbusds.jose.crypto.RSASSASigner(signerKey));
-            return att.serialize();
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private String buildRequestObject(String responseUri, String state, String nonce,
-                                      String clientId, String responseType, String dcqlQuery,
-                                      String clientMetadata, String attestationJwt,
-                                      List<com.nimbusds.jose.util.Base64> x5c,
-                                      RSAKey signerKey) {
-        try {
-            JWSHeader.Builder headerBuilder = new JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.RS256)
-                    .type(new com.nimbusds.jose.JOSEObjectType("oauth-authz-req+jwt"))
-                    .jwk(signerKey.toPublicJWK());
-            if (attestationJwt != null && !attestationJwt.isBlank()) {
-                headerBuilder.customParam("jwt", attestationJwt);
-            }
-            if (x5c != null && !x5c.isEmpty()) {
-                headerBuilder.x509CertChain(x5c);
-            }
-            JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder()
-                    .claim("client_id", clientId)
-                    .claim("response_type", responseType)
-                    .claim("response_mode", "direct_post")
-                    .claim("response_uri", responseUri)
-                    .claim("state", state)
-                    .claim("nonce", nonce)
-                    .claim("dcql_query", dcqlQuery);
-            if (clientMetadata != null && !clientMetadata.isBlank()) {
-                try {
-                    claims.claim("client_metadata", objectMapper.readTree(clientMetadata));
-                } catch (Exception e) {
-                    claims.claim("client_metadata", clientMetadata);
-                }
-            }
-            claims.expirationTime(java.util.Date.from(java.time.Instant.now().plusSeconds(600)));
-            SignedJWT jwt = new SignedJWT(headerBuilder.build(), claims.build());
-            jwt.sign(new com.nimbusds.jose.crypto.RSASSASigner(signerKey));
-            return jwt.serialize();
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private record VpTokenEntry(String queryId, String token) {
-    }
-
-    private String deriveX509ClientId(String existingClientId, String certificatePem) {
-        String firstCert = extractPemBlock(certificatePem, "CERTIFICATE");
-        if (firstCert == null || firstCert.isBlank()) {
-            throw new IllegalStateException("No certificate found in client_cert");
+    private EncryptionResult encryptRequestObject(String payload, JWK key, String algOverride, String encOverride) {
+        if (key == null || payload == null || payload.isBlank()) {
+            return new EncryptionResult(payload, false, null, null);
         }
         try {
-            byte[] der = Base64.getMimeDecoder().decode(firstCert);
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            X509Certificate cert = (X509Certificate) cf.generateCertificate(new ByteArrayInputStream(der));
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(cert.getEncoded());
-            String hash = Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
-            String computed = "x509_hash:" + hash;
-            if (existingClientId != null && existingClientId.startsWith("x509_hash:") && !existingClientId.equals(computed)) {
-                throw new IllegalStateException("client_id hash does not match client_cert");
-            }
-            return computed;
-        } catch (Exception e) {
-            throw new IllegalStateException("Invalid client_cert for x509_hash client authentication", e);
-        }
-    }
-
-    private X509Material resolveX509Material(String providedPem) {
-        if (providedPem != null && !providedPem.isBlank()) {
-            String certBlock = extractPemBlock(providedPem, "CERTIFICATE");
-            if (certBlock == null || certBlock.isBlank()) {
-                throw new IllegalStateException("No certificate found in client_cert");
-            }
-            String normalizedCert = toPem(Base64.getMimeDecoder().decode(certBlock), "CERTIFICATE");
-            String combined = providedPem.contains("CERTIFICATE") ? providedPem : normalizedCert;
-            return new X509Material(normalizedCert, null, combined, "client_cert");
-        }
-        RSAKey verifierKey = verifierKeyService.loadOrCreateKey();
-        X509Certificate certificate = selfSignedCertificate(verifierKey);
-        try {
-            String certPem = toPem(certificate.getEncoded(), "CERTIFICATE");
-            String keyPem = toPem(verifierKey.toRSAPrivateKey().getEncoded(), "PRIVATE KEY");
-            String combined = certPem + "\n" + keyPem;
-            return new X509Material(certPem, keyPem, combined, "verifier_self_signed");
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to prepare verifier x509 material", e);
-        }
-    }
-
-    private X509Certificate selfSignedCertificate(RSAKey key) {
-        try {
-            Date from = Date.from(java.time.Instant.parse("2024-01-01T00:00:00Z"));
-            Date to = Date.from(java.time.Instant.parse("2045-01-01T00:00:00Z"));
-            byte[] pubDigest = MessageDigest.getInstance("SHA-256").digest(key.toRSAPublicKey().getEncoded());
-            BigInteger serial = new BigInteger(1, pubDigest);
-            org.bouncycastle.asn1.x500.X500Name subject = new org.bouncycastle.asn1.x500.X500Name("CN=Verifier Demo");
-            ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
-                    .setProvider(BC_PROVIDER)
-                    .build(key.toRSAPrivateKey());
-            JcaX509v3CertificateBuilder builder = new JcaX509v3CertificateBuilder(
-                    subject,
-                    serial,
-                    from,
-                    to,
-                    subject,
-                    key.toRSAPublicKey()
+            JWEAlgorithm alg = algOverride != null && !algOverride.isBlank()
+                    ? JWEAlgorithm.parse(algOverride)
+                    : (key instanceof RSAKey ? JWEAlgorithm.RSA_OAEP_256 : JWEAlgorithm.ECDH_ES_A256KW);
+            EncryptionMethod enc = encOverride != null && !encOverride.isBlank()
+                    ? EncryptionMethod.parse(encOverride)
+                    : EncryptionMethod.A256GCM;
+            com.nimbusds.jose.JWEObject jwe = new com.nimbusds.jose.JWEObject(
+                    new com.nimbusds.jose.JWEHeader.Builder(alg, enc).keyID(key.getKeyID()).build(),
+                    new com.nimbusds.jose.Payload(payload)
             );
-            X509CertificateHolder holder = builder.build(signer);
-            return new JcaX509CertificateConverter()
-                    .setProvider(BC_PROVIDER)
-                    .getCertificate(holder);
+            if (key instanceof RSAKey rsaKey) {
+                jwe.encrypt(new com.nimbusds.jose.crypto.RSAEncrypter(rsaKey.toRSAPublicKey()));
+            } else if (key instanceof ECKey ecKey) {
+                jwe.encrypt(new com.nimbusds.jose.crypto.ECDHEncrypter(ecKey.toECPublicKey()));
+            } else {
+                return new EncryptionResult(payload, false, null, null);
+            }
+            return new EncryptionResult(jwe.serialize(), true, alg.getName(), enc.getName());
         } catch (Exception e) {
-            throw new IllegalStateException("Failed to generate verifier x509 certificate", e);
+            return new EncryptionResult(payload, false, null, null);
         }
     }
 
-    private String toPem(byte[] der, String type) {
-        String base64 = Base64.getEncoder().encodeToString(der);
-        StringBuilder sb = new StringBuilder();
-        sb.append("-----BEGIN ").append(type).append("-----\n");
-        for (int i = 0; i < base64.length(); i += 64) {
-            sb.append(base64, i, Math.min(base64.length(), i + 64)).append("\n");
+    private String buildDecodedForLog(String signedPayload, EncryptionResult encryption) {
+        if (signedPayload == null || signedPayload.isBlank()) {
+            return "";
         }
-        sb.append("-----END ").append(type).append("-----");
+        if (encryption != null && encryption.encrypted()) {
+            String decodedSigned = tokenViewService.decodeJwtLike(signedPayload);
+            StringBuilder sb = new StringBuilder("Encrypted request object");
+            if (encryption.alg() != null || encryption.enc() != null) {
+                sb.append(" (");
+                if (encryption.alg() != null && !encryption.alg().isBlank()) {
+                    sb.append(encryption.alg());
+                }
+                if (encryption.enc() != null && !encryption.enc().isBlank()) {
+                    if (encryption.alg() != null && !encryption.alg().isBlank()) {
+                        sb.append("/");
+                    }
+                    sb.append(encryption.enc());
+                }
+                sb.append(")");
+            }
+            if (decodedSigned != null && !decodedSigned.isBlank()) {
+                sb.append("\n\n").append(decodedSigned);
+            }
+            return sb.toString();
+        }
+        return tokenViewService.decodeJwtLike(signedPayload);
+    }
+
+    private String walletRequestLog(String walletMetadata, String walletNonce) {
+        StringBuilder sb = new StringBuilder();
+        if (walletMetadata != null && !walletMetadata.isBlank()) {
+            sb.append("wallet_metadata=").append(walletMetadata);
+        }
+        if (walletNonce != null && !walletNonce.isBlank()) {
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            sb.append("wallet_nonce=").append(walletNonce);
+        }
         return sb.toString();
     }
 
-    private record X509Material(String certificatePem, String keyPem, String combinedPem, String source) {
+    private String extractState(com.nimbusds.jwt.JWTClaimsSet claims) {
+        if (claims == null) {
+            return "unknown";
+        }
+        try {
+            String state = claims.getStringClaim("state");
+            return state != null && !state.isBlank() ? state : "unknown";
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
+    private RequestObjectService.SigningRequest determineSigningRequest(JsonNode walletMeta) {
+        if (walletMeta == null || walletMeta.isMissingNode()) {
+            return null;
+        }
+        String alg = firstSupported(walletMeta.get("request_object_signing_alg_values_supported"));
+        if (alg == null || alg.isBlank()) {
+            return null;
+        }
+        try {
+            JWSAlgorithm jwsAlg = JWSAlgorithm.parse(alg);
+            JWK jwk = null;
+            if (alg.toUpperCase().startsWith("RS")) {
+                jwk = verifierKeyService.loadOrCreateSigningKey();
+            } else if (alg.toUpperCase().startsWith("ES")) {
+                jwk = new ECKeyGenerator(Curve.P_256)
+                        .keyUse(KeyUse.SIGNATURE)
+                        .algorithm(jwsAlg)
+                        .keyIDFromThumbprint(true)
+                        .generate();
+            }
+            return new RequestObjectService.SigningRequest(jwsAlg, jwk);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private record EncryptionPreferences(String alg, String enc) {
+    }
+
+    private record EncryptionResult(String payload, boolean encrypted, String alg, String enc) {
     }
 
     private UriComponentsBuilder baseUri(HttpServletRequest request) {

@@ -26,15 +26,17 @@ Start Keycloak:
  docker compose up -d keycloak
  ```
 
-Keycloak will be available on http://localhost:8080 with admin credentials `admin` / `admin`.
+Keycloak will be available on port 8080 of the host running Docker (for example http://your-hostname:8080) with admin credentials `admin` / `admin`.
 
 ## Running the wallet
+
+Export `KEYCLOAK_BASE_URL` to the reachable Keycloak base URL first (for Docker Compose on the same host: `http://localhost:8080`; for deployments: `https://your-keycloak.example.com`).
 
 ```bash
 mvn spring-boot:run
 ```
 
-Visit http://localhost:3000 and:
+Visit your deployed host (for example http://your-hostname:3000) and:
 
 1. Click “Sign in with Keycloak”, authenticate as `test` / `test`.
 2. Press “Issue Credential”; the issued SD-JWT credential (the signed JWT plus all disclosures) is saved under `data/credentials/<subject>-<timestamp>.json`.  
@@ -77,11 +79,11 @@ sequenceDiagram
 
 - **OID4VCI 1.0** – Credential proof building and issuance request body: `src/main/java/de/arbeitsagentur/keycloak/wallet/issuance/service/CredentialService.java`. Authorization details and scope handling: `src/main/java/de/arbeitsagentur/keycloak/wallet/issuance/oidc/OidcClient.java`.
 - **OID4VP 1.0 + DCQL** – Wallet-side presentation flow and consent: `src/main/java/de/arbeitsagentur/keycloak/wallet/demo/oid4vp/Oid4vpController.java`, request parsing/matching: `src/main/java/de/arbeitsagentur/keycloak/wallet/demo/oid4vp/PresentationService.java`, verifier endpoints: `src/main/java/de/arbeitsagentur/keycloak/wallet/verification/web/VerifierController.java`.
-- **PID Rulebook (urn:eudi:pid:1)** – PID credential scope and claim mapping defined in `keycloak/realm-export.json` and `src/test/resources/realm-export.json`; default DCQL query built in `src/main/java/de/arbeitsagentur/keycloak/wallet/verification/service/DcqlService.java` requests only `given_name` and `family_name`.
+- **PID Rulebook (urn:eudi:pid:1)** – PID credential scope and claim mapping defined in `config/keycloak/realm-export.json`; default DCQL query built in `src/main/java/de/arbeitsagentur/keycloak/wallet/verification/service/DcqlService.java` requests only `given_name` and `family_name`.
 
 ### Requesting and verifying a presentation (OID4VP)
 
-1. **Authorization Request** – http://localhost:3000/verifier/ issues an OID4VP 1.0 request with:
+1. **Authorization Request** – `https://<your-host>/verifier/` issues an OID4VP 1.0 request with:
    - `response_type=vp_token` (or `vp_token id_token`)
    - `response_mode=direct_post` and `response_uri` back to `/verifier/callback`
    - `client_id` (environment variable `VERIFIER_CLIENT_ID`, supports plain IDs, `x509_hash:<hash>`, or `verifier_attestation:<sub>`)
@@ -142,7 +144,7 @@ Optional DCQL helpers:
 - `credential_set` lets you narrow acceptable credentials by id/vct/format (array of objects such as `{ "id": "pid" }` or `{ "vct": "https://credentials.example.com/identity_credential" }`).
 - `claim_set` lets you express claim groups that must be satisfied together (array of objects like `{ "claims": [ { "path": ["given_name"] }, { "path": ["family_name"] } ] }`).
 
-The trust list anchors verification to the Keycloak realm certificate stored under `keycloak/keys/wallet-demo-ec-cert.pem` (ES256). Add further certificates to `src/main/resources/trust-list.json` when integrating additional issuers (for example, a sandbox or a production EUDI wallet).
+The trust list anchors verification to the Keycloak realm certificate stored under `config/keycloak/keys/wallet-demo-ec-cert.pem` (ES256). Add further certificates to `src/main/resources/trust-list.json` when integrating additional issuers (for example, a sandbox or a production EUDI wallet).
 
 ### Using an external wallet
 
@@ -165,6 +167,9 @@ VERIFIER_CLIENT_ID_SCHEME=pre-registered
 VERIFIER_WALLET_AUTH_ENDPOINT=
 DCQL_QUERY_FILE=
 DEFAULT_DCQL_QUERY=
+MAX_HTTP_REQUEST_HEADER_SIZE=64KB
+MAX_HTTP_RESPONSE_HEADER_SIZE=64KB
+VERIFIER_MAX_REQUEST_OBJECT_INLINE_BYTES=12000
 ```
 
 Credential configurations and scopes are discovered from the issuer metadata (`credential_configurations_supported`); no manual list is maintained in `application.yml`.
@@ -180,12 +185,10 @@ mvn verify
 
 Always run the tests after you modify the codebase (see `AGENTS.md`). The test performs the HTML form login against Keycloak, stores a credential, requests a presentation (using the same parameters as the verifier UI), and verifies both a success case and a tampered `vp_token` against the trust list.
 
- ## Project structure
+## Project structure
 
+- `config/` – single home for key material (`wallet-keys.json`, `verifier-keys.json` for encryption + verifier_attestation/x509 PoP) and Keycloak assets (`keycloak/realm-export.json`, `keycloak/keys/…`, override verifier path via `VERIFIER_KEYS_FILE`)
 - `docker-compose.yml` – Keycloak setup with realm import
-- `keycloak/realm-export.json` – realm definition used by dev server and tests
-- `keycloak/keys/` – static EC signing key/certificate for VC issuance (plus RSA key reused for encryption)
-- `config/wallet-keys.json` – sample wallet key store
 - `src/main/java` – Spring Boot application (wallet controllers, OIDC helpers, credential issuer client, verifier, OID4VP handler)
 - `src/main/resources/templates` – Thymeleaf templates for wallet, verifier, and OID4VP submission
 - `src/test/java/de/arbeitsagentur/keycloak/wallet/WalletIntegrationTest.java` – Testcontainers-based system test

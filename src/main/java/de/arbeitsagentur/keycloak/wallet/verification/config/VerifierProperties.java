@@ -12,9 +12,16 @@ public record VerifierProperties(
         String defaultDcqlQuery,
         String walletAuthEndpoint,
         String clientId,
-        Path encryptionKeyFile
+        Path keysFile,
+        Integer maxRequestObjectInlineBytes
 ) {
     public String clientId() {
         return clientId != null ? clientId : "wallet-verifier";
+    }
+
+    public int resolvedMaxRequestObjectInlineBytes() {
+        return maxRequestObjectInlineBytes != null && maxRequestObjectInlineBytes > 0
+                ? maxRequestObjectInlineBytes
+                : 12000;
     }
 }

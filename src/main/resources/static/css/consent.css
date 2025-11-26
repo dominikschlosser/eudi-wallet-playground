@@ -59,8 +59,10 @@ body {
   border: 1px solid rgba(56, 189, 248, 0.5);
   border-radius: 12px;
   background: rgba(56, 189, 248, 0.15);
-  min-width: 200px;
-  text-align: right;
+  min-width: 0;
+  width: fit-content;
+  max-width: 240px;
+  text-align: left;
 }
 .user-chip .label {
   text-transform: uppercase;

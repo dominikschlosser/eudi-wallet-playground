@@ -41,7 +41,8 @@ class PresentationServiceTest {
                 null,
                 null,
                 null,
-                java.util.List.of("demo-attestation-issuer")
+                java.util.List.of("demo-attestation-issuer"),
+                null
         );
         credentialStore = new CredentialStore(properties, objectMapper);
         presentationService = new PresentationService(credentialStore, objectMapper);
