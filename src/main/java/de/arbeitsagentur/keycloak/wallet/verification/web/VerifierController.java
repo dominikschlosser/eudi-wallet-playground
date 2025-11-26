@@ -148,9 +148,14 @@ public class VerifierController {
     private ResponseEntity<String> handleRequestObject(String id, String walletMetadata, String walletNonce, HttpServletRequest request) {
         JsonNode walletMeta = parseWalletMetadata(walletMetadata);
         RequestObjectService.SigningRequest signingRequest = determineSigningRequest(walletMeta);
-        LOG.info("request_uri {} {} wallet_nonce={} signing_alg={} encryption_requested={}", request.getMethod(), request.getRequestURI(),
-                walletNonce != null && !walletNonce.isBlank(), signingRequest != null ? signingRequest.alg() : "none",
-                walletMeta != null && walletMeta.has("jwks"));
+        LOG.info("request_uri {} {} wallet_nonce={} signing_alg={} encryption_requested={} body={} headers={}",
+                request.getMethod(),
+                request.getRequestURI(),
+                walletNonce != null && !walletNonce.isBlank(),
+                signingRequest != null ? signingRequest.alg() : "none",
+                walletMeta != null && walletMeta.has("jwks"),
+                walletRequestLog(walletMetadata, walletNonce),
+                request.getHeaderNames() != null ? java.util.Collections.list(request.getHeaderNames()).stream().collect(java.util.stream.Collectors.toMap(h -> h, request::getHeader)) : Map.of());
         RequestObjectService.ResolvedRequestObject resolved = requestObjectService.resolve(id, walletNonce, signingRequest);
         if (resolved == null || resolved.serialized() == null || resolved.serialized().isBlank()) {
             LOG.info("request_uri {} not found or expired", id);
@@ -164,7 +169,12 @@ public class VerifierController {
         String decoded = buildDecodedForLog(resolved.serialized(), encryption);
         String responseSummary = "signed=%s wallet_nonce_applied=%s encrypted=%s".formatted(
                 resolved.signed(), resolved.walletNonceApplied(), encryption.encrypted());
-        LOG.info("request_uri {} response signed={} encrypted={} state={}", request.getRequestURI(), resolved.signed(), encryption.encrypted(), state);
+        LOG.info("request_uri {} response signed={} encrypted={} state={} payload={}",
+                request.getRequestURI(),
+                resolved.signed(),
+                encryption.encrypted(),
+                state,
+                payload);
         debugLogService.addVerification(
                 state,
                 "Authorization",
@@ -328,6 +338,7 @@ public class VerifierController {
         String keyBindingJwt = firstNonBlank(keyBindingTokenAlt, keyBindingToken);
         String effectiveDpop = firstNonBlank(dpopToken, dpopTokenAlt);
         String callbackRequestBody = formBody(state, vpTokenRaw, idToken, responseNonce, error, errorDescription, keyBindingJwt, effectiveDpop);
+        LOG.info("direct_post callback request body:\n{}", callbackRequestBody);
         VerifierSession verifierSession = verifierSessionService.getSession(httpSession);
         if (verifierSession == null || !verifierSession.state().equals(state)) {
             steps.add("Verifier session and state validation failed",
@@ -418,6 +429,7 @@ public class VerifierController {
                             effectiveDpop));
             LOG.info("direct_post callback verified state={} tokens={} key_binding_present={} encrypted_vp={}", state, vpTokens.size(), keyBindingJwt != null && !keyBindingJwt.isBlank(),
                     tokenViewService.hasEncryptedToken(vpTokens.stream().map(VpTokenEntry::token).toList()));
+            LOG.info("direct_post callback response body:\n{}", formBody(state, vpTokenRaw, idToken, responseNonce, error, errorDescription, keyBindingJwt, effectiveDpop));
             Map<String, Object> combined = new LinkedHashMap<>();
             String kbFromPayload = null;
             for (int i = 0; i < payloads.size(); i++) {
