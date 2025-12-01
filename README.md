@@ -150,6 +150,13 @@ The trust list anchors verification to the Keycloak realm certificate stored und
 
 Set `VERIFIER_WALLET_AUTH_ENDPOINT` to the authorization endpoint of the wallet you want to test. The verifier continues to issue the same `dcql_query`, so any compliant wallet (mobile, sandbox, or web) can answer. The verifier still validates the SD-JWT signature and disclosures against the trust list.
 
+### Mock OID4VCI issuer with credential builder
+
+- Open `/mock-issuer` (or click “Issue with Mock Issuer” in the wallet) to build SD-JWT credentials without authenticating. Pick a credential configuration, fill the pre-configured claim fields, and preview the SD-JWT in encoded/decoded form.
+- Credential types and claims come from `mock-issuer.configurations` (`config/mock-issuer-configurations.json` by default; see `MockIssuerProperties`). You can create new credential types ad-hoc in the builder UI—they are persisted to that config file and instantly available.
+- Generate a credential offer to receive a `pre-authorized_code`, `credential_offer_uri`, and `openid-credential-offer://` deep link. The mock issuer advertises metadata at `/mock-issuer/.well-known/openid-credential-issuer` and exposes `/mock-issuer/token`, `/mock-issuer/credential`, and `/mock-issuer/nonce`.
+- The mock issuer signs with `config/mock-issuer-keys.json`; the verifier can trust it by selecting the “Mock Issuer (local)” trust list from `src/main/resources/trust-list-mock.json`.
+
  ### Configuration
 
 Spring Boot properties are exposed as environment variables; copy `.env.example` or export the variables before running:
@@ -174,6 +181,8 @@ VERIFIER_MAX_REQUEST_OBJECT_INLINE_BYTES=12000
 
 Credential configurations and scopes are discovered from the issuer metadata (`credential_configurations_supported`); no manual list is maintained in `application.yml`.
 The built-in same-device demo wallet endpoints (`/oid4vp/auth`) stay enabled to support quick flows; point the verifier at an external wallet by setting `VERIFIER_WALLET_AUTH_ENDPOINT`.
+
+Mock issuer credential types live under `mock-issuer.configurations` (see `MockIssuerProperties`) and default to `config/mock-issuer-configurations.json`. Each entry defines `id`, `format`, `scope`, `name`, `vct`, and a list of `claims` (`name`, `label`, `defaultValue`, `required`). The builder UI renders only these claims, so you can lock the mock credentials to a known schema.
 
 ## Integration tests
 

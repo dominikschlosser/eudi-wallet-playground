@@ -3,6 +3,7 @@ package de.arbeitsagentur.keycloak.wallet.issuance.web;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.issuance.oidc.OidcClient;
 import de.arbeitsagentur.keycloak.wallet.issuance.service.CredentialService;
+import de.arbeitsagentur.keycloak.wallet.issuance.service.MockIssuerFlowService;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.SessionService;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.TokenSet;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.WalletSession;
@@ -24,14 +25,17 @@ public class SessionController {
     private final CredentialStore credentialStore;
     private final CredentialService credentialService;
     private final OidcClient oidcClient;
+    private final MockIssuerFlowService mockIssuerFlowService;
 
     public SessionController(SessionService sessionService, CredentialStore credentialStore,
                              CredentialService credentialService,
-                             OidcClient oidcClient) {
+                             OidcClient oidcClient,
+                             MockIssuerFlowService mockIssuerFlowService) {
         this.sessionService = sessionService;
         this.credentialStore = credentialStore;
         this.credentialService = credentialService;
         this.oidcClient = oidcClient;
+        this.mockIssuerFlowService = mockIssuerFlowService;
     }
 
     @GetMapping("/session")
@@ -40,10 +44,8 @@ public class SessionController {
         Map<String, Object> response = new HashMap<>();
         response.put("authenticated", session.isAuthenticated());
         response.put("user", session.getUserProfile());
-        List<?> credentials = session.getUserProfile() != null
-                ? credentialStore.listCredentialEntries(session.getUserProfile().sub())
-                : List.of();
-        response.put("credentials", credentials);
+        response.put("credentials", credentialStore.listCredentialEntries(
+                session.ownerIdsIncluding(CredentialStore.MOCK_ISSUER_OWNER)));
         return response;
     }
 
@@ -82,14 +84,30 @@ public class SessionController {
         return ResponseEntity.ok(credential);
     }
 
+    @PostMapping("/mock-issue")
+    public ResponseEntity<?> mockIssue(HttpSession httpSession, jakarta.servlet.http.HttpServletRequest request) {
+        WalletSession session = sessionService.getSession(httpSession);
+        try {
+            Map<String, Object> credential = mockIssuerFlowService.issueWithMockIssuer(
+                    CredentialStore.MOCK_ISSUER_OWNER,
+                    request,
+                    null,
+                    null,
+                    null
+            );
+            return ResponseEntity.ok(credential);
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            return ResponseEntity.status(e.getStatusCode())
+                    .body(Map.of("error", e.getReason() != null ? e.getReason() : "Mock issuance failed"));
+        }
+    }
+
     @PostMapping("/credentials/delete")
     public ResponseEntity<?> deleteCredential(@org.springframework.web.bind.annotation.RequestParam("file") String file,
                                               HttpSession httpSession) {
         WalletSession session = sessionService.getSession(httpSession);
-        if (!session.isAuthenticated()) {
-            return ResponseEntity.status(401).body(Map.of("error", "Not authenticated"));
-        }
-        boolean deleted = credentialStore.deleteCredential(session.getUserProfile().sub(), file);
+        List<String> ownerIds = session.ownerIdsIncluding(CredentialStore.MOCK_ISSUER_OWNER);
+        boolean deleted = credentialStore.deleteCredential(ownerIds, file);
         if (!deleted) {
             return ResponseEntity.status(404).body(Map.of("error", "Credential not found"));
         }

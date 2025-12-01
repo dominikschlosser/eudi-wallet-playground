@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mock Issuer</title>
+    <link rel="stylesheet" th:href="@{/css/mock-issuer.css}" />
+  </head>
+  <body>
+    <div class="card" th:attr="data-issuer=${issuer}">
+      <div class="page-header">
+        <div>
+          <div class="eyebrow">OID4VCI Playground</div>
+          <h1>Mock Issuer</h1>
+          <p>Build SD-JWT credentials without Keycloak. Generate a credential offer, copy the pre-authorized code, and feed it to any OID4VCI wallet.</p>
+        </div>
+        <div class="actions">
+          <a class="btn secondary" href="/wallet">Wallet</a>
+          <a class="btn secondary" href="/verifier">Verifier</a>
+        </div>
+      </div>
+
+      <div class="pill-grid">
+        <div class="pill-row">
+          <span class="pill-label">Credential issuer</span>
+          <code th:text="${issuer}">https://example.com/mock-issuer</code>
+        </div>
+        <div class="pill-row">
+          <span class="pill-label">Configurations file</span>
+          <code th:text="${configurationFile}">config/mock-issuer-configurations.json</code>
+        </div>
+        <div class="pill-row">
+          <span class="pill-label">Metadata</span>
+          <code th:text="${issuer + '/.well-known/openid-credential-issuer'}">/.well-known/openid-credential-issuer</code>
+        </div>
+        <div class="pill-row">
+          <span class="pill-label">Token endpoint</span>
+          <code th:text="${issuer + '/token'}">/mock-issuer/token</code>
+        </div>
+        <div class="pill-row">
+          <span class="pill-label">Credential endpoint</span>
+          <code th:text="${issuer + '/credential'}">/mock-issuer/credential</code>
+        </div>
+      </div>
+
+      <div class="builder" id="configuration-editor">
+        <div class="builder-header">
+          <div class="field">
+            <label>New credential type</label>
+            <small class="muted">Create ad-hoc credential types for the mock issuer. Saved to the configurations file above.</small>
+          </div>
+          <div class="actions">
+            <button type="button" class="btn secondary mini" id="add-claim">Add claim</button>
+            <div class="chip">Format: dc+sd-jwt</div>
+          </div>
+        </div>
+
+        <div class="grid-two">
+          <div class="field">
+            <label for="new-config-id">Configuration id</label>
+            <input id="new-config-id" type="text" placeholder="custom-credential" />
+          </div>
+          <div class="field">
+            <label for="new-config-name">Display name</label>
+            <input id="new-config-name" type="text" placeholder="Custom Credential" />
+          </div>
+          <div class="field">
+            <label for="new-config-scope">Scope</label>
+            <input id="new-config-scope" type="text" placeholder="custom-scope" />
+          </div>
+          <div class="field">
+            <label for="new-config-vct">Credential type (vct)</label>
+            <input id="new-config-vct" type="text" placeholder="urn:example:custom" />
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-header">
+            <label>Claim templates</label>
+            <small class="muted">Claim names become selective disclosures; labels are UI-only.</small>
+          </div>
+          <div id="new-claims" class="claims-grid"></div>
+        </div>
+
+        <div class="actions" style="justify-content: space-between; align-items: center;">
+          <div>
+            <button type="button" id="save-configuration" class="btn">Save credential type</button>
+          </div>
+          <small class="muted">Saved configurations are immediately available in the builder below.</small>
+        </div>
+        <div id="configuration-feedback" class="alert success" style="display:none;"></div>
+      </div>
+
+      <div class="builder">
+        <div class="builder-header">
+          <div class="field">
+            <label for="configuration">Credential configuration</label>
+            <select id="configuration">
+              <option th:each="cfg : ${configurations}"
+                      th:value="${cfg.id()}"
+                      th:data-format="${cfg.format()}"
+                      th:data-vct="${cfg.vct()}"
+                      th:attr="disabled=${cfg.format().equals('mso_mdoc')} ? 'disabled' : null"
+                      th:selected="${cfg.id() == defaultConfigurationId}"
+                      th:text="${cfg.format().equals('mso_mdoc') ? cfg.name() + ' (coming soon)' : cfg.name()}">mock</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="vct">Credential type (vct)</label>
+            <input id="vct" type="text" th:value="${configurations.isEmpty() ? '' : configurations.get(0).vct()}" readonly />
+          </div>
+          <div class="field">
+            <label>Format</label>
+            <div id="format-chip" class="chip">dc+sd-jwt</div>
+          </div>
+        </div>
+
+        <div class="grid-two">
+          <div>
+            <div class="field">
+              <div class="field-header">
+                <label id="claims-title">Claims</label>
+                <small class="muted">Fill the configured disclosures for this credential type.</small>
+              </div>
+              <div id="claims" class="claims-grid"></div>
+              <div class="chips" style="margin-top:0.5rem;justify-content:space-between;align-items:center;">
+                <button type="button" id="reset-claims" class="btn secondary mini">Reset defaults</button>
+                <small class="muted" id="claim-hint">All claims are issued as selective disclosures.</small>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="preview-header">
+              <div>
+                <div class="muted">Preview SD-JWT</div>
+                <div class="pill tiny" id="preview-state">Encoded</div>
+              </div>
+              <div class="preview-actions">
+                <button type="button" class="btn secondary mini" id="toggle-preview">Show decoded</button>
+                <button type="button" class="btn secondary mini" id="copy-preview">Copy</button>
+              </div>
+            </div>
+            <pre id="preview">Add claims to see the SD-JWT preview.</pre>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="button" id="generate-offer" class="btn">Generate credential offer</button>
+          <button type="button" id="refresh-preview" class="btn secondary">Refresh preview</button>
+        </div>
+
+        <div id="error-box" class="alert error" style="display:none;"></div>
+
+        <div id="offer-results" class="result" style="display:none;">
+          <div class="result-grid">
+            <div>
+              <div class="muted">pre-authorized_code</div>
+              <div class="result-row">
+                <code id="result-preauth">n/a</code>
+                <button type="button" class="btn secondary mini" data-copy="result-preauth">Copy</button>
+              </div>
+            </div>
+            <div>
+              <div class="muted">credential_offer_uri</div>
+              <div class="result-row">
+                <code id="result-offer-uri">n/a</code>
+                <button type="button" class="btn secondary mini" data-copy="result-offer-uri">Copy</button>
+              </div>
+            </div>
+            <div>
+              <div class="muted">openid-credential-offer:// URI</div>
+              <div class="result-row">
+                <code id="result-deep-link">n/a</code>
+                <button type="button" class="btn secondary mini" data-copy="result-deep-link">Copy</button>
+              </div>
+            </div>
+          </div>
+          <details style="margin-top:0.75rem;">
+            <summary>Credential offer JSON</summary>
+            <pre id="result-offer-json"></pre>
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <script th:inline="javascript">
+      (() => {
+        const issuer = /*[[${issuer}]]*/ "";
+        let configurationList = [...(/*[[${configurations}]]*/ [])];
+        let defaultConfigurationId = /*[[${defaultConfigurationId}]]*/ "";
+        const configurationFile = /*[[${configurationFile}]]*/ "";
+
+        const configurationSelect = document.getElementById("configuration");
+        const vctInput = document.getElementById("vct");
+        const formatChip = document.getElementById("format-chip");
+        const claimsContainer = document.getElementById("claims");
+        const claimsTitle = document.getElementById("claims-title");
+        const previewBlock = document.getElementById("preview");
+        const previewState = document.getElementById("preview-state");
+        const togglePreview = document.getElementById("toggle-preview");
+        const copyPreview = document.getElementById("copy-preview");
+        const refreshPreviewBtn = document.getElementById("refresh-preview");
+        const generateOfferBtn = document.getElementById("generate-offer");
+        const errorBox = document.getElementById("error-box");
+        const offerResults = document.getElementById("offer-results");
+        const resultPreauth = document.getElementById("result-preauth");
+        const resultOfferUri = document.getElementById("result-offer-uri");
+        const resultDeepLink = document.getElementById("result-deep-link");
+        const resultOfferJson = document.getElementById("result-offer-json");
+        const resetClaimsBtn = document.getElementById("reset-claims");
+        const claimHint = document.getElementById("claim-hint");
+        const newConfigId = document.getElementById("new-config-id");
+        const newConfigName = document.getElementById("new-config-name");
+        const newConfigScope = document.getElementById("new-config-scope");
+        const newConfigVct = document.getElementById("new-config-vct");
+        const addClaimBtn = document.getElementById("add-claim");
+        const newClaimsContainer = document.getElementById("new-claims");
+        const saveConfigurationBtn = document.getElementById("save-configuration");
+        const configurationFeedback = document.getElementById("configuration-feedback");
+
+        let previewMode = "encoded";
+        let cachedPreview = { encoded: "", decoded: "" };
+        let claimValues = {};
+        let newClaimTemplates = [
+          { name: "given_name", label: "Given name", defaultValue: "Alice", required: true }
+        ];
+
+        if (!defaultConfigurationId && configurationList.length > 0) {
+          defaultConfigurationId = configurationList[0].id;
+        }
+        if (configurationSelect) {
+          configurationSelect.value = defaultConfigurationId || configurationSelect.value;
+          if (!configurationSelect.value && configurationList[0]) {
+            configurationSelect.value = configurationList[0].id;
+          }
+        }
+
+        function currentConfig() {
+          const selectedId = configurationSelect?.value || defaultConfigurationId;
+          return configurationList.find((c) => c.id === selectedId) || configurationList[0] || null;
+        }
+
+        function applyDefaultClaims(cfg) {
+          claimValues = {};
+          (cfg?.claims || []).forEach((claim) => {
+            if (claim.defaultValue !== undefined && claim.defaultValue !== null) {
+              claimValues[claim.name] = claim.defaultValue;
+            }
+          });
+        }
+
+        function updateFormatBadge() {
+          const cfg = currentConfig();
+          if (!cfg) return;
+          if (formatChip) {
+            formatChip.textContent = cfg.format || "dc+sd-jwt";
+          }
+          if (vctInput) {
+            vctInput.value = cfg.vct || "";
+          }
+          if (claimsTitle) {
+            claimsTitle.textContent = cfg.name ? `${cfg.name} claims` : "Claims";
+          }
+          if (claimHint) {
+            const total = (cfg.claims || []).length;
+            claimHint.textContent = total > 0 ? `${total} claim${total === 1 ? "" : "s"} will be selectively disclosed.` : "No claims configured for this credential.";
+          }
+        }
+
+        function renderClaims() {
+          const cfg = currentConfig();
+          if (!claimsContainer || !cfg) return;
+          claimsContainer.innerHTML = "";
+          const templates = cfg.claims || [];
+          if (templates.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "muted";
+            empty.textContent = "No claims configured for this credential type.";
+            claimsContainer.appendChild(empty);
+            return;
+          }
+          templates.forEach((template) => {
+            const row = document.createElement("div");
+            row.className = "claim-row";
+
+            const labelWrap = document.createElement("div");
+            labelWrap.className = "claim-label";
+            labelWrap.textContent = template.label || template.name;
+            if (template.required) {
+              const badge = document.createElement("span");
+              badge.className = "pill tiny required";
+              badge.textContent = "Required";
+              labelWrap.appendChild(badge);
+            }
+
+            const input = document.createElement("input");
+            input.placeholder = template.name;
+            input.value = claimValues[template.name] ?? template.defaultValue ?? "";
+            input.addEventListener("input", () => {
+              claimValues[template.name] = input.value;
+              schedulePreview();
+            });
+
+            row.appendChild(labelWrap);
+            row.appendChild(input);
+            claimsContainer.appendChild(row);
+          });
+        }
+
+        let previewTimeout;
+        function schedulePreview() {
+          clearTimeout(previewTimeout);
+          previewTimeout = setTimeout(refreshPreview, 250);
+        }
+
+        function missingRequiredClaims(cfg) {
+          const missing = [];
+          (cfg?.claims || []).forEach((claim) => {
+            const raw = claimValues[claim.name];
+            const value = raw === undefined || raw === null ? "" : String(raw).trim();
+            if (claim.required && !value) {
+              missing.push(claim.label || claim.name);
+            }
+          });
+          return missing;
+        }
+
+        async function refreshPreview() {
+          hideError();
+          const cfg = currentConfig();
+          if (!cfg) return;
+          const missing = missingRequiredClaims(cfg);
+          if (missing.length) {
+            showError("Missing required claims: " + missing.join(", "));
+            previewBlock.textContent = "Fill all required claims to see the preview.";
+            return;
+          }
+          const payload = buildPayload(cfg);
+          try {
+            const res = await fetch("/mock-issuer/preview", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              throw new Error(await res.text());
+            }
+            const data = await res.json();
+            cachedPreview = {
+              encoded: data.encoded || "",
+              decoded: data.decoded ? JSON.stringify(data.decoded, null, 2) : ""
+            };
+            updatePreviewUi();
+          } catch (e) {
+            showError("Preview failed: " + (e?.message || e));
+          }
+        }
+
+        function updatePreviewUi() {
+          if (!previewBlock) return;
+          const text = previewMode === "decoded" ? cachedPreview.decoded : cachedPreview.encoded;
+          previewBlock.textContent = text || "Add claims to see the SD-JWT preview.";
+          if (previewState) {
+            previewState.textContent = previewMode === "decoded" ? "Decoded" : "Encoded";
+          }
+          if (togglePreview) {
+            togglePreview.textContent = previewMode === "decoded" ? "Show encoded" : "Show decoded";
+          }
+        }
+
+        togglePreview?.addEventListener("click", () => {
+          previewMode = previewMode === "decoded" ? "encoded" : "decoded";
+          updatePreviewUi();
+        });
+
+        copyPreview?.addEventListener("click", () => {
+          const text = previewMode === "decoded" ? cachedPreview.decoded : cachedPreview.encoded;
+          if (!text) return;
+          navigator.clipboard?.writeText(text).then(() => {
+            copyPreview.textContent = "Copied";
+            setTimeout(() => (copyPreview.textContent = "Copy"), 1200);
+          });
+        });
+
+        refreshPreviewBtn?.addEventListener("click", refreshPreview);
+
+        function buildPayload(cfg) {
+          const claims = (cfg?.claims || [])
+            .map((claim) => {
+              const value = claimValues[claim.name];
+              const text = value === undefined || value === null ? "" : String(value);
+              return { name: claim.name, value: text };
+            })
+            .filter((entry) => entry.value && entry.value.trim());
+          return {
+            configurationId: cfg?.id || "",
+            format: cfg?.format || "dc+sd-jwt",
+            vct: cfg?.vct || "",
+            claims
+          };
+        }
+
+        function showError(message) {
+          if (!errorBox) return;
+          errorBox.style.display = "block";
+          errorBox.textContent = message;
+        }
+
+        function hideError() {
+          if (!errorBox) return;
+          errorBox.style.display = "none";
+          errorBox.textContent = "";
+        }
+
+        function showOffer(result) {
+          if (!offerResults) return;
+          offerResults.style.display = "block";
+          resultPreauth.textContent = result.preAuthorizedCode || "";
+          resultOfferUri.textContent = result.credentialOfferUri || "";
+          const deepLink = result.credentialOfferUri
+            ? `openid-credential-offer://?credential_offer_uri=${encodeURIComponent(result.credentialOfferUri)}`
+            : "";
+          resultDeepLink.textContent = deepLink;
+          resultOfferJson.textContent = result.credentialOffer
+            ? JSON.stringify(result.credentialOffer, null, 2)
+            : "";
+          cachedPreview.encoded = result.preview?.encoded || cachedPreview.encoded;
+          cachedPreview.decoded = result.preview?.decoded
+            ? JSON.stringify(result.preview.decoded, null, 2)
+            : cachedPreview.decoded;
+          updatePreviewUi();
+        }
+
+        generateOfferBtn?.addEventListener("click", async () => {
+          hideError();
+          const cfg = currentConfig();
+          if (!cfg) return;
+          const missing = missingRequiredClaims(cfg);
+          if (missing.length) {
+            showError("Missing required claims: " + missing.join(", "));
+            return;
+          }
+          const payload = buildPayload(cfg);
+          try {
+            const res = await fetch("/mock-issuer/offers", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              throw new Error(await res.text());
+            }
+            const data = await res.json();
+            showOffer(data);
+          } catch (e) {
+            showError("Failed to create credential offer: " + (e?.message || e));
+          }
+        });
+
+        document.querySelectorAll("[data-copy]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const targetId = btn.getAttribute("data-copy");
+            const el = document.getElementById(targetId);
+            if (!el) return;
+            navigator.clipboard?.writeText(el.textContent || "").then(() => {
+              btn.textContent = "Copied";
+              setTimeout(() => (btn.textContent = "Copy"), 1200);
+            });
+          });
+        });
+
+        function addConfigurationOption(cfg) {
+          if (!configurationSelect || !cfg) return;
+          const option = document.createElement("option");
+          option.value = cfg.id;
+          option.dataset.format = cfg.format || "dc+sd-jwt";
+          option.dataset.vct = cfg.vct || "";
+          if (cfg.format === "mso_mdoc") {
+            option.setAttribute("disabled", "disabled");
+            option.textContent = `${cfg.name || cfg.id} (coming soon)`;
+          } else {
+            option.textContent = cfg.name || cfg.id;
+          }
+          configurationSelect.appendChild(option);
+          configurationSelect.value = cfg.id;
+          configurationSelect.dispatchEvent(new Event("change"));
+        }
+
+        configurationSelect?.addEventListener("change", () => {
+          const cfg = currentConfig();
+          applyDefaultClaims(cfg);
+          updateFormatBadge();
+          renderClaims();
+          refreshPreview();
+        });
+
+        resetClaimsBtn?.addEventListener("click", () => {
+          applyDefaultClaims(currentConfig());
+          renderClaims();
+          refreshPreview();
+        });
+
+        function renderNewClaimTemplates() {
+          if (!newClaimsContainer) return;
+          newClaimsContainer.innerHTML = "";
+          if (newClaimTemplates.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "muted";
+            empty.textContent = "Add claim templates to issue new credential types.";
+            newClaimsContainer.appendChild(empty);
+            return;
+          }
+          newClaimTemplates.forEach((claim, index) => {
+            const row = document.createElement("div");
+            row.className = "claim-row editable";
+
+            row.appendChild(buildClaimField("Name", claim.name || "", "given_name", (value) => (newClaimTemplates[index].name = value)));
+            row.appendChild(buildClaimField("Label", claim.label || "", "Given name", (value) => (newClaimTemplates[index].label = value)));
+            row.appendChild(buildClaimField("Default value", claim.defaultValue || "", "Alice", (value) => (newClaimTemplates[index].defaultValue = value)));
+
+            const actions = document.createElement("div");
+            actions.className = "claim-actions";
+
+            const requiredLabel = document.createElement("label");
+            requiredLabel.className = "muted";
+            const requiredCheckbox = document.createElement("input");
+            requiredCheckbox.type = "checkbox";
+            requiredCheckbox.checked = Boolean(claim.required);
+            requiredCheckbox.addEventListener("change", () => (newClaimTemplates[index].required = requiredCheckbox.checked));
+            requiredLabel.appendChild(requiredCheckbox);
+            requiredLabel.appendChild(document.createTextNode(" Required"));
+
+            const removeBtn = document.createElement("button");
+            removeBtn.type = "button";
+            removeBtn.className = "btn secondary mini";
+            removeBtn.textContent = "Remove";
+            removeBtn.addEventListener("click", () => {
+              newClaimTemplates.splice(index, 1);
+              renderNewClaimTemplates();
+            });
+
+            actions.appendChild(requiredLabel);
+            actions.appendChild(removeBtn);
+            row.appendChild(actions);
+
+            newClaimsContainer.appendChild(row);
+          });
+        }
+
+        function buildClaimField(label, value, placeholder, onChange) {
+          const wrapper = document.createElement("div");
+          wrapper.className = "field inline";
+          const lbl = document.createElement("label");
+          lbl.className = "sub-label";
+          lbl.textContent = label;
+          const input = document.createElement("input");
+          input.value = value;
+          input.placeholder = placeholder;
+          input.addEventListener("input", (e) => onChange(e.target.value));
+          wrapper.appendChild(lbl);
+          wrapper.appendChild(input);
+          return wrapper;
+        }
+
+        function addNewClaimTemplate() {
+          newClaimTemplates.push({ name: "", label: "", defaultValue: "", required: false });
+          renderNewClaimTemplates();
+        }
+
+        addClaimBtn?.addEventListener("click", addNewClaimTemplate);
+
+        function showConfigurationFeedback(message, type = "success") {
+          if (!configurationFeedback) return;
+          configurationFeedback.style.display = "block";
+          configurationFeedback.className = `alert ${type === "error" ? "error" : "success"}`;
+          configurationFeedback.textContent = message;
+        }
+
+        function hideConfigurationFeedback() {
+          if (!configurationFeedback) return;
+          configurationFeedback.style.display = "none";
+          configurationFeedback.textContent = "";
+        }
+
+        function buildNewConfigurationPayload() {
+          const id = (newConfigId?.value || "").trim();
+          const name = (newConfigName?.value || "").trim();
+          const scope = (newConfigScope?.value || "").trim();
+          const vct = (newConfigVct?.value || "").trim();
+          if (!id || !name || !scope || !vct) {
+            showConfigurationFeedback("id, name, scope, and vct are required.", "error");
+            return null;
+          }
+          const claims = newClaimTemplates
+            .filter((c) => c.name && c.name.trim())
+            .map((c) => ({
+              name: c.name.trim(),
+              label: (c.label || "").trim(),
+              defaultValue: c.defaultValue ?? "",
+              required: Boolean(c.required)
+            }));
+          return {
+            id,
+            name,
+            scope,
+            vct,
+            format: "dc+sd-jwt",
+            claims
+          };
+        }
+
+        async function saveConfiguration() {
+          hideConfigurationFeedback();
+          const payload = buildNewConfigurationPayload();
+          if (!payload) return;
+          try {
+            const res = await fetch("/mock-issuer/configurations", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              throw new Error(await res.text());
+            }
+            const created = await res.json();
+            configurationList.push(created);
+            addConfigurationOption(created);
+            defaultConfigurationId = created.id || defaultConfigurationId;
+            showConfigurationFeedback(
+              `Saved ${created.name || created.id} to ${configurationFile || "the configuration file"}.`,
+              "success"
+            );
+            if (newConfigId) newConfigId.value = "";
+            if (newConfigName) newConfigName.value = "";
+            if (newConfigScope) newConfigScope.value = "";
+            if (newConfigVct) newConfigVct.value = created.vct || "";
+            newClaimTemplates = created.claims || [];
+            renderNewClaimTemplates();
+          } catch (e) {
+            showConfigurationFeedback("Could not save configuration: " + (e?.message || e), "error");
+          }
+        }
+
+        saveConfigurationBtn?.addEventListener("click", saveConfiguration);
+
+        renderNewClaimTemplates();
+        const initialConfig = currentConfig();
+        if (initialConfig) {
+          applyDefaultClaims(initialConfig);
+          updateFormatBadge();
+          renderClaims();
+          refreshPreview();
+        }
+      })();
+    </script>
+  </body>
+</html>

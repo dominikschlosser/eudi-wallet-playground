@@ -1,0 +1,27 @@
+{
+  "configurations": [
+    {
+      "id": "mock-pid-sdjwt",
+      "format": "dc+sd-jwt",
+      "scope": "mock-identity-credential",
+      "name": "Mock PID (SD-JWT)",
+      "vct": "urn:example:pid:mock",
+      "claims": [
+        { "name": "given_name", "label": "Given name", "defaultValue": "Alice", "required": true },
+        { "name": "family_name", "label": "Family name", "defaultValue": "Holder", "required": true },
+        { "name": "birthdate", "label": "Birthdate", "defaultValue": "1990-01-01", "required": true },
+        { "name": "address.country", "label": "Country", "defaultValue": "DE", "required": true },
+        { "name": "document_number", "label": "Document number", "defaultValue": "DOC-MOCK-1234", "required": true },
+        { "name": "nationalities", "label": "Nationalities", "defaultValue": "[\"DE\"]", "required": false }
+      ]
+    },
+    {
+      "id": "mock-pid-mdoc",
+      "format": "mso_mdoc",
+      "scope": "mock-identity-mdoc",
+      "name": "Mock PID (mDoc)",
+      "vct": "urn:example:pid:mock",
+      "claims": []
+    }
+  ]
+}

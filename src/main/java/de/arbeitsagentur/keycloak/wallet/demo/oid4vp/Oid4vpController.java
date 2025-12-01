@@ -2,6 +2,7 @@ package de.arbeitsagentur.keycloak.wallet.demo.oid4vp;
 
 import de.arbeitsagentur.keycloak.wallet.common.crypto.WalletKeyService;
 import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
+import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.demo.oid4vp.PresentationService;
 import de.arbeitsagentur.keycloak.wallet.demo.oid4vp.PresentationService.DescriptorMatch;
 import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService;
@@ -182,7 +183,7 @@ public class Oid4vpController {
         }
         var options = pending.options() != null
                 ? Optional.of(pending.options())
-                : presentationService.preparePresentationOptions(walletSession.getUserProfile().sub(),
+                : presentationService.preparePresentationOptions(walletSession.ownerIdsIncluding(CredentialStore.MOCK_ISSUER_OWNER),
                 pending.dcqlQuery());
         if (options.isEmpty()) {
             httpSession.removeAttribute(SESSION_REQUEST);
@@ -246,7 +247,7 @@ public class Oid4vpController {
         }
         var options = pending.options();
         if (options == null) {
-            Optional<PresentationService.PresentationOptions> prepared = presentationService.preparePresentationOptions(walletSession.getUserProfile().sub(),
+            Optional<PresentationService.PresentationOptions> prepared = presentationService.preparePresentationOptions(walletSession.ownerIdsIncluding(CredentialStore.MOCK_ISSUER_OWNER),
                     pending.dcqlQuery());
             if (prepared.isEmpty()) {
                 return errorView("No credential matching the dcql_query");

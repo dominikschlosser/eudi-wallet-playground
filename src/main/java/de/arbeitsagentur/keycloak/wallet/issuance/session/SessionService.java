@@ -13,6 +13,9 @@ public class SessionService {
             session = new WalletSession();
             httpSession.setAttribute(ATTRIBUTE_KEY, session);
         }
+        if (session.getLocalId() == null || session.getLocalId().isBlank()) {
+            session.setLocalId("sess-" + httpSession.getId());
+        }
         return session;
     }
 }

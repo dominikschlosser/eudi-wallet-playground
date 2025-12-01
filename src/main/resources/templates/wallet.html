@@ -31,16 +31,52 @@
       <div th:if="${error}" class="alert error" th:text="${error}"></div>
       <div th:if="${message}" class="alert success" th:text="${message}"></div>
 
-      <div class="actions">
-        <a th:if="${!authenticated}" class="btn" href="/auth/login">Sign in with Keycloak</a>
-        <form th:if="${authenticated}" method="post" action="/issue" style="margin:0;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-          <select name="credentialConfigurationId" style="padding:0.5rem;border-radius:8px;border:1px solid #1f2937;">
-            <option th:each="opt : ${credentialOptions}"
-                    th:value="${opt.configurationId()}"
-                    th:text="${opt.label() + ' (' + opt.scope() + ')'}"></option>
-          </select>
-          <button class="btn" type="submit">Issue Credential</button>
-        </form>
+      <div class="issuance-panels">
+        <div class="issuance-card" th:if="${keycloakAvailable}">
+          <div class="issuer-chip">Keycloak issuer</div>
+          <h2>Issue with Keycloak</h2>
+          <p>Authenticated OID4VCI issuance using your Keycloak account.</p>
+          <div th:if="${authenticated}" class="issuer-body">
+            <form method="post" action="/issue" class="issuer-row">
+              <select name="credentialConfigurationId">
+                <option th:each="opt : ${credentialOptions}"
+                        th:value="${opt.configurationId()}"
+                        th:text="${opt.label() + ' (' + opt.scope() + ')'}"></option>
+              </select>
+              <button class="btn" type="submit">Issue via Keycloak</button>
+            </form>
+            <small class="issuer-note">Requires your Keycloak login to request tokens.</small>
+          </div>
+          <div th:if="${!authenticated}" class="issuer-body">
+            <p class="issuer-note">Sign in to issue credentials from Keycloak.</p>
+            <a class="btn" href="/auth/login">Sign in with Keycloak</a>
+          </div>
+        </div>
+
+        <div class="issuance-card unavailable" th:if="${!keycloakAvailable}">
+          <div class="issuer-chip">Keycloak issuer</div>
+          <h2>Keycloak unavailable</h2>
+          <p>Keycloak could not be reached right now. You can still issue and present credentials with the mock issuer.</p>
+          <small class="issuer-note" th:if="${keycloakError}" th:text="'Details: ' + ${keycloakError}"></small>
+        </div>
+
+        <div class="issuance-card">
+          <div class="issuer-chip secondary">Mock issuer</div>
+          <h2>Issue without login</h2>
+          <p>Build SD-JWT credentials from configured claim templates without authentication. Mock credentials are shared across sessions.</p>
+          <div class="issuer-body">
+            <div class="issuer-actions">
+              <form method="post" action="/mock-issue" style="margin:0;">
+                <button class="btn" type="submit">Issue credential with Mock Issuer</button>
+              </form>
+              <a class="btn secondary" href="/mock-issuer">Open credential builder</a>
+            </div>
+            <small class="issuer-note">Use the builder to pick disclosures; works fully unauthenticated.</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions muted-actions">
         <a class="btn secondary" href="/verifier">Open Verifier</a>
       </div>
 

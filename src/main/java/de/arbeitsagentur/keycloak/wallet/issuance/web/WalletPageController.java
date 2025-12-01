@@ -4,6 +4,7 @@ import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.issuance.oidc.OidcClient;
 import de.arbeitsagentur.keycloak.wallet.issuance.service.CredentialService;
+import de.arbeitsagentur.keycloak.wallet.issuance.service.MockIssuerFlowService;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.SessionService;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.TokenSet;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.WalletSession;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 
 import jakarta.servlet.http.HttpSession;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -32,36 +34,36 @@ public class WalletPageController {
     private final OidcClient oidcClient;
     private final ObjectMapper objectMapper;
     private final DebugLogService debugLogService;
+    private final MockIssuerFlowService mockIssuerFlowService;
 
     public WalletPageController(SessionService sessionService,
                                 CredentialStore credentialStore,
                                 CredentialService credentialService,
                                 OidcClient oidcClient,
                                 ObjectMapper objectMapper,
-                                DebugLogService debugLogService) {
+                                DebugLogService debugLogService,
+                                MockIssuerFlowService mockIssuerFlowService) {
         this.sessionService = sessionService;
         this.credentialStore = credentialStore;
         this.credentialService = credentialService;
         this.oidcClient = oidcClient;
         this.objectMapper = objectMapper;
         this.debugLogService = debugLogService;
+        this.mockIssuerFlowService = mockIssuerFlowService;
     }
 
     @GetMapping({"/", "/wallet"})
     public String wallet(Model model, HttpSession httpSession) {
         WalletSession session = sessionService.getSession(httpSession);
+        IssuerAvailability issuerAvailability = resolveIssuerAvailability();
         model.addAttribute("session", session);
         model.addAttribute("authenticated", session.isAuthenticated());
-        model.addAttribute("credentialOptions", credentialOptions());
-        if (session.isAuthenticated() && session.getUserProfile() != null) {
-            model.addAttribute("userName", session.getUserProfile().displayName());
-            model.addAttribute("userEmail", session.getUserProfile().email());
-            model.addAttribute("credentials", loadDisplayCredentials(session));
-        } else {
-            model.addAttribute("userName", null);
-            model.addAttribute("userEmail", null);
-            model.addAttribute("credentials", Collections.emptyList());
-        }
+        model.addAttribute("keycloakAvailable", issuerAvailability.available());
+        model.addAttribute("keycloakError", issuerAvailability.error());
+        model.addAttribute("credentialOptions", issuerAvailability.options());
+        model.addAttribute("userName", session.getUserProfile() != null ? session.getUserProfile().displayName() : null);
+        model.addAttribute("userEmail", session.getUserProfile() != null ? session.getUserProfile().email() : null);
+        model.addAttribute("credentials", loadDisplayCredentials(session));
         model.addAttribute("issuanceDebug", debugLogService.issuance());
         model.addAttribute("issuanceDebugGrouped", groupBy(debugLogService.issuance()));
         return "wallet";
@@ -99,16 +101,30 @@ public class WalletPageController {
         return wallet(model, httpSession);
     }
 
+    @PostMapping("/mock-issue")
+    public String mockIssue(HttpSession httpSession, HttpServletRequest request, Model model) {
+        WalletSession session = sessionService.getSession(httpSession);
+        try {
+            mockIssuerFlowService.issueWithMockIssuer(
+                    CredentialStore.MOCK_ISSUER_OWNER,
+                    request,
+                    null,
+                    null,
+                    null
+            );
+            model.addAttribute("message", "Mock issuer credential issued");
+        } catch (Exception e) {
+            model.addAttribute("error", "Mock issuance failed: " + e.getMessage());
+        }
+        return wallet(model, httpSession);
+    }
+
     @PostMapping("/credentials/delete")
     public String deleteCredential(@org.springframework.web.bind.annotation.RequestParam("file") String file,
                                    HttpSession httpSession,
                                    Model model) {
         WalletSession session = sessionService.getSession(httpSession);
-        if (!session.isAuthenticated()) {
-            model.addAttribute("error", "Not authenticated");
-            return wallet(model, httpSession);
-        }
-        boolean deleted = credentialStore.deleteCredential(session.getUserProfile().sub(), file);
+        boolean deleted = credentialStore.deleteCredential(session.ownerIdsIncluding(CredentialStore.MOCK_ISSUER_OWNER), file);
         if (!deleted) {
             model.addAttribute("error", "Credential not found");
         } else {
@@ -119,7 +135,10 @@ public class WalletPageController {
 
     private List<DisplayCredential> loadDisplayCredentials(WalletSession session) {
         List<DisplayCredential> result = new ArrayList<>();
-        for (CredentialStore.Entry entry : credentialStore.listCredentialEntries(session.getUserProfile().sub())) {
+        List<CredentialStore.Entry> entries = credentialStore.listCredentialEntries(
+                session.ownerIdsIncluding(CredentialStore.MOCK_ISSUER_OWNER)
+        );
+        for (CredentialStore.Entry entry : entries) {
             Map<String, Object> map = objectMapper.convertValue(entry.credential(), Map.class);
             String raw = map.containsKey("rawCredential") ? String.valueOf(map.get("rawCredential")) : null;
             String format = String.valueOf(map.getOrDefault("format",
@@ -241,6 +260,14 @@ public class WalletPageController {
         return grouped;
     }
 
+    private IssuerAvailability resolveIssuerAvailability() {
+        try {
+            return new IssuerAvailability(true, credentialOptions(), null);
+        } catch (Exception e) {
+            return new IssuerAvailability(false, List.of(), e.getMessage());
+        }
+    }
+
     public record DisplayCredential(String fileName,
                                     String format,
                                     String vct,
@@ -267,5 +294,8 @@ public class WalletPageController {
     }
 
     public record CredentialOption(String configurationId, String scope, String label) {
+    }
+
+    private record IssuerAvailability(boolean available, List<CredentialOption> options, String error) {
     }
 }

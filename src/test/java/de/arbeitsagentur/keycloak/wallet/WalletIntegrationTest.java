@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.nimbusds.jose.crypto.ECDSAVerifier;
 import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWKSet;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
@@ -47,6 +48,7 @@ import com.nimbusds.jwt.SignedJWT;
 import de.arbeitsagentur.keycloak.wallet.common.crypto.WalletKeyService;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.demo.oid4vp.PresentationService;
+import de.arbeitsagentur.keycloak.wallet.verification.service.TrustListService;
 
 import java.io.IOException;
 import java.net.URI;
@@ -102,6 +104,7 @@ class WalletIntegrationTest {
                 () -> "http://%s:%d".formatted(keycloak.getHost(), keycloak.getMappedPort(8080)));
         registry.add("wallet.storage-dir", () -> credentialDir.toAbsolutePath().toString());
         registry.add("wallet.wallet-key-file", () -> keyFile.toAbsolutePath().toString());
+        registry.add("mock-issuer.key-file", () -> Path.of("config/mock-issuer-keys.json").toAbsolutePath().toString());
     }
     @Autowired
     ObjectMapper objectMapper;
@@ -113,6 +116,8 @@ class WalletIntegrationTest {
     PresentationService presentationService;
     @Autowired
     CredentialStore credentialStore;
+    @Autowired
+    TrustListService trustListService;
     @LocalServerPort
     int serverPort;
 
@@ -175,7 +180,24 @@ class WalletIntegrationTest {
 
             assertThat(Files.list(credentialDir)).isNotEmpty();
 
-            String dcql = fetchDefaultDcqlQuery(client, context, base);
+            String dcql = """
+                    {
+                      "credentials": [
+                        {
+                          "id": "mock",
+                          "format": "dc+sd-jwt",
+                          "claims": [
+                            { "path": ["given_name"] },
+                            { "path": ["family_name"] },
+                            { "path": ["birthdate"] },
+                            { "path": ["address", "country"] },
+                            { "path": ["document_number"] },
+                            { "path": ["nationalities"] }
+                          ]
+                        }
+                      ]
+                    }
+                    """;
             PresentationForm validForm = initiatePresentationFlow(client, context, base, dcql, "accept",
                     List.of("given_name", "family_name", "birthdate", "country", "nationalities"),
                     List.of("personal_id"), null, false, null, null, null, null, null);
@@ -203,6 +225,157 @@ class WalletIntegrationTest {
     }
 
     @Test
+    void mockIssuerEndToEndPresentation() throws Exception {
+        URI base = URI.create("http://localhost:" + serverPort);
+        BasicCookieStore cookieStore = new BasicCookieStore();
+        HttpClientContext context = HttpClientContext.create();
+        context.setCookieStore(cookieStore);
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setRedirectsEnabled(false)
+                .setCookieSpec(StandardCookieSpec.RELAXED)
+                .build();
+        try (CloseableHttpClient client = HttpClients.custom()
+                .setDefaultCookieStore(cookieStore)
+                .setDefaultRequestConfig(requestConfig)
+                .build()) {
+            JsonNode credential;
+            try (CloseableHttpResponse issueResponse = client.execute(new HttpPost(base.resolve("/api/mock-issue")), context)) {
+                String issueBody = issueResponse.getEntity() != null
+                        ? new String(issueResponse.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8)
+                        : "";
+                if (issueResponse.getCode() != 200) {
+                    throw new AssertionError("Mock issuance failed. HTTP %s Body: %s".formatted(issueResponse.getCode(), issueBody));
+                }
+                credential = objectMapper.readTree(issueBody);
+            }
+            assertThat(credential.path("credentialSubject").path("given_name").asText()).isNotBlank();
+            assertThat(credential.path("credentialSubject").path("family_name").asText()).isNotBlank();
+            assertThat(Files.list(credentialDir)).isNotEmpty();
+            String raw = credential.path("rawCredential").asText(null);
+            assertThat(raw).isNotBlank();
+            de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils.SdJwtParts parts = de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils.split(raw);
+            SignedJWT jwt = SignedJWT.parse(parts.signedJwt());
+            ECKey mockKey = ECKey.parse(objectMapper.readTree(Path.of("config/mock-issuer-keys.json").toFile()).path("publicJwk").toString());
+            assertThat(jwt.verify(new ECDSAVerifier(mockKey))).isTrue();
+            assertThat(trustListService.verify(jwt, "trust-list-mock"))
+                    .as("Mock issuer credential must verify against trust-list-mock")
+                    .isTrue();
+            assertThat(trustListService.verify(jwt, trustListService.defaultTrustListId()))
+                    .as("Mock issuer credential should also verify against default trust list")
+                    .isTrue();
+
+            JsonNode preLoginSession;
+            try (CloseableHttpResponse sessionResponse = client.execute(new HttpGet(base.resolve("/api/session")), context)) {
+                preLoginSession = objectMapper.readTree(sessionResponse.getEntity().getContent());
+            }
+            assertThat(preLoginSession.path("authenticated").asBoolean()).isFalse();
+            assertThat(preLoginSession.path("credentials").size()).isGreaterThanOrEqualTo(1);
+
+            authenticateThroughLogin(client, context, base);
+
+            String dcql = fetchDefaultDcqlQuery(client, context, base);
+            PresentationForm form = initiatePresentationFlowWithTrustList(
+                    client,
+                    context,
+                    base,
+                    dcql,
+                    "accept",
+                    List.of("given_name", "family_name"),
+                    List.of("personal_id"),
+                    null,
+                    false,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    Map.of(),
+                    "urn:example:pid:mock",
+                    null,
+                    "trust-list-mock"
+            );
+            String vpTokenJson = form.fields().get("vp_token");
+            JsonNode vpNode = objectMapper.readTree(vpTokenJson);
+            assertThat(vpNode.elements().hasNext()).isTrue();
+            JsonNode firstPresentation = vpNode.elements().next();
+            assertThat(firstPresentation.isArray()).isTrue();
+            String vpToken = firstPresentation.get(0).asText();
+            de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils.SdJwtParts presentedParts = de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils.split(vpToken);
+            SignedJWT presentedJwt = SignedJWT.parse(presentedParts.signedJwt());
+            String innerVp = presentedJwt.getJWTClaimsSet().getStringClaim("vp_token");
+            if (innerVp != null && !innerVp.isBlank()) {
+                presentedParts = de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils.split(innerVp);
+                presentedJwt = SignedJWT.parse(presentedParts.signedJwt());
+            }
+            assertThat(trustListService.verify(presentedJwt, trustListService.defaultTrustListId())).isTrue();
+            assertThat(de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtUtils.verifyDisclosures(presentedJwt, presentedParts, objectMapper)).isTrue();
+
+            HttpPost callbackPost = new HttpPost(form.action());
+            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
+            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
+                assertThat(verifierResult.getCode()).isEqualTo(200);
+                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
+                assertThat(body).contains("Verified credential");
+            }
+        }
+    }
+
+    @Test
+    void mockIssuerCredentialsAreSharedAcrossSessions() throws Exception {
+        URI base = URI.create("http://localhost:" + serverPort);
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setRedirectsEnabled(false)
+                .setCookieSpec(StandardCookieSpec.RELAXED)
+                .build();
+
+        BasicCookieStore store1 = new BasicCookieStore();
+        HttpClientContext ctx1 = HttpClientContext.create();
+        ctx1.setCookieStore(store1);
+        try (CloseableHttpClient client1 = HttpClients.custom()
+                .setDefaultCookieStore(store1)
+                .setDefaultRequestConfig(requestConfig)
+                .build()) {
+            try (CloseableHttpResponse issueResponse = client1.execute(new HttpPost(base.resolve("/api/mock-issue")), ctx1)) {
+                String body = issueResponse.getEntity() != null
+                        ? new String(issueResponse.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8)
+                        : "";
+                assertThat(issueResponse.getCode())
+                        .withFailMessage("Mock issuance failed. HTTP %s Body:%n%s", issueResponse.getCode(), body)
+                        .isEqualTo(200);
+            }
+            JsonNode firstSession;
+            try (CloseableHttpResponse sessionResponse = client1.execute(new HttpGet(base.resolve("/api/session")), ctx1)) {
+                firstSession = objectMapper.readTree(sessionResponse.getEntity().getContent());
+            }
+            int sharedCount = firstSession.path("credentials").size();
+            assertThat(sharedCount).isGreaterThanOrEqualTo(1);
+
+            BasicCookieStore store2 = new BasicCookieStore();
+            HttpClientContext ctx2 = HttpClientContext.create();
+            ctx2.setCookieStore(store2);
+            try (CloseableHttpClient client2 = HttpClients.custom()
+                    .setDefaultCookieStore(store2)
+                    .setDefaultRequestConfig(requestConfig)
+                    .build()) {
+                JsonNode anonymousSession;
+                try (CloseableHttpResponse sessionResponse = client2.execute(new HttpGet(base.resolve("/api/session")), ctx2)) {
+                    anonymousSession = objectMapper.readTree(sessionResponse.getEntity().getContent());
+                }
+                assertThat(anonymousSession.path("authenticated").asBoolean()).isFalse();
+                assertThat(anonymousSession.path("credentials").size()).isGreaterThanOrEqualTo(sharedCount);
+
+                authenticateThroughLogin(client2, ctx2, base);
+                JsonNode authedSession;
+                try (CloseableHttpResponse sessionResponse = client2.execute(new HttpGet(base.resolve("/api/session")), ctx2)) {
+                    authedSession = objectMapper.readTree(sessionResponse.getEntity().getContent());
+                }
+                assertThat(authedSession.path("authenticated").asBoolean()).isTrue();
+                assertThat(authedSession.path("credentials").size()).isGreaterThanOrEqualTo(sharedCount);
+            }
+        }
+    }
+
+    @Test
     void presentationCanBeDenied() throws Exception {
         URI base = URI.create("http://localhost:" + serverPort);
         BasicCookieStore cookieStore = new BasicCookieStore();
@@ -217,11 +390,12 @@ class WalletIntegrationTest {
                 .setDefaultRequestConfig(requestConfig)
                 .build()) {
             authenticateThroughLogin(client, context, base);
+            String userId = fetchUserId(client, context, base);
             try (CloseableHttpResponse issueResponse = client.execute(new HttpPost(base.resolve("/api/issue")), context)) {
                 assertThat(issueResponse.getCode()).isEqualTo(200);
             }
             // Add a second credential so each descriptor can use a distinct one.
-            credentialStore.saveCredential(TEST_USERNAME, Map.of(
+            credentialStore.saveCredential(userId, Map.of(
                     "format", "dc+sd-jwt",
                     "credentialSubject", Map.of("given_name", "Alice", "family_name", "Doe", "personal_id", "ID-999"),
                     "rawCredential", "aaa.bbb.ccc~disc-2"
@@ -458,12 +632,13 @@ class WalletIntegrationTest {
                 .setDefaultRequestConfig(requestConfig)
                 .build()) {
             authenticateThroughLogin(client, context, base);
-            credentialStore.saveCredential(TEST_USERNAME, Map.of(
+            String userId = fetchUserId(client, context, base);
+            credentialStore.saveCredential(userId, Map.of(
                     "format", "jwt_vc",
                     "credentialSubject", Map.of("personal_id", "ID-111", "given_name", "Alice"),
                     "rawCredential", "token-one"
             ));
-            credentialStore.saveCredential(TEST_USERNAME, Map.of(
+            credentialStore.saveCredential(userId, Map.of(
                     "format", "jwt_vc",
                     "credentialSubject", Map.of("personal_id", "ID-222", "given_name", "Bob"),
                     "rawCredential", "token-two"
@@ -548,12 +723,13 @@ class WalletIntegrationTest {
                 .setDefaultRequestConfig(requestConfig)
                 .build()) {
             authenticateThroughLogin(client, context, base);
-            credentialStore.saveCredential(TEST_USERNAME, Map.of(
+            String userId = fetchUserId(client, context, base);
+            credentialStore.saveCredential(userId, Map.of(
                     "format", "jwt_vc",
                     "credentialSubject", Map.of("given_name", "Alice"),
                     "rawCredential", "token-one"
             ));
-            credentialStore.saveCredential(TEST_USERNAME, Map.of(
+            credentialStore.saveCredential(userId, Map.of(
                     "format", "jwt_vc",
                     "credentialSubject", Map.of("given_name", "Alice"),
                     "rawCredential", "token-two"
@@ -612,12 +788,13 @@ class WalletIntegrationTest {
                 .setDefaultRequestConfig(requestConfig)
                 .build()) {
             authenticateThroughLogin(client, context, base);
-            credentialStore.saveCredential(TEST_USERNAME, Map.of(
+            String userId = fetchUserId(client, context, base);
+            credentialStore.saveCredential(userId, Map.of(
                     "format", "jwt_vc",
                     "credentialSubject", Map.of("given_name", "Alice", "personal_id", "ID-111"),
                     "rawCredential", "token-one"
             ));
-            credentialStore.saveCredential(TEST_USERNAME, Map.of(
+            credentialStore.saveCredential(userId, Map.of(
                     "format", "jwt_vc",
                     "credentialSubject", Map.of("given_name", "Bob", "personal_id", "ID-222"),
                     "rawCredential", "token-two"
@@ -661,7 +838,8 @@ class WalletIntegrationTest {
                 .setDefaultRequestConfig(requestConfig)
                 .build()) {
             authenticateThroughLogin(client, context, base);
-            credentialStore.saveCredential(TEST_USERNAME, Map.of(
+            String userId = fetchUserId(client, context, base);
+            credentialStore.saveCredential(userId, Map.of(
                     "format", "jwt_vc",
                     "credentialSubject", Map.of("given_name", "Alice"),
                     "rawCredential", "token-one"
@@ -1177,7 +1355,20 @@ class WalletIntegrationTest {
                                                       Map<String, String> selectionOverrides, String expectedVct, String requestObjectMode)
             throws IOException {
         URI walletAuth = startPresentationRequest(client, context, base, dcqlQuery, expectedClaims, clientMetadata,
-                walletClientId, authType, walletClientCert, attestationCert, attestationIssuer, requestObjectMode);
+                walletClientId, authType, walletClientCert, attestationCert, attestationIssuer, requestObjectMode, null);
+        return continuePresentationFlow(client, context, base, walletAuth, decision, expectedClaims, forbiddenClaims, expectEncrypted, selectionOverrides, expectedVct);
+    }
+
+    private PresentationForm initiatePresentationFlowWithTrustList(CloseableHttpClient client, HttpClientContext context, URI base,
+                                                                   String dcqlQuery, String decision,
+                                                                   List<String> expectedClaims, List<String> forbiddenClaims,
+                                                                   String clientMetadata, boolean expectEncrypted,
+                                                                   String walletClientId, String authType,
+                                                                   String walletClientCert, String attestationCert, String attestationIssuer,
+                                                                   Map<String, String> selectionOverrides, String expectedVct, String requestObjectMode,
+                                                                   String trustList) throws IOException {
+        URI walletAuth = startPresentationRequest(client, context, base, dcqlQuery, expectedClaims, clientMetadata,
+                walletClientId, authType, walletClientCert, attestationCert, attestationIssuer, requestObjectMode, trustList);
         return continuePresentationFlow(client, context, base, walletAuth, decision, expectedClaims, forbiddenClaims, expectEncrypted, selectionOverrides, expectedVct);
     }
 
@@ -1193,18 +1384,34 @@ class WalletIntegrationTest {
                 clientMetadata, expectEncrypted, walletClientId, authType, walletClientCert, attestationCert, attestationIssuer, selectionOverrides, expectedVct, null);
     }
 
+    private String fetchUserId(CloseableHttpClient client, HttpClientContext context, URI base) throws IOException {
+        try (CloseableHttpResponse sessionResponse = client.execute(new HttpGet(base.resolve("/api/session")), context)) {
+            JsonNode sessionJson = objectMapper.readTree(sessionResponse.getEntity().getContent());
+            return sessionJson.path("user").path("sub").asText();
+        }
+    }
+
     private URI startPresentationRequest(CloseableHttpClient client, HttpClientContext context, URI base,
                                          String dcqlQuery, List<String> expectedClaims, String clientMetadata,
                                          String walletClientId, String authType, String walletClientCert,
                                          String attestationCert, String attestationIssuer) throws IOException {
         return startPresentationRequest(client, context, base, dcqlQuery, expectedClaims, clientMetadata,
-                walletClientId, authType, walletClientCert, attestationCert, attestationIssuer, null);
+                walletClientId, authType, walletClientCert, attestationCert, attestationIssuer, null, null);
     }
 
     private URI startPresentationRequest(CloseableHttpClient client, HttpClientContext context, URI base,
                                          String dcqlQuery, List<String> expectedClaims, String clientMetadata,
                                          String walletClientId, String authType, String walletClientCert,
                                          String attestationCert, String attestationIssuer, String requestObjectMode) throws IOException {
+        return startPresentationRequest(client, context, base, dcqlQuery, expectedClaims, clientMetadata,
+                walletClientId, authType, walletClientCert, attestationCert, attestationIssuer, requestObjectMode, null);
+    }
+
+    private URI startPresentationRequest(CloseableHttpClient client, HttpClientContext context, URI base,
+                                         String dcqlQuery, List<String> expectedClaims, String clientMetadata,
+                                         String walletClientId, String authType, String walletClientCert,
+                                         String attestationCert, String attestationIssuer, String requestObjectMode,
+                                         String trustList) throws IOException {
         HttpPost verifierStart = new HttpPost(base.resolve("/verifier/start"));
         verifierStart.setConfig(RequestConfig.custom()
                 .setRedirectsEnabled(false)
@@ -1232,6 +1439,9 @@ class WalletIntegrationTest {
         }
         if (requestObjectMode != null && !requestObjectMode.isBlank()) {
             startParams.add(new BasicNameValuePair("requestObjectMode", requestObjectMode));
+        }
+        if (trustList != null && !trustList.isBlank()) {
+            startParams.add(new BasicNameValuePair("trustList", trustList));
         }
         verifierStart.setEntity(new UrlEncodedFormEntity(startParams, StandardCharsets.UTF_8));
         try (CloseableHttpResponse startResponse = client.execute(verifierStart, context)) {

@@ -40,6 +40,73 @@ h1 {
   align-items: center;
   flex-wrap: wrap;
 }
+.issuance-panels {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+.issuance-card {
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 14px;
+  padding: 1.25rem;
+  background: rgba(15, 23, 42, 0.55);
+  display: grid;
+  gap: 0.5rem;
+}
+.issuance-card.unavailable {
+  border-style: dashed;
+  opacity: 0.9;
+}
+.issuance-card h2 {
+  margin: 0.15rem 0 0;
+}
+.issuance-card p {
+  margin: 0;
+  color: #cbd5f5;
+}
+.issuer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.85rem;
+}
+.issuer-chip.secondary {
+  background: rgba(56, 189, 248, 0.12);
+}
+.issuer-body {
+  display: grid;
+  gap: 0.5rem;
+}
+.issuer-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+.issuer-row select {
+  flex: 1 1 240px;
+}
+.issuer-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.issuer-note {
+  color: #94a3b8;
+  font-size: 0.95rem;
+}
+.muted-actions {
+  margin-top: 1rem;
+  justify-content: flex-start;
+}
 .user-chip {
   display: grid;
   grid-template-columns: auto;

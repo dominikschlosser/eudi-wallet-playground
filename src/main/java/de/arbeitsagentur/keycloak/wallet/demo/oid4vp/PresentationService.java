@@ -31,7 +31,11 @@ public class PresentationService {
     }
 
     public Optional<Presentation> findPresentation(String userId, String dcqlQuery) {
-        return preparePresentations(userId, dcqlQuery).map(bundle -> {
+        return findPresentation(userId != null ? List.of(userId) : List.of(), dcqlQuery);
+    }
+
+    public Optional<Presentation> findPresentation(List<String> userIds, String dcqlQuery) {
+        return preparePresentations(userIds, dcqlQuery).map(bundle -> {
             String token;
             if (bundle.matches().size() == 1) {
                 token = bundle.matches().get(0).vpToken();
@@ -45,7 +49,11 @@ public class PresentationService {
     }
 
     public Optional<PresentationBundle> preparePresentations(String userId, String dcqlQuery) {
-        Optional<PresentationOptions> options = preparePresentationOptions(userId, dcqlQuery);
+        return preparePresentations(userId != null ? List.of(userId) : List.of(), dcqlQuery);
+    }
+
+    public Optional<PresentationBundle> preparePresentations(List<String> userIds, String dcqlQuery) {
+        Optional<PresentationOptions> options = preparePresentationOptions(userIds, dcqlQuery);
         if (options.isEmpty()) {
             return Optional.empty();
         }
@@ -54,7 +62,11 @@ public class PresentationService {
     }
 
     public Optional<PresentationOptions> preparePresentationOptions(String userId, String dcqlQuery) {
-        List<CredentialStore.Entry> entries = listEntries(userId);
+        return preparePresentationOptions(userId != null ? List.of(userId) : List.of(), dcqlQuery);
+    }
+
+    public Optional<PresentationOptions> preparePresentationOptions(List<String> userIds, String dcqlQuery) {
+        List<CredentialStore.Entry> entries = listEntries(userIds);
         if (entries.isEmpty()) {
             return Optional.empty();
         }
@@ -151,15 +163,12 @@ public class PresentationService {
         return hasConstraints || hasClaimSets || hasCredentialSets || hasFormat;
     }
 
-    private List<CredentialStore.Entry> listEntries(String userId) {
-        List<CredentialStore.Entry> entries = credentialStore.listCredentialEntries(userId);
-        if ((entries == null || entries.isEmpty()) && userId != null) {
-            entries = credentialStore.listCredentialEntries(null);
-        }
-        if (entries == null) {
+    private List<CredentialStore.Entry> listEntries(List<String> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
             return List.of();
         }
-        return entries;
+        List<CredentialStore.Entry> entries = credentialStore.listCredentialEntries(userIds);
+        return entries == null ? List.of() : entries;
     }
 
     private boolean matchesConstraints(CredentialRequest definition, Map<String, Object> map) {

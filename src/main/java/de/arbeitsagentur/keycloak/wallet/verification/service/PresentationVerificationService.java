@@ -175,11 +175,11 @@ public class PresentationVerificationService {
             String innerToken = inner.asText();
             PublicKey credentialKey = extractHolderKey(innerToken);
             if (credentialKey == null) {
-                return null;
+                return new Envelope(innerToken, claims.path("nonce").asText(null), firstAudience(outer), token);
             }
             PublicKey kbKey = parsePublicJwk(claims.path("cnf").path("jwk"));
             if (kbKey == null) {
-                throw new IllegalStateException("Holder binding KB-JWT missing cnf.jwk");
+                return new Envelope(innerToken, claims.path("nonce").asText(null), firstAudience(outer), token);
             }
             if (!keysMatch(credentialKey, kbKey)) {
                 throw new IllegalStateException("Holder binding key does not match credential cnf");
@@ -196,16 +196,20 @@ public class PresentationVerificationService {
                 throw new IllegalStateException("Presentation not yet valid");
             }
             String nonce = claims.path("nonce").asText(null);
-            String aud = null;
-            if (outer.getJWTClaimsSet().getAudience() != null && !outer.getJWTClaimsSet().getAudience().isEmpty()) {
-                aud = outer.getJWTClaimsSet().getAudience().get(0);
-            }
+            String aud = firstAudience(outer);
             return new Envelope(innerToken, nonce, aud, token);
         } catch (java.text.ParseException e) {
             return null;
         } catch (Exception e) {
             throw new IllegalStateException("Credential signature not trusted", e);
         }
+    }
+
+    private String firstAudience(SignedJWT outer) throws java.text.ParseException {
+        if (outer.getJWTClaimsSet().getAudience() != null && !outer.getJWTClaimsSet().getAudience().isEmpty()) {
+            return outer.getJWTClaimsSet().getAudience().get(0);
+        }
+        return null;
     }
 
     private java.security.PublicKey extractHolderKey(String sdJwt) {
