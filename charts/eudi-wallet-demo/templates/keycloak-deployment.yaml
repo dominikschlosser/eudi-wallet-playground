@@ -3,6 +3,11 @@
 {{- $dbName := ternary .Values.postgresql.auth.database .Values.keycloak.database.name .Values.postgresql.enabled -}}
 {{- $dbSecret := include "eudi-wallet-demo.dbSecretName" . -}}
 {{- $vendor := default "dev-file" .Values.keycloak.database.vendor | lower -}}
+{{- $relativePath := trimSuffix "/" (default "" .Values.keycloak.httpRelativePath) -}}
+{{- if and (ne $relativePath "") (not (hasPrefix "/" $relativePath)) }}
+{{- $relativePath = printf "/%s" $relativePath -}}
+{{- end -}}
+{{- $healthPath := printf "%s/realms/master" $relativePath | trimPrefix "/" | printf "/%s" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,6 +47,9 @@ spec:
             - --hostname-strict=false
             - --http-enabled=true
             - --features=oid4vc-vci
+            {{- if $relativePath }}
+            - --http-relative-path={{ $relativePath }}
+            {{- end }}
             {{- if .Values.keycloak.hostname }}
             - --hostname={{ .Values.keycloak.hostname }}
             {{- end }}
@@ -86,13 +94,13 @@ spec:
               name: http
           readinessProbe:
             httpGet:
-              path: /health/ready
+              path: {{ $healthPath }}
               port: http
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /health/live
+              path: {{ $healthPath }}
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20

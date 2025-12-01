@@ -65,6 +65,7 @@ keycloak:
     passwordKey: password
     useSSL: false
   hostname: ""
+  httpRelativePath: ""
   realmFile: files/keycloak/realm-export.json
   extraEnv: []
 
@@ -153,6 +154,11 @@ wallet:
     oidcClientSecretKey: oidc-client-secret
   mockIssuer:
     issuerId: ""
+  truststore:
+    secretName: ""
+    mountPath: /truststore
+  hostAliases: []
+  healthPath: /
   persistence:
     enabled: true
     accessModes:
