@@ -2,7 +2,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>de.arbeitagentur.opdt</groupId>
     <artifactId>eudi-wallet-playground</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.1-SNAPSHOT</version>
     <name>EUDI Wallet Playground</name>
     <description>Spring Boot demo wallet interacting with Keycloak OID4VCI</description>
     <properties>
