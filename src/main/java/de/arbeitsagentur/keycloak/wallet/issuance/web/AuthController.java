@@ -11,6 +11,7 @@ import de.arbeitsagentur.keycloak.wallet.issuance.session.WalletSession;
 import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,13 +29,16 @@ public class AuthController {
     private final WalletProperties properties;
     private final OidcClient oidcClient;
     private final DebugLogService debugLogService;
+    private final String publicBaseUrl;
 
     public AuthController(SessionService sessionService, WalletProperties properties, OidcClient oidcClient,
-                          DebugLogService debugLogService) {
+                          DebugLogService debugLogService,
+                          @Value("${wallet.public-base-url:}") String publicBaseUrl) {
         this.sessionService = sessionService;
         this.properties = properties;
         this.oidcClient = oidcClient;
         this.debugLogService = debugLogService;
+        this.publicBaseUrl = publicBaseUrl;
     }
 
     @GetMapping("/auth/login")
@@ -44,7 +48,7 @@ public class AuthController {
         String nonce = PkceUtils.randomState();
         String codeVerifier = PkceUtils.generateCodeVerifier();
         String codeChallenge = PkceUtils.generateCodeChallenge(codeVerifier);
-        URI redirectUri = currentBaseUri(request).resolve("/auth/callback");
+        URI redirectUri = callbackUri(request);
         session.setPkceSession(new PkceSession(state, nonce, codeVerifier));
         URI authorize = oidcClient.buildAuthorizationUrl(state, nonce, codeChallenge, redirectUri);
         debugLogService.addIssuance("OIDC Login", "Authorization",
@@ -70,7 +74,7 @@ public class AuthController {
         if (pkce == null || !pkce.state().equals(state)) {
             return ResponseEntity.badRequest().body("Invalid state");
         }
-        URI redirectUri = currentBaseUri(request).resolve("/auth/callback");
+        URI redirectUri = callbackUri(request);
         TokenSet tokens = oidcClient.exchangeCode(code, pkce.codeVerifier(), redirectUri);
         UserProfile profile = oidcClient.fetchUserInfo(tokens.accessToken());
         session.setUserProfile(profile);
@@ -92,7 +96,7 @@ public class AuthController {
             httpSession.removeAttribute("postLoginRedirect");
             return ResponseEntity.status(302).location(URI.create(target)).build();
         }
-        return ResponseEntity.status(302).location(URI.create("/")).build();
+        return ResponseEntity.status(302).location(currentBaseUri(request)).build();
     }
 
     @PostMapping("/auth/logout")
@@ -112,6 +116,24 @@ public class AuthController {
     }
 
     private URI currentBaseUri(HttpServletRequest request) {
-        return URI.create(ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString());
+        if (publicBaseUrl != null && !publicBaseUrl.isBlank()) {
+            URI base = URI.create(publicBaseUrl);
+            if (!base.getPath().endsWith("/")) {
+                return UriComponentsBuilder.fromUri(base).path("/").build(true).toUri();
+            }
+            return base;
+        }
+        URI base = URI.create(ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString());
+        if (!base.getPath().endsWith("/")) {
+            return UriComponentsBuilder.fromUri(base).path("/").build(true).toUri();
+        }
+        return base;
+    }
+
+    private URI callbackUri(HttpServletRequest request) {
+        return UriComponentsBuilder.fromUri(currentBaseUri(request))
+                .path("/auth/callback")
+                .build(true)
+                .toUri();
     }
 }

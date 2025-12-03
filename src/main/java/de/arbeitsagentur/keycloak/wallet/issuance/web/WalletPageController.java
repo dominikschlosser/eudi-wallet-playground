@@ -8,6 +8,7 @@ import de.arbeitsagentur.keycloak.wallet.issuance.service.MockIssuerFlowService;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.SessionService;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.TokenSet;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.WalletSession;
+import de.arbeitsagentur.keycloak.wallet.mockissuer.config.MockIssuerConfigurationStore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService;
@@ -35,6 +36,7 @@ public class WalletPageController {
     private final ObjectMapper objectMapper;
     private final DebugLogService debugLogService;
     private final MockIssuerFlowService mockIssuerFlowService;
+    private final MockIssuerConfigurationStore mockIssuerConfigurationStore;
 
     public WalletPageController(SessionService sessionService,
                                 CredentialStore credentialStore,
@@ -42,7 +44,8 @@ public class WalletPageController {
                                 OidcClient oidcClient,
                                 ObjectMapper objectMapper,
                                 DebugLogService debugLogService,
-                                MockIssuerFlowService mockIssuerFlowService) {
+                                MockIssuerFlowService mockIssuerFlowService,
+                                MockIssuerConfigurationStore mockIssuerConfigurationStore) {
         this.sessionService = sessionService;
         this.credentialStore = credentialStore;
         this.credentialService = credentialService;
@@ -50,6 +53,7 @@ public class WalletPageController {
         this.objectMapper = objectMapper;
         this.debugLogService = debugLogService;
         this.mockIssuerFlowService = mockIssuerFlowService;
+        this.mockIssuerConfigurationStore = mockIssuerConfigurationStore;
     }
 
     @GetMapping({"/", "/wallet"})
@@ -61,6 +65,7 @@ public class WalletPageController {
         model.addAttribute("keycloakAvailable", issuerAvailability.available());
         model.addAttribute("keycloakError", issuerAvailability.error());
         model.addAttribute("credentialOptions", issuerAvailability.options());
+        model.addAttribute("mockCredentialOptions", mockCredentialOptions());
         model.addAttribute("userName", session.getUserProfile() != null ? session.getUserProfile().displayName() : null);
         model.addAttribute("userEmail", session.getUserProfile() != null ? session.getUserProfile().email() : null);
         model.addAttribute("credentials", loadDisplayCredentials(session));
@@ -104,13 +109,16 @@ public class WalletPageController {
     @PostMapping("/mock-issue")
     public String mockIssue(HttpSession httpSession, HttpServletRequest request, Model model) {
         WalletSession session = sessionService.getSession(httpSession);
+        String configurationId = request.getParameter("configurationId");
+        String credentialOffer = request.getParameter("credentialOffer");
         try {
             mockIssuerFlowService.issueWithMockIssuer(
                     CredentialStore.MOCK_ISSUER_OWNER,
                     request,
                     null,
+                    configurationId,
                     null,
-                    null
+                    credentialOffer
             );
             model.addAttribute("message", "Mock issuer credential issued");
         } catch (Exception e) {
@@ -158,6 +166,15 @@ public class WalletPageController {
             String label = opt.label() != null && !opt.label().isBlank() ? opt.label() : opt.configurationId();
             options.add(new CredentialOption(opt.configurationId(), opt.scope(), label));
         }
+        return options;
+    }
+
+    private List<CredentialOption> mockCredentialOptions() {
+        List<CredentialOption> options = new ArrayList<>();
+        mockIssuerConfigurationStore.configurations().forEach(cfg -> {
+            String label = cfg.name() != null && !cfg.name().isBlank() ? cfg.name() : cfg.id();
+            options.add(new CredentialOption(cfg.id(), cfg.scope(), label));
+        });
         return options;
     }
 

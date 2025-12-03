@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -34,7 +35,22 @@ class MockIssuerConfigurationStoreTest {
                 List.of(base)
         );
 
-        MockIssuerConfigurationStore store = new MockIssuerConfigurationStore(props, objectMapper);
+        WalletProperties walletProps = new WalletProperties(
+                "http://localhost:8080",
+                "realm",
+                "client",
+                "secret",
+                "did:example:wallet",
+                tempDir,
+                tempDir.resolve("wallet.jwk"),
+                null,
+                null,
+                null,
+                List.of(),
+                true
+        );
+
+        MockIssuerConfigurationStore store = new MockIssuerConfigurationStore(props, walletProps, objectMapper);
         MockIssuerProperties.CredentialConfiguration created = new MockIssuerProperties.CredentialConfiguration(
                 "custom-credential", "dc+sd-jwt", "custom-scope", "Custom Credential", "urn:example:custom",
                 List.of(new MockIssuerProperties.ClaimTemplate("email", "Email", "user@example.com", true))
@@ -45,7 +61,8 @@ class MockIssuerConfigurationStoreTest {
         assertThat(store.configurations()).extracting(MockIssuerProperties.CredentialConfiguration::id)
                 .contains("custom-credential");
 
-        JsonNode root = objectMapper.readTree(configurationFile.toFile());
+        Path userFile = walletProps.storageDir().resolve("mock-issuer/configurations.json");
+        JsonNode root = objectMapper.readTree(userFile.toFile());
         JsonNode configsNode = root.isObject() ? root.get("configurations") : root;
         assertThat(configsNode).isNotNull();
         assertThat(configsNode.toString()).contains("custom-credential");

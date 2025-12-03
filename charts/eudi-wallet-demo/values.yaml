@@ -1,170 +1,38 @@
-# Global settings
-global:
-  imagePullSecrets: [ ]
-  storageClass: gp3
-
-serviceAccount:
-  create: false
-  name: ""
-imagePullSecrets: [ ]
-
-keycloak:
-  enabled: true
-  replicas: 1
-  image:
-    repository: quay.io/keycloak/keycloak
-    tag: "26.4.5"
-    pullPolicy: IfNotPresent
-  admin:
-    username: admin
-    password: admin
-    existingSecret: ""
-    usernameKey: username
-    passwordKey: password
-  service:
-    type: LoadBalancer
-    port: 8080
-    annotations:
-      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-  ingress:
-    enabled: false
-    className: ""
-    annotations:
-      alb.ingress.kubernetes.io/scheme: internet-facing
-      alb.ingress.kubernetes.io/target-type: ip
-    hosts:
-      - host: keycloak.example.com
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: [ ]
-  resources:
-    requests:
-      cpu: 200m
-      memory: 1Gi
-    limits:
-      cpu: 1
-      memory: 2Gi
-  nodeSelector: { }
-  tolerations: [ ]
-  affinity: { }
-  persistence:
-    enabled: false
-    accessModes:
-      - ReadWriteOnce
-    size: 5Gi
-    storageClass: ""
-  database:
-    vendor: dev-file
-    host: ""
-    port: 5432
-    name: keycloak
-    username: keycloak
-    password: keycloak
-    existingSecret: ""
-    passwordKey: password
-    useSSL: false
-  hostname: ""
-  httpRelativePath: ""
-  realmFile: files/keycloak/realm-export.json
-  extraEnv: [ ]
-
-postgresql:
-  enabled: false
-  image:
-    repository: postgres
-    tag: "16"
-    pullPolicy: IfNotPresent
-  auth:
-    database: keycloak
-    username: keycloak
-    password: keycloak
-  service:
-    port: 5432
-  persistence:
-    enabled: true
-    accessModes:
-      - ReadWriteOnce
-    size: 8Gi
-    storageClass: ""
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      memory: 1Gi
-  nodeSelector: { }
-  tolerations: [ ]
-  affinity: { }
-
 wallet:
-  enabled: true
-  replicaCount: 1
-  image:
-    repository: ghcr.io/ba-itsys/eudi-wallet-playground
-    tag: "1.1.0"
-    pullPolicy: IfNotPresent
-  configInitImage: busybox:1.36
-  service:
-    type: LoadBalancer
-    port: 80
-    targetPort: 3000
-    annotations:
-      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+  publicBaseUrl: ""
   basePath: /wallet
-  ingress:
-    enabled: false
-    className: ""
-    annotations:
-      alb.ingress.kubernetes.io/scheme: internet-facing
-      alb.ingress.kubernetes.io/target-type: ip
-    hosts:
-      - host: wallet.example.com
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: [ ]
-  resources:
-    requests:
-      cpu: 200m
-      memory: 512Mi
-    limits:
-      cpu: 1
-      memory: 1Gi
-  nodeSelector: { }
-  tolerations: [ ]
-  affinity: { }
+  healthPath: /wallet
+  image:
+    repository: ""
+    tag: ""
+  keycloakBaseUrl: ""
+  keycloakRealm: wallet-demo
+  clientId: wallet-mock
+  clientSecret: secret-wallet
+  files:
+    # Provide these via --set-file wallet.files.walletKeys=... etc.
+    walletKeys: ""
+    verifierKeys: ""
+    mockIssuerKeys: ""
+    mockIssuerConfigurations: ""
   env:
+    walletDid: did:example:mock-wallet
     credentialStorageDir: /data/credentials
-    walletDid: "did:example:mock-wallet"
-    verifierWalletAuthEndpoint: ""
-    verifierClientId: wallet-verifier
-    verifierClientIdScheme: pre-registered
     dcqlQueryFile: ""
     defaultDcqlQuery: ""
     maxHttpRequestHeaderSize: 64KB
     maxHttpResponseHeaderSize: 64KB
+    verifierClientId: wallet-verifier
+    verifierClientIdScheme: pre-registered
     verifierMaxRequestObjectInlineBytes: 12000
-  keycloak:
-    baseUrl: ""
-    realm: wallet-demo
-    clientId: wallet-mock
-    clientSecret: secret-wallet
-  secrets:
-    existingSecret: ""
-    oidcClientSecretKey: oidc-client-secret
+    verifierWalletAuthEndpoint: ""
   mockIssuer:
     issuerId: ""
-  truststore:
-    secretName: ""
-    mountPath: /truststore
-  hostAliases: [ ]
-  healthPath: /
-  persistence:
-    enabled: true
-    accessModes:
-      - ReadWriteOnce
-    size: 5Gi
-    storageClass: ""
-  extraEnv: [ ]
-  imagePullSecrets: [ ]
+
+keycloak:
+  publicHost: ""
+  image:
+    repository: ""
+    tag: ""
+  # Provide the Keycloak realm export JSON via --set-file keycloak.realmJson=...
+  realmJson: ""

@@ -24,15 +24,15 @@
               <div class="email" th:text="${userEmail}">user@example.com</div>
             </div>
             <div class="user-dropdown">
-              <form method="post" action="/auth/logout" style="margin:0;">
-                <button type="submit">Logout</button>
-              </form>
+          <form method="post" th:action="@{/auth/logout}" style="margin:0;">
+            <button type="submit">Logout</button>
+          </form>
             </div>
           </div>
         </div>
       </div>
 
-      <form method="post" action="/oid4vp/consent" style="margin-top:1rem;display:flex;flex-direction:column;gap:1rem;">
+      <form method="post" th:action="@{/oid4vp/consent}" style="margin-top:1rem;display:flex;flex-direction:column;gap:1rem;">
         <div th:each="opt : ${descriptorOptions}" class="descriptor">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
             <div>

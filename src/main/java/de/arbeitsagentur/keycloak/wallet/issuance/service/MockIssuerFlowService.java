@@ -1,5 +1,6 @@
 package de.arbeitsagentur.keycloak.wallet.issuance.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JOSEException;
@@ -24,6 +25,9 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -57,19 +61,36 @@ public class MockIssuerFlowService {
                                                    HttpServletRequest request,
                                                    List<MockIssuerService.ClaimInput> claims,
                                                    String configurationId,
-                                                   String vct) {
+                                                   String vct,
+                                                   String credentialOfferRaw) {
+        ParsedOffer pastedOffer = parseCredentialOffer(credentialOfferRaw, request);
+        if (pastedOffer != null) {
+            return issueFromExistingOffer(pastedOffer, request);
+        }
+
         String issuer = issuerBase(request);
+        String resolvedConfigId = resolveConfigurationId(configurationId);
         BuilderRequest builder = new BuilderRequest(
-                resolveConfigurationId(configurationId),
+                resolvedConfigId,
                 "dc+sd-jwt",
-                resolveVct(configurationId, vct),
-                claims != null && !claims.isEmpty() ? claims : defaultClaims(configurationId)
+                resolveVct(resolvedConfigId, vct),
+                claims != null && !claims.isEmpty() ? claims : defaultClaims(resolvedConfigId)
         );
         OfferResult offer = mockIssuerService.createOffer(builder, issuer);
-        TokenResult token = mockIssuerService.exchangePreAuthorizedCode(offer.preAuthorizedCode());
+        return issueWithOfferState(offer.preAuthorizedCode(), builder.configurationId(), issuer);
+    }
+
+    private Map<String, Object> issueFromExistingOffer(ParsedOffer offer, HttpServletRequest request) {
+        String issuer = offer.issuer() != null ? offer.issuer() : issuerBase(request);
+        String resolvedConfigId = resolveConfigurationId(offer.configurationId());
+        return issueWithOfferState(offer.preAuthorizedCode(), resolvedConfigId, issuer);
+    }
+
+    private Map<String, Object> issueWithOfferState(String preAuthorizedCode, String configurationId, String issuer) {
+        TokenResult token = mockIssuerService.exchangePreAuthorizedCode(preAuthorizedCode);
         String proofJwt = buildProofJwt(issuer, token.cNonce());
         Map<String, Object> requestBody = new LinkedHashMap<>();
-        requestBody.put("credential_configuration_id", builder.configurationId());
+        requestBody.put("credential_configuration_id", resolveConfigurationId(configurationId));
         requestBody.put("proof", Map.of("proof_type", "jwt", "jwt", proofJwt));
         CredentialResult credential = mockIssuerService.issueCredential(
                 "Bearer " + token.accessToken(),
@@ -104,6 +125,118 @@ public class MockIssuerFlowService {
             }
         }
         return stored;
+    }
+
+    private ParsedOffer parseCredentialOffer(String raw, HttpServletRequest request) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        String offerPayload = null;
+        String offerUri = null;
+        try {
+            if (trimmed.startsWith("openid-credential-offer://")) {
+                URI uri = URI.create(trimmed);
+                String query = uri.getRawQuery();
+                if (query != null) {
+                    for (String part : query.split("&")) {
+                        String[] kv = part.split("=", 2);
+                        if (kv.length != 2) {
+                            continue;
+                        }
+                        String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
+                        String value = URLDecoder.decode(kv[1], StandardCharsets.UTF_8);
+                        if ("credential_offer".equals(key)) {
+                            offerPayload = value;
+                        } else if ("credential_offer_uri".equals(key)) {
+                            offerUri = value;
+                        }
+                    }
+                }
+            } else if (trimmed.startsWith("{")) {
+                offerPayload = trimmed;
+            } else if (trimmed.startsWith("http")) {
+                offerUri = trimmed;
+            }
+
+            if (offerPayload == null && offerUri != null) {
+                ParsedOffer local = resolveLocalOfferState(offerUri);
+                if (local != null) {
+                    return local;
+                }
+            }
+
+            if (offerPayload == null) {
+                return null;
+            }
+            Map<String, Object> offer = objectMapper.readValue(offerPayload, new TypeReference<>() {});
+            String preAuth = extractPreAuthorizedCode(offer);
+            if (!StringUtils.hasText(preAuth)) {
+                throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "Credential offer missing pre-authorized_code");
+            }
+            String issuer = optionalText(offer.get("credential_issuer"));
+            String configurationId = extractConfigurationId(offer);
+            return new ParsedOffer(preAuth, configurationId, issuer);
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Invalid credential offer: " + e.getMessage(), e);
+        }
+    }
+
+    private ParsedOffer resolveLocalOfferState(String offerUri) {
+        try {
+            URI uri = URI.create(offerUri);
+            String path = uri.getPath();
+            if (path == null) {
+                return null;
+            }
+            String[] segments = path.split("/");
+            if (segments.length < 2) {
+                return null;
+            }
+            String last = segments[segments.length - 1];
+            return mockIssuerService.findOfferSummary(last)
+                    .map(s -> new ParsedOffer(s.preAuthorizedCode(), s.configurationId(), s.issuer()))
+                    .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String extractPreAuthorizedCode(Map<String, Object> offer) {
+        Object grants = offer.get("grants");
+        if (!(grants instanceof Map<?, ?> grantMap)) {
+            return null;
+        }
+        Object preAuthGrant = grantMap.get("urn:ietf:params:oauth:grant-type:pre-authorized_code");
+        if (preAuthGrant instanceof Map<?, ?> grant) {
+            Object code = grant.get("pre-authorized_code");
+            if (code != null) {
+                return code.toString();
+            }
+        }
+        return null;
+    }
+
+    private String extractConfigurationId(Map<String, Object> offer) {
+        Object ids = offer.get("credential_configuration_ids");
+        if (ids instanceof List<?> list && !list.isEmpty()) {
+            Object first = list.get(0);
+            if (first != null) {
+                return first.toString();
+            }
+        }
+        return null;
+    }
+
+    private String optionalText(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString();
+        return text.isBlank() ? null : text;
     }
 
     private MockIssuerProperties.CredentialConfiguration resolveConfiguration(String configurationId) {
@@ -168,5 +301,8 @@ public class MockIssuerFlowService {
             }
         }
         return defaults;
+    }
+
+    private record ParsedOffer(String preAuthorizedCode, String configurationId, String issuer) {
     }
 }

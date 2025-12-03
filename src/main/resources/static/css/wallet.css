@@ -45,6 +45,7 @@ h1 {
   gap: 1rem;
   margin-top: 1.25rem;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  align-items: start;
 }
 .issuance-card {
   border: 1px solid rgba(56, 189, 248, 0.25);
@@ -90,6 +91,32 @@ h1 {
   flex-wrap: wrap;
   gap: 0.6rem;
   align-items: center;
+}
+.issuer-form {
+  display: grid;
+  gap: 0.75rem;
+}
+.issuer-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.issuer-form label {
+  font-weight: 700;
+  color: #e2e8f0;
+}
+.issuer-form select,
+.issuer-form textarea {
+  border-radius: 12px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(15, 23, 42, 0.6);
+  color: #e2e8f0;
+  padding: 0.7rem 0.8rem;
+  font-size: 1rem;
+}
+.issuer-form textarea {
+  min-height: 96px;
+  resize: vertical;
 }
 .issuer-row select {
   flex: 1 1 240px;

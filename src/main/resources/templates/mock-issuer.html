@@ -14,40 +14,74 @@
           <h1>Mock Issuer</h1>
           <p>Build SD-JWT credentials without Keycloak. Generate a credential offer, copy the pre-authorized code, and feed it to any OID4VCI wallet.</p>
         </div>
-        <div class="actions">
-          <a class="btn secondary" href="/wallet">Wallet</a>
-          <a class="btn secondary" href="/verifier">Verifier</a>
+      <div class="actions">
+        <a class="btn secondary" th:href="@{/}">Wallet</a>
+        <a class="btn secondary" th:href="@{/verifier}">Verifier</a>
+      </div>
+      </div>
+
+      <div class="pill-section">
+        <div class="section-lead">
+          <div>
+            <div class="muted">Issuer details</div>
+            <h2>Connection essentials</h2>
+            <p class="lead-text">Copy these endpoints into your wallet or verifier. Values update when the issuer host changes.</p>
+          </div>
+          <div class="chip soft">Mock issuer</div>
+        </div>
+
+        <div class="pill-grid">
+          <div class="pill-row">
+            <span class="pill-label">Credential issuer</span>
+            <code th:text="${issuer}">https://example.com/mock-issuer</code>
+          </div>
+          <div class="pill-row">
+            <span class="pill-label">Base configurations</span>
+            <code th:text="${configurationFile}">config/mock-issuer-configurations.json</code>
+          </div>
+          <div class="pill-row">
+            <span class="pill-label">Custom configurations</span>
+            <code th:text="${userConfigurationFile}">data/mock-issuer/configurations.json</code>
+          </div>
+          <div class="pill-row">
+            <span class="pill-label">Metadata</span>
+            <code th:text="${issuer + '/.well-known/openid-credential-issuer'}">/.well-known/openid-credential-issuer</code>
+          </div>
+          <div class="pill-row">
+            <span class="pill-label">Token endpoint</span>
+            <code th:text="${issuer + '/token'}">/mock-issuer/token</code>
+          </div>
+          <div class="pill-row">
+            <span class="pill-label">Credential endpoint</span>
+            <code th:text="${issuer + '/credential'}">/mock-issuer/credential</code>
+          </div>
         </div>
       </div>
 
-      <div class="pill-grid">
-        <div class="pill-row">
-          <span class="pill-label">Credential issuer</span>
-          <code th:text="${issuer}">https://example.com/mock-issuer</code>
+      <div class="section-switcher">
+        <div>
+          <div class="muted">Workspace</div>
+          <h2>Choose your builder</h2>
+          <p class="lead-text">Issue credentials from existing types or create a new type first.</p>
         </div>
-        <div class="pill-row">
-          <span class="pill-label">Configurations file</span>
-          <code th:text="${configurationFile}">config/mock-issuer-configurations.json</code>
-        </div>
-        <div class="pill-row">
-          <span class="pill-label">Metadata</span>
-          <code th:text="${issuer + '/.well-known/openid-credential-issuer'}">/.well-known/openid-credential-issuer</code>
-        </div>
-        <div class="pill-row">
-          <span class="pill-label">Token endpoint</span>
-          <code th:text="${issuer + '/token'}">/mock-issuer/token</code>
-        </div>
-        <div class="pill-row">
-          <span class="pill-label">Credential endpoint</span>
-          <code th:text="${issuer + '/credential'}">/mock-issuer/credential</code>
+        <div class="section-tabs" role="tablist">
+          <button class="section-tab active" type="button" data-section-tab="credential-builder">Credential builder</button>
+          <button class="section-tab" type="button" data-section-tab="configuration-editor">Credential type builder</button>
         </div>
       </div>
 
-      <div class="builder" id="configuration-editor">
+      <div class="builder" id="configuration-editor" data-section-block="configuration-editor">
+        <div class="builder-title">
+          <div>
+            <div class="muted">Define and save credential types</div>
+            <h3>Credential type builder</h3>
+          </div>
+          <div class="chip soft">Stored locally</div>
+        </div>
         <div class="builder-header">
           <div class="field">
             <label>New credential type</label>
-            <small class="muted">Create ad-hoc credential types for the mock issuer. Saved to the configurations file above.</small>
+            <small class="muted">Create ad-hoc credential types for the mock issuer. Saved under the data folder (custom configurations).</small>
           </div>
           <div class="actions">
             <button type="button" class="btn secondary mini" id="add-claim">Add claim</button>
@@ -91,7 +125,14 @@
         <div id="configuration-feedback" class="alert success" style="display:none;"></div>
       </div>
 
-      <div class="builder">
+      <div class="builder" id="credential-builder" data-section-block="credential-builder">
+        <div class="builder-title">
+          <div>
+            <div class="muted">Issue SD-JWT credentials</div>
+            <h3>Credential builder</h3>
+          </div>
+          <div class="chip soft">Uses saved configurations</div>
+        </div>
         <div class="builder-header">
           <div class="field">
             <label for="configuration">Credential configuration</label>
@@ -218,6 +259,17 @@
         const newClaimsContainer = document.getElementById("new-claims");
         const saveConfigurationBtn = document.getElementById("save-configuration");
         const configurationFeedback = document.getElementById("configuration-feedback");
+        const sectionTabs = document.querySelectorAll("[data-section-tab]");
+        const sectionBlocks = document.querySelectorAll("[data-section-block]");
+        // Keep API calls aligned with the issuer path (resilient to reverse proxy prefixes).
+        const builderBasePath = (() => {
+          try {
+            const issuerUrl = new URL(issuer || "/mock-issuer", window.location.origin);
+            return issuerUrl.pathname.replace(/\/$/, "") || "/mock-issuer";
+          } catch {
+            return (window.location.pathname || "/mock-issuer").replace(/\/$/, "");
+          }
+        })();
 
         let previewMode = "encoded";
         let cachedPreview = { encoded: "", decoded: "" };
@@ -235,6 +287,34 @@
             configurationSelect.value = configurationList[0].id;
           }
         }
+
+        function activateSection(sectionId) {
+          if (!sectionId) return;
+          sectionTabs.forEach((tab) => {
+            const isActive = tab.dataset.sectionTab === sectionId;
+            tab.classList.toggle("active", isActive);
+            tab.setAttribute("aria-pressed", isActive ? "true" : "false");
+          });
+          sectionBlocks.forEach((block) => {
+            const isActive = block.dataset.sectionBlock === sectionId;
+            block.classList.toggle("is-hidden", !isActive);
+            block.setAttribute("aria-hidden", isActive ? "false" : "true");
+          });
+        }
+
+        const hashSection =
+          window.location.hash === "#types" ? "configuration-editor" : window.location.hash === "#builder" ? "credential-builder" : null;
+        activateSection(hashSection || "credential-builder");
+        sectionTabs.forEach((tab) => {
+          tab.addEventListener("click", () => {
+            const target = tab.dataset.sectionTab;
+            activateSection(target);
+            const hash = target === "configuration-editor" ? "#types" : "#builder";
+            if (history?.replaceState) {
+              history.replaceState(null, "", hash);
+            }
+          });
+        });
 
         function currentConfig() {
           const selectedId = configurationSelect?.value || defaultConfigurationId;
@@ -338,7 +418,7 @@
           }
           const payload = buildPayload(cfg);
           try {
-            const res = await fetch("/mock-issuer/preview", {
+            const res = await fetch(`${builderBasePath}/preview`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload)
@@ -443,7 +523,7 @@
           }
           const payload = buildPayload(cfg);
           try {
-            const res = await fetch("/mock-issuer/offers", {
+            const res = await fetch(`${builderBasePath}/offers`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload)
@@ -615,7 +695,7 @@
           const payload = buildNewConfigurationPayload();
           if (!payload) return;
           try {
-            const res = await fetch("/mock-issuer/configurations", {
+            const res = await fetch(`${builderBasePath}/configurations`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload)

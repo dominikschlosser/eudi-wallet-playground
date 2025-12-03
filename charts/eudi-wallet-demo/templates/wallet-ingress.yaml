@@ -1,36 +1,32 @@
-{{- if and .Values.wallet.enabled .Values.wallet.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "eudi-wallet-demo.fullname" . }}-wallet
+  name: wallet-demo-wallet
   labels:
+    app: wallet-demo
     app.kubernetes.io/component: wallet
-    {{- include "eudi-wallet-demo.labels" . | nindent 4 }}
-  {{- with .Values.wallet.ingress.annotations }}
   annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: "internet-facing"
+    alb.ingress.kubernetes.io/target-type: "ip"
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: {{ .Values.wallet.healthPath | quote }}
 spec:
-  {{- if .Values.wallet.ingress.className }}
-  ingressClassName: {{ .Values.wallet.ingress.className }}
-  {{- end }}
+  ingressClassName: alb
   rules:
-    {{- range .Values.wallet.ingress.hosts }}
-    - host: {{ .host }}
-      http:
+    - http:
         paths:
-          {{- range .paths }}
-          - path: {{ .path }}
-            pathType: {{ .pathType }}
+          - path: {{ .Values.wallet.basePath }}
+            pathType: Prefix
             backend:
               service:
-                name: {{ include "eudi-wallet-demo.fullname" $ }}-wallet
+                name: wallet-demo-wallet
                 port:
-                  number: {{ $.Values.wallet.service.port }}
-          {{- end }}
-    {{- end }}
-  {{- if .Values.wallet.ingress.tls }}
-  tls:
-    {{- toYaml .Values.wallet.ingress.tls | nindent 4 }}
-  {{- end }}
-{{- end }}
+                  number: 80
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: wallet-demo-keycloak
+                port:
+                  number: 8080

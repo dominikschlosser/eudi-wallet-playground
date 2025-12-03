@@ -3,4 +3,3 @@ name: eudi-wallet-demo
 description: Helm chart to deploy the EUDI wallet Spring Boot app and a Keycloak issuer for OID4VCI/OID4VP demos.
 type: application
 version: 0.1.0
-appVersion: "1.1.0"

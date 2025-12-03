@@ -1,12 +1,10 @@
-{{- if .Values.wallet.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "eudi-wallet-demo.fullname" . }}-wallet-config
+  name: wallet-demo-wallet-config
   labels:
+    app: wallet-demo
     app.kubernetes.io/component: wallet
-    {{- include "eudi-wallet-demo.labels" . | nindent 4 }}
 data:
   mock-issuer-configurations.json: |
-{{ .Files.Get "files/wallet/mock-issuer-configurations.json" | indent 4 }}
-{{- end }}
+{{ required "wallet.files.mockIssuerConfigurations is required" .Values.wallet.files.mockIssuerConfigurations | indent 4 }}

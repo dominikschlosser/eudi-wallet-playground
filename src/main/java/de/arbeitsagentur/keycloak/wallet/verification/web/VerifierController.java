@@ -32,6 +32,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -73,6 +74,7 @@ public class VerifierController {
     private final ObjectMapper objectMapper;
     private final VerifierProperties properties;
     private final DebugLogService debugLogService;
+    private final URI publicBaseUri;
 
     public VerifierController(DcqlService dcqlService,
                               VerifierSessionService verifierSessionService,
@@ -85,7 +87,8 @@ public class VerifierController {
                               RequestObjectService requestObjectService,
                               ObjectMapper objectMapper,
                               VerifierProperties properties,
-                              DebugLogService debugLogService) {
+                              DebugLogService debugLogService,
+                              @Value("${wallet.public-base-url:}") String publicBaseUrl) {
         this.dcqlService = dcqlService;
         this.verifierSessionService = verifierSessionService;
         this.trustListService = trustListService;
@@ -98,6 +101,7 @@ public class VerifierController {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.debugLogService = debugLogService;
+        this.publicBaseUri = parsePublicBase(publicBaseUrl);
     }
 
     @GetMapping
@@ -847,7 +851,30 @@ public class VerifierController {
     private record EncryptionResult(String payload, boolean encrypted, String alg, String enc) {
     }
 
+    private URI parsePublicBase(String publicBaseUrl) {
+        if (publicBaseUrl == null || publicBaseUrl.isBlank()) {
+            return null;
+        }
+        String normalized = publicBaseUrl.trim();
+        if (!normalized.endsWith("/")) {
+            normalized = normalized + "/";
+        }
+        return URI.create(normalized);
+    }
+
     private UriComponentsBuilder baseUri(HttpServletRequest request) {
+        if (publicBaseUri != null) {
+            UriComponentsBuilder builder = UriComponentsBuilder.newInstance()
+                    .scheme(publicBaseUri.getScheme())
+                    .host(publicBaseUri.getHost());
+            if (publicBaseUri.getPort() != -1) {
+                builder.port(publicBaseUri.getPort());
+            }
+            if (publicBaseUri.getPath() != null && !publicBaseUri.getPath().isBlank()) {
+                builder.path(publicBaseUri.getPath());
+            }
+            return builder;
+        }
         String scheme = firstHeaderValue(request, "X-Forwarded-Proto");
         if (scheme == null || scheme.isBlank()) {
             scheme = request.getScheme();
@@ -883,6 +910,10 @@ public class VerifierController {
                 .host(host);
         if (!((scheme.equalsIgnoreCase("http") && port == 80) || (scheme.equalsIgnoreCase("https") && port == 443))) {
             builder.port(port);
+        }
+        String contextPath = request.getContextPath();
+        if (contextPath != null && !contextPath.isBlank()) {
+            builder.path(contextPath);
         }
         return builder;
     }

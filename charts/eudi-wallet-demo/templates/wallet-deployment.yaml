@@ -1,43 +1,26 @@
-{{- if .Values.wallet.enabled }}
-{{- $keycloakUrl := default (printf "http://%s-keycloak:%v" (include "eudi-wallet-demo.fullname" .) .Values.keycloak.service.port) .Values.wallet.keycloak.baseUrl -}}
-{{- $walletSecret := default (printf "%s-wallet" (include "eudi-wallet-demo.fullname" .)) .Values.wallet.secrets.existingSecret -}}
-{{- $configPath := "/data/config" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "eudi-wallet-demo.fullname" . }}-wallet
+  name: wallet-demo-wallet
   labels:
+    app: wallet-demo
     app.kubernetes.io/component: wallet
-    {{- include "eudi-wallet-demo.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.wallet.replicaCount }}
+  replicas: 1
   selector:
     matchLabels:
+      app: wallet-demo
       app.kubernetes.io/component: wallet
-      {{- include "eudi-wallet-demo.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
+        app: wallet-demo
         app.kubernetes.io/component: wallet
-        {{- include "eudi-wallet-demo.selectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "eudi-wallet-demo.serviceAccountName" . }}
-      {{- if or .Values.wallet.imagePullSecrets .Values.global.imagePullSecrets }}
-      imagePullSecrets:
-        {{- if .Values.wallet.imagePullSecrets }}
-        {{- toYaml .Values.wallet.imagePullSecrets | nindent 8 }}
-        {{- end }}
-        {{- if .Values.global.imagePullSecrets }}
-        {{- toYaml .Values.global.imagePullSecrets | nindent 8 }}
-        {{- end }}
-      {{- end }}
-      {{- if .Values.wallet.hostAliases }}
-      hostAliases:
-        {{- toYaml .Values.wallet.hostAliases | nindent 8 }}
-      {{- end }}
+      serviceAccountName: default
       initContainers:
         - name: wallet-config-init
-          image: {{ .Values.wallet.configInitImage | quote }}
+          image: busybox:1.36
           command: [ "/bin/sh", "-c" ]
           args:
             - |
@@ -66,112 +49,87 @@ spec:
               mountPath: /seed/config
       containers:
         - name: wallet
-          image: "{{ .Values.wallet.image.repository }}:{{ .Values.wallet.image.tag }}"
-          imagePullPolicy: {{ .Values.wallet.image.pullPolicy }}
-          {{- $healthPath := default "/" .Values.wallet.healthPath }}
+          image: "{{ required "wallet.image.repository is required" .Values.wallet.image.repository }}:{{ required "wallet.image.tag is required" .Values.wallet.image.tag }}"
+          imagePullPolicy: IfNotPresent
           env:
             - name: SERVER_SERVLET_CONTEXT_PATH
-              value: "{{ .Values.wallet.basePath }}"
+              value: {{ .Values.wallet.basePath }}
+            - name: SERVER_FORWARD_HEADERS_STRATEGY
+              value: "framework"
+            - name: WALLET_PUBLIC_BASE_URL
+              value: {{ required "wallet.publicBaseUrl is required" .Values.wallet.publicBaseUrl }}
             - name: KEYCLOAK_BASE_URL
-              value: {{ $keycloakUrl | quote }}
+              value: {{ required "wallet.keycloakBaseUrl is required" .Values.wallet.keycloakBaseUrl }}
             - name: KEYCLOAK_REALM
-              value: {{ .Values.wallet.keycloak.realm | quote }}
+              value: {{ .Values.wallet.keycloakRealm }}
             - name: OIDC_CLIENT_ID
-              value: {{ .Values.wallet.keycloak.clientId | quote }}
+              value: {{ .Values.wallet.clientId }}
             - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ $walletSecret }}
-                  key: {{ .Values.wallet.secrets.oidcClientSecretKey }}
+                  name: wallet-demo-wallet
+                  key: oidc-client-secret
             - name: WALLET_DID
-              value: {{ .Values.wallet.env.walletDid | quote }}
+              value: {{ .Values.wallet.env.walletDid }}
             - name: WALLET_KEY_FILE
-              value: {{ printf "%s/wallet-keys.json" $configPath | quote }}
+              value: "/data/config/wallet-keys.json"
             - name: VERIFIER_KEYS_FILE
-              value: {{ printf "%s/verifier-keys.json" $configPath | quote }}
+              value: "/data/config/verifier-keys.json"
             - name: MOCK_ISSUER_KEY_FILE
-              value: {{ printf "%s/mock-issuer-keys.json" $configPath | quote }}
+              value: "/data/config/mock-issuer-keys.json"
             - name: MOCK_ISSUER_CONFIGURATION_FILE
-              value: {{ printf "%s/mock-issuer-configurations.json" $configPath | quote }}
-            {{- if .Values.wallet.mockIssuer.issuerId }}
+              value: "/data/config/mock-issuer-configurations.json"
             - name: MOCK_ISSUER_ISSUER_ID
-              value: {{ .Values.wallet.mockIssuer.issuerId | quote }}
-            {{- end }}
+              value: {{ default (printf "%s/mock-issuer" (required "wallet.publicBaseUrl is required" .Values.wallet.publicBaseUrl)) .Values.wallet.mockIssuer.issuerId }}
             - name: CREDENTIAL_STORAGE_DIR
-              value: {{ .Values.wallet.env.credentialStorageDir | quote }}
+              value: {{ .Values.wallet.env.credentialStorageDir }}
             - name: VERIFIER_CLIENT_ID
-              value: {{ .Values.wallet.env.verifierClientId | quote }}
+              value: {{ .Values.wallet.env.verifierClientId }}
             - name: VERIFIER_CLIENT_ID_SCHEME
-              value: {{ .Values.wallet.env.verifierClientIdScheme | quote }}
+              value: {{ .Values.wallet.env.verifierClientIdScheme }}
             - name: VERIFIER_WALLET_AUTH_ENDPOINT
-              value: {{ .Values.wallet.env.verifierWalletAuthEndpoint | quote }}
+              value: {{ .Values.wallet.env.verifierWalletAuthEndpoint }}
             - name: DCQL_QUERY_FILE
-              value: {{ .Values.wallet.env.dcqlQueryFile | quote }}
+              value: {{ .Values.wallet.env.dcqlQueryFile }}
             - name: DEFAULT_DCQL_QUERY
-              value: {{ .Values.wallet.env.defaultDcqlQuery | quote }}
+              value: {{ .Values.wallet.env.defaultDcqlQuery }}
             - name: MAX_HTTP_REQUEST_HEADER_SIZE
-              value: {{ .Values.wallet.env.maxHttpRequestHeaderSize | quote }}
+              value: {{ .Values.wallet.env.maxHttpRequestHeaderSize }}
             - name: MAX_HTTP_RESPONSE_HEADER_SIZE
-              value: {{ .Values.wallet.env.maxHttpResponseHeaderSize | quote }}
+              value: {{ .Values.wallet.env.maxHttpResponseHeaderSize }}
             - name: VERIFIER_MAX_REQUEST_OBJECT_INLINE_BYTES
               value: {{ .Values.wallet.env.verifierMaxRequestObjectInlineBytes | quote }}
-            {{- if .Values.wallet.extraEnv }}
-            {{- toYaml .Values.wallet.extraEnv | nindent 12 }}
-            {{- end }}
           ports:
-            - containerPort: {{ .Values.wallet.service.targetPort }}
+            - containerPort: 3000
               name: http
           readinessProbe:
             httpGet:
-              path: {{ $healthPath }}
+              path: {{ .Values.wallet.healthPath }}
               port: http
             initialDelaySeconds: 15
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: {{ $healthPath }}
+              path: {{ .Values.wallet.healthPath }}
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20
           volumeMounts:
             - name: wallet-data
               mountPath: /data
-            {{- if .Values.wallet.truststore.secretName }}
-            - name: wallet-truststore
-              mountPath: {{ default "/truststore" .Values.wallet.truststore.mountPath | quote }}
-              readOnly: true
-            {{- end }}
           resources:
-            {{- toYaml .Values.wallet.resources | nindent 12 }}
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1
+              memory: 1Gi
       volumes:
         - name: wallet-config-seed
           configMap:
-            name: {{ include "eudi-wallet-demo.fullname" . }}-wallet-config
+            name: wallet-demo-wallet-config
         - name: wallet-keys-seed
           secret:
-            secretName: {{ include "eudi-wallet-demo.fullname" . }}-wallet-keys
-        {{- if .Values.wallet.truststore.secretName }}
-        - name: wallet-truststore
-          secret:
-            secretName: {{ .Values.wallet.truststore.secretName }}
-        {{- end }}
+            secretName: wallet-demo-wallet-keys
         - name: wallet-data
-          {{- if .Values.wallet.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ include "eudi-wallet-demo.fullname" . }}-wallet-data
-          {{- else }}
-          emptyDir: { }
-          {{- end }}
-      {{- with .Values.wallet.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.wallet.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.wallet.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-{{- end }}
+          emptyDir: {}

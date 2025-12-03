@@ -194,6 +194,10 @@ mvn verify
 
 Always run the tests after you modify the codebase (see `AGENTS.md`). The test performs the HTML form login against Keycloak, stores a credential, requests a presentation (using the same parameters as the verifier UI), and verifies both a success case and a tampered `vp_token` against the trust list.
 
+## AWS smoke test
+
+Run `mvn verify -Paws-smoke -Daws.wallet.base-url=https://wallet.example.com/wallet` (or set `AWS_WALLET_BASE_URL`) to exercise the deployed EKS stack end-to-end (login, issuance, presentation). The test uses `AWS_WALLET_USERNAME` / `AWS_WALLET_PASSWORD` when set, otherwise defaults to `test` / `test`.
+
 ## Project structure
 
 - `config/` – single home for key material (`wallet-keys.json`, `verifier-keys.json` for encryption + verifier_attestation/x509 PoP) and Keycloak assets (`keycloak/realm-export.json`, `keycloak/keys/…`, override verifier path via `VERIFIER_KEYS_FILE`)
@@ -204,12 +208,22 @@ Always run the tests after you modify the codebase (see `AGENTS.md`). The test p
 
 ## Deploying to Kubernetes (AWS/EKS)
 
-Use the bundled Helm chart under `charts/eudi-wallet-demo` to deploy Keycloak (with the realm import) and the Spring Boot wallet to Kubernetes. The defaults provision NLB-backed services; enable the optional ALB ingress entries if you terminate TLS there.
+Use the bundled Helm chart under `charts/eudi-wallet-demo` to deploy Keycloak (with the realm import) and the Spring Boot wallet to Kubernetes. The chart is simplified for the AWS sandbox `wallet-demo` namespace and fronts the services with an AWS ALB (HTTP).
 
 ```bash
-helm install wallet charts/eudi-wallet-demo \
-  --set wallet.image.repository=ghcr.io/ba-itsys/eudi-wallet-playground \
-  --set wallet.image.tag=1.0.0
+AWS_PROFILE=AccountAdministratorAccess-207613817683 helm upgrade --install wallet-demo charts/eudi-wallet-demo -n wallet-demo \
+  --set keycloak.publicHost=<public-host> \
+  --set wallet.publicBaseUrl=<https-wallet-base-url> \
+  --set wallet.keycloakBaseUrl=<https-keycloak-base-url> \
+  --set wallet.image.repository=<wallet-image-repo> \
+  --set wallet.image.tag=<wallet-image-tag> \
+  --set keycloak.image.repository=<keycloak-image-repo> \
+  --set keycloak.image.tag=<keycloak-image-tag> \
+  --set-file keycloak.realmJson=config/keycloak/realm-export.json \
+  --set-file wallet.files.walletKeys=config/wallet-keys.json \
+  --set-file wallet.files.verifierKeys=config/verifier-keys.json \
+  --set-file wallet.files.mockIssuerKeys=config/mock-issuer-keys.json \
+  --set-file wallet.files.mockIssuerConfigurations=config/mock-issuer-configurations.json
 ```
 
-See `charts/eudi-wallet-demo/README.md` for full value options (database, storage classes, hostnames, and mock-issuer/verifier overrides).
+See `charts/eudi-wallet-demo/README.md` for the small set of remaining values (image tags, storage class, TLS/truststore, and host/ingress settings).

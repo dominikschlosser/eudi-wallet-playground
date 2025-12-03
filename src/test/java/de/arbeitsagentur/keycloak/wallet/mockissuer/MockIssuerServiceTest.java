@@ -5,6 +5,7 @@ import de.arbeitsagentur.keycloak.wallet.mockissuer.MockIssuerService.BuilderReq
 import de.arbeitsagentur.keycloak.wallet.mockissuer.MockIssuerService.ClaimInput;
 import de.arbeitsagentur.keycloak.wallet.mockissuer.config.MockIssuerConfigurationStore;
 import de.arbeitsagentur.keycloak.wallet.mockissuer.config.MockIssuerProperties;
+import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -50,8 +51,22 @@ class MockIssuerServiceTest {
                 "http://localhost:3000/mock-issuer",
                 configurationFile,
                 List.of(cfg));
+        WalletProperties walletProps = new WalletProperties(
+                "http://localhost:8080",
+                "realm",
+                "client",
+                "secret",
+                "did:example:wallet",
+                tempDir,
+                tempDir.resolve("wallet.jwk"),
+                null,
+                null,
+                null,
+                List.of(),
+                true
+        );
         keyService = new MockIssuerKeyService(props);
-        MockIssuerConfigurationStore configurationStore = new MockIssuerConfigurationStore(props, objectMapper);
+        MockIssuerConfigurationStore configurationStore = new MockIssuerConfigurationStore(props, walletProps, objectMapper);
         mockIssuerService = new MockIssuerService(props, objectMapper, keyService, configurationStore);
     }
 

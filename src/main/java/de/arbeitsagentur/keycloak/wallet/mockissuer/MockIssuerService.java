@@ -121,6 +121,14 @@ public class MockIssuerService {
                 .orElse(null);
     }
 
+    public Optional<OfferSummary> findOfferSummary(String offerId) {
+        OfferState state = findOfferById(offerId);
+        if (state == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new OfferSummary(state.preAuthorizedCode(), state.configurationId(), state.issuer()));
+    }
+
     public TokenResult exchangePreAuthorizedCode(String preAuthCode) {
         ensureEnabled();
         OfferState offer = offers.get(preAuthCode);
@@ -471,6 +479,9 @@ public class MockIssuerService {
     }
 
     public record CredentialResult(Map<String, Object> body, Map<String, Object> decoded, String encoded) {
+    }
+
+    public record OfferSummary(String preAuthorizedCode, String configurationId, String issuer) {
     }
 
     record OfferState(String offerId,

@@ -3,6 +3,7 @@ package de.arbeitsagentur.keycloak.wallet.mockissuer.config;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -28,17 +29,25 @@ public class MockIssuerConfigurationStore {
 
     private final ObjectMapper objectMapper;
     private final Path configurationFile;
+    private final Path userConfigurationFile;
+    private final List<MockIssuerProperties.CredentialConfiguration> builtInConfigurations = new ArrayList<>();
+    private final List<MockIssuerProperties.CredentialConfiguration> userConfigurations = new ArrayList<>();
     private final List<MockIssuerProperties.CredentialConfiguration> configurations = new ArrayList<>();
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    public MockIssuerConfigurationStore(MockIssuerProperties properties, ObjectMapper objectMapper) {
+    public MockIssuerConfigurationStore(MockIssuerProperties properties, WalletProperties walletProperties, ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
         this.configurationFile = properties.configurationFile();
-        List<MockIssuerProperties.CredentialConfiguration> loaded = loadFromFile()
-                .orElseGet(properties::configurations);
-        if (loaded != null) {
-            configurations.addAll(loaded);
+        this.userConfigurationFile = walletProperties.storageDir().resolve("mock-issuer/configurations.json");
+
+        loadFromFile(configurationFile).ifPresent(builtInConfigurations::addAll);
+        if (builtInConfigurations.isEmpty()) {
+            builtInConfigurations.addAll(properties.configurations());
         }
+        loadFromFile(userConfigurationFile).ifPresent(userConfigurations::addAll);
+
+        configurations.addAll(builtInConfigurations);
+        configurations.addAll(userConfigurations);
     }
 
     public List<MockIssuerProperties.CredentialConfiguration> configurations() {
@@ -84,6 +93,7 @@ public class MockIssuerConfigurationStore {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Credential configuration id already exists");
             }
             configurations.add(normalized);
+            userConfigurations.add(normalized);
             persist();
             return normalized;
         } finally {
@@ -91,27 +101,31 @@ public class MockIssuerConfigurationStore {
         }
     }
 
-    private Optional<List<MockIssuerProperties.CredentialConfiguration>> loadFromFile() {
-        if (configurationFile == null || !Files.exists(configurationFile)) {
+    public Path userConfigurationFile() {
+        return userConfigurationFile;
+    }
+
+    private Optional<List<MockIssuerProperties.CredentialConfiguration>> loadFromFile(Path file) {
+        if (file == null || !Files.exists(file)) {
             return Optional.empty();
         }
         try {
-            JsonNode node = objectMapper.readTree(configurationFile.toFile());
+            JsonNode node = objectMapper.readTree(file.toFile());
             JsonNode configsNode = node.isObject() ? node.get("configurations") : node;
             if (configsNode == null || !configsNode.isArray()) {
-                LOG.warn("Ignoring mock issuer configuration file {} because it does not contain an array", configurationFile);
+                LOG.warn("Ignoring mock issuer configuration file {} because it does not contain an array", file);
                 return Optional.empty();
             }
             List<MockIssuerProperties.CredentialConfiguration> parsed = objectMapper.readerFor(
                     new TypeReference<List<MockIssuerProperties.CredentialConfiguration>>() {
                     }).readValue(configsNode);
             if (parsed.isEmpty()) {
-                LOG.warn("Mock issuer configuration file {} is present but empty", configurationFile);
+                LOG.warn("Mock issuer configuration file {} is present but empty", file);
                 return Optional.empty();
             }
             return Optional.of(parsed);
         } catch (IOException e) {
-            LOG.warn("Failed to read mock issuer configurations from {}", configurationFile, e);
+            LOG.warn("Failed to read mock issuer configurations from {}", file, e);
             return Optional.empty();
         }
     }
@@ -164,13 +178,13 @@ public class MockIssuerConfigurationStore {
 
     private void persist() {
         try {
-            Path parent = configurationFile.getParent();
+            Path parent = userConfigurationFile.getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
-            List<MockIssuerProperties.CredentialConfiguration> snapshot = List.copyOf(configurations);
+            List<MockIssuerProperties.CredentialConfiguration> snapshot = List.copyOf(userConfigurations);
             objectMapper.writerWithDefaultPrettyPrinter()
-                    .writeValue(configurationFile.toFile(), Map.of("configurations", snapshot));
+                    .writeValue(userConfigurationFile.toFile(), Map.of("configurations", snapshot));
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to persist mock issuer configurations", e);
         }

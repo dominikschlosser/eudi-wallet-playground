@@ -49,6 +49,7 @@ public class MockIssuerController {
         model.addAttribute("configurations", configs);
         model.addAttribute("defaultConfigurationId", configs.isEmpty() ? "" : configs.get(0).id());
         model.addAttribute("configurationFile", properties.configurationFile());
+        model.addAttribute("userConfigurationFile", configurationStore.userConfigurationFile());
         return "mock-issuer";
     }
 

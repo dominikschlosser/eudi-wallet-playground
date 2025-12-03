@@ -1,22 +1,16 @@
-{{- if .Values.wallet.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "eudi-wallet-demo.fullname" . }}-wallet
+  name: wallet-demo-wallet
   labels:
+    app: wallet-demo
     app.kubernetes.io/component: wallet
-    {{- include "eudi-wallet-demo.labels" . | nindent 4 }}
-  {{- with .Values.wallet.service.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
 spec:
-  type: {{ .Values.wallet.service.type }}
+  type: ClusterIP
   ports:
     - name: http
-      port: {{ .Values.wallet.service.port }}
-      targetPort: {{ .Values.wallet.service.targetPort }}
+      port: 80
+      targetPort: 3000
   selector:
+    app: wallet-demo
     app.kubernetes.io/component: wallet
-    {{- include "eudi-wallet-demo.selectorLabels" . | nindent 4 }}
-{{- end }}

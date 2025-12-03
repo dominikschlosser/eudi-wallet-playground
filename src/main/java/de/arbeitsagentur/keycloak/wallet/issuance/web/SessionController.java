@@ -87,13 +87,16 @@ public class SessionController {
     @PostMapping("/mock-issue")
     public ResponseEntity<?> mockIssue(HttpSession httpSession, jakarta.servlet.http.HttpServletRequest request) {
         WalletSession session = sessionService.getSession(httpSession);
+        String configurationId = request.getParameter("configurationId");
+        String credentialOffer = request.getParameter("credentialOffer");
         try {
             Map<String, Object> credential = mockIssuerFlowService.issueWithMockIssuer(
                     CredentialStore.MOCK_ISSUER_OWNER,
                     request,
                     null,
+                    configurationId,
                     null,
-                    null
+                    credentialOffer
             );
             return ResponseEntity.ok(credential);
         } catch (org.springframework.web.server.ResponseStatusException e) {

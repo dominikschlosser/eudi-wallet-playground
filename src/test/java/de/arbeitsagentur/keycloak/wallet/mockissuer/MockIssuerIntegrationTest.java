@@ -22,6 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MockIssuerIntegrationTest {
 
     private static final Path CONFIG_FILE = Path.of("target", "mock-issuer-config-int.json");
+    private static final Path DATA_DIR = Path.of("target", "mock-data");
+    private static final Path USER_CONFIG_FILE = DATA_DIR.resolve("mock-issuer/configurations.json");
 
     @LocalServerPort
     private int port;
@@ -33,14 +35,23 @@ class MockIssuerIntegrationTest {
     private ObjectMapper objectMapper;
 
     @DynamicPropertySource
-    static void overrideProperties(DynamicPropertyRegistry registry) {
+    static void overrideProperties(DynamicPropertyRegistry registry) throws Exception {
+        Files.deleteIfExists(CONFIG_FILE);
+        Path parent = CONFIG_FILE.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Files.createDirectories(DATA_DIR);
         registry.add("mock-issuer.configuration-file", () -> CONFIG_FILE.toAbsolutePath().toString());
+        registry.add("wallet.storage-dir", () -> DATA_DIR.toAbsolutePath().toString());
     }
 
     @BeforeEach
     void cleanConfigFile() throws Exception {
         Files.deleteIfExists(CONFIG_FILE);
         Files.createDirectories(CONFIG_FILE.getParent());
+        Files.deleteIfExists(USER_CONFIG_FILE);
+        Files.createDirectories(USER_CONFIG_FILE.getParent());
     }
 
     @Test
@@ -70,7 +81,7 @@ class MockIssuerIntegrationTest {
         assertThat(createdBody).isNotNull();
         assertThat(createdBody).containsEntry("id", "integration-credential");
 
-        JsonNode stored = objectMapper.readTree(CONFIG_FILE.toFile());
+        JsonNode stored = objectMapper.readTree(USER_CONFIG_FILE.toFile());
         assertThat(stored.toString()).contains("integration-credential");
 
         @SuppressWarnings("unchecked")

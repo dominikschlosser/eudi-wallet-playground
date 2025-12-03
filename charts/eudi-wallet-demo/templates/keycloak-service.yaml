@@ -1,22 +1,16 @@
-{{- if .Values.keycloak.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "eudi-wallet-demo.fullname" . }}-keycloak
+  name: wallet-demo-keycloak
   labels:
+    app: wallet-demo
     app.kubernetes.io/component: keycloak
-    {{- include "eudi-wallet-demo.labels" . | nindent 4 }}
-  {{- with .Values.keycloak.service.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
 spec:
-  type: {{ .Values.keycloak.service.type }}
+  type: ClusterIP
   ports:
     - name: http
-      port: {{ .Values.keycloak.service.port }}
+      port: 8080
       targetPort: http
   selector:
+    app: wallet-demo
     app.kubernetes.io/component: keycloak
-    {{- include "eudi-wallet-demo.selectorLabels" . | nindent 4 }}
-{{- end }}

@@ -16,11 +16,11 @@
         </div>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
           <button type="button" class="btn secondary" id="open-dcql-request">Open DCQL request</button>
-          <a class="btn secondary" href="/" aria-label="Go to wallet issuance UI">Go to Wallet</a>
+          <a class="btn secondary" th:href="@{/}" aria-label="Go to wallet issuance UI">Go to Wallet</a>
         </div>
       </div>
 
-      <form class="stack" method="post" action="/verifier/start">
+      <form class="stack" method="post" th:action="@{/verifier/start}">
         <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
           <div>
             <label for="walletAuthEndpoint">Wallet Authorization Endpoint</label>
@@ -162,7 +162,7 @@
         </div>
         <div class="actions">
           <button class="btn" type="submit">Request Presentation</button>
-          <a class="btn secondary" href="/verifier/default" target="_blank">View Defaults</a>
+          <a class="btn secondary" th:href="@{/verifier/default}" target="_blank">View Defaults</a>
         </div>
       </form>
 
