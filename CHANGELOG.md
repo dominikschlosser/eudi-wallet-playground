@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.1.0...v1.2.0) (2025-12-03)
+
+
+### Features
+
+* **issuance:** allow custom cred types to be issued as well as credential offers to be pasted ([66b14d9](https://github.com/ba-itsys/eudi-wallet-playground/commit/66b14d90304071839ea8dca65299608b71db920c))
+
+
+### Bug Fixes
+
+* **aws:** fix aws deployment ([e1e6afb](https://github.com/ba-itsys/eudi-wallet-playground/commit/e1e6afb00e2f2f51df2f7d75011a08ef0a5ac990))
+* **aws:** fix aws deployment ([ab270c9](https://github.com/ba-itsys/eudi-wallet-playground/commit/ab270c989a1d1d513c8f1339bd788958b9435b60))
+* **helm:** configure basePath for wallet deployment ([6c5d07e](https://github.com/ba-itsys/eudi-wallet-playground/commit/6c5d07e838c3785f2f93df4007fefbf957236b10))
+
 ## [1.1.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.0.0...v1.1.0) (2025-12-01)
 
 
