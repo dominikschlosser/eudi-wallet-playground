@@ -1,22 +1,21 @@
 # EUDI Wallet Keycloak Demo
 
-Spring Boot demo/mock of an EUDI wallet that authenticates against Keycloak 26.4.5 (with `oid4vc-vci` enabled), requests an SD-JWT credential through OID4VCI, and stores the credential (signed SD-JWT + disclosures) on the filesystem.  
-It also exposes an OID4VP 1.0 “same device” presentation endpoint and a verifier UI that use DCQL (`dcql_query`) instead of legacy presentation definitions. SD-JWT presentations are validated against a trust list containing the Keycloak realm certificate.  
-The verifier can be pointed at any external wallet that implements the OID4VP 1.0/DCQL profile (for example a sandbox or a real mobile wallet) by switching `VERIFIER_WALLET_AUTH_ENDPOINT`.  
-Integration tests spin up Keycloak in a Testcontainer and exercise the complete issuance + presentation flow end-to-end, using Keycloak as the reference credential issuer.
+Spring Boot demo/mock of an EUDI wallet that authenticates against Keycloak 26.4.5 (with `oid4vc-vci` enabled), issues SD-JWT and mDoc credentials (Keycloak or the mock issuer), and stores them on the filesystem.  
+It also exposes an OID4VP 1.0 “same device” presentation endpoint and a verifier UI that use DCQL (`dcql_query`) instead of legacy presentation definitions. SD-JWT and mDoc presentations are validated against the trust list.  
+The sd-jwt and mdoc implementations live in reusable `sdjwt-lib` and `mdoc-lib` modules; the wallet, mock issuer, and verifier services depend on these libraries. The verifier can be pointed at any external wallet that implements the OID4VP 1.0/DCQL profile (for example a sandbox or a real mobile wallet) by switching `VERIFIER_WALLET_AUTH_ENDPOINT`.  
+Integration tests spin up Keycloak in a Testcontainer and exercise the complete SD-JWT and mDoc issuance + presentation flow end-to-end.
 
 ## Credential formats: SD-JWT vs mDoc
 
-- **SD-JWT (`dc+sd-jwt`)** – A signed JWT whose payload omits selectively disclosable claims. Each omitted claim is carried in a Base64URL disclosure, and the presentation concatenates the signed JWT and disclosures with `~`. Verifiers recompute digests to ensure disclosures belong to the signed credential.
-- **mDoc (`mso_mdoc`)** – A Mobile Security Object (MSO) defined in ISO/IEC 18013‑5, CBOR-encoded and COSE_Sign1-signed. Claims are “data elements” grouped under `issuerSigned.nameSpaces.<docType>`. The MSO holds SHA-256 digests of each data element and validity info; the COSE signature binds those digests.
-- **Encoding** – mDoc containers are CBOR; they can be represented as binary, base16 (hex), or base64url. SD-JWT remains pure JSON/JWT with disclosures as Base64URL strings.
+- **SD-JWT (`dc+sd-jwt`)** – A signed JWT whose payload carries digests for selectively disclosable claims. Each hidden claim is sent as a Base64URL “disclosure” and the presentation string concatenates the signed JWT and every disclosure with `~`. Verifiers check the issuer signature, then recompute each digest to ensure the disclosures belong to the signed token.
+- **mDoc/CBOR (`mso_mdoc`)** – ISO/IEC 18013-5 Mobile Security Objects. Every claim is an issuer-signed data element (`digestID`, 16-byte `random`, `elementIdentifier`, `elementValue`) encoded as tagged CBOR. The MSO contains SHA-256 `valueDigests` for each element plus `validityInfo`; a COSE_Sign1 (`issuerAuth`) signs the tagged MSO. `issuerSigned.nameSpaces` embeds the tagged elements that can be selectively disclosed.
+- **Key differences** – SD-JWT is pure JSON/JWT with Base64URL disclosures; mDoc is CBOR/COSE with tagged elements and digests. Holder binding uses KB-JWT (`cnf`) for SD-JWT and `deviceKeyInfo` for mDoc. Presentations may be hex/base64 for mDoc, whereas SD-JWT stays URL-safe text.
 - **Examples**
-  - SD-JWT (conceptual):
+  - SD-JWT (presentation string):
     ```
-    <signed-jwt>~<disclosure1>~<disclosure2>
+    <signed-jwt>~<disclosure-1>~<disclosure-2>
     ```
-    The JWT payload includes hashes of the disclosed values; verifiers check the signature, then confirm each disclosure hash matches.
-  - mDoc (conceptual CBOR/COSE):
+  - mDoc (conceptual CBOR shape):
     ```
     {
       "version": "1.0",
@@ -25,7 +24,7 @@ Integration tests spin up Keycloak in a Testcontainer and exercise the complete 
         "issuerSigned": {
           "nameSpaces": {
             "org.iso.18013.5.1": [
-              { "digestID": 0, "elementIdentifier": "given_name", "elementValue": "Alice" }
+              h'D8184f'({ "digestID":0,"random":h'..',"elementIdentifier":"given_name","elementValue":"Alice" })
             ]
           },
           "issuerAuth": "COSE_Sign1(...)"
@@ -33,7 +32,7 @@ Integration tests spin up Keycloak in a Testcontainer and exercise the complete 
       }]
     }
     ```
-    Decoding `issuerAuth` reveals the MSO with `valueDigests` and `validityInfo`, which the COSE signature protects.
+    `issuerAuth` decodes to the MSO with `valueDigests` (hashes of the tagged elements) and `validityInfo`, which the COSE signature protects.
 
  ## Prerequisites
 
@@ -41,20 +40,20 @@ Integration tests spin up Keycloak in a Testcontainer and exercise the complete 
  - Maven 3.9+
  - Docker (for Keycloak and integration tests)
 
- ## Running Keycloak
+## Running Keycloak
 
-The repository contains a realm export that configures:
+The repository contains a realm export under `demo-app/config/keycloak/realm-export.json` that configures:
 
- - Realm `wallet-demo`
- - Client `wallet-mock`
+- Realm `wallet-demo`
+- Client `wallet-mock`
 - Client scopes `mock-identity-credential`, `mock-alternate-credential`, and `pid-credential` (PID SD-JWT with core claims like name, birthdate, nationality, address, document info)
 - Test users `test` / `test` and `test2` / `test2` with PID attributes filled for demos
 
-Start Keycloak:
+Start Keycloak (from the repo root, the compose file mounts `demo-app/config/keycloak`):
 
- ```bash
- docker compose up -d keycloak
- ```
+```bash
+docker compose up -d keycloak
+```
 
 Keycloak will be available on port 8080 of the host running Docker (for example http://your-hostname:8080) with admin credentials `admin` / `admin`.
 
@@ -63,7 +62,7 @@ Keycloak will be available on port 8080 of the host running Docker (for example 
 Export `KEYCLOAK_BASE_URL` to the reachable Keycloak base URL first (for Docker Compose on the same host: `http://localhost:8080`; for deployments: `https://your-keycloak.example.com`).
 
 ```bash
-mvn spring-boot:run
+mvn -pl demo-app -am spring-boot:run
 ```
 
 Visit your deployed host (for example http://your-hostname:3000) and:
@@ -107,9 +106,9 @@ sequenceDiagram
 
 ### Spec compliance and code map
 
-- **OID4VCI 1.0** – Credential proof building and issuance request body: `src/main/java/de/arbeitsagentur/keycloak/wallet/issuance/service/CredentialService.java`. Authorization details and scope handling: `src/main/java/de/arbeitsagentur/keycloak/wallet/issuance/oidc/OidcClient.java`.
-- **OID4VP 1.0 + DCQL** – Wallet-side presentation flow and consent: `src/main/java/de/arbeitsagentur/keycloak/wallet/demo/oid4vp/Oid4vpController.java`, request parsing/matching: `src/main/java/de/arbeitsagentur/keycloak/wallet/demo/oid4vp/PresentationService.java`, verifier endpoints: `src/main/java/de/arbeitsagentur/keycloak/wallet/verification/web/VerifierController.java`.
-- **PID Rulebook (urn:eudi:pid:1)** – PID credential scope and claim mapping defined in `config/keycloak/realm-export.json`; default DCQL query built in `src/main/java/de/arbeitsagentur/keycloak/wallet/verification/service/DcqlService.java` requests only `given_name` and `family_name`.
+- **OID4VCI 1.0** – Credential proof building and issuance request body: `wallet/src/main/java/de/arbeitsagentur/keycloak/wallet/issuance/service/CredentialService.java`. Authorization details and scope handling: `wallet/src/main/java/de/arbeitsagentur/keycloak/wallet/issuance/oidc/OidcClient.java`.
+- **OID4VP 1.0 + DCQL** – Wallet-side presentation flow and consent: `wallet/src/main/java/de/arbeitsagentur/keycloak/wallet/demo/oid4vp/Oid4vpController.java`, request parsing/matching: `wallet/src/main/java/de/arbeitsagentur/keycloak/wallet/demo/oid4vp/PresentationService.java`, verifier endpoints: `verifier/src/main/java/de/arbeitsagentur/keycloak/wallet/verification/web/VerifierController.java`.
+- **PID Rulebook (urn:eudi:pid:1)** – PID credential scope and claim mapping defined in `demo-app/config/keycloak/realm-export.json`; default DCQL query built in `verifier/src/main/java/de/arbeitsagentur/keycloak/wallet/verification/service/DcqlService.java` requests only `given_name` and `family_name`.
 
 ### Requesting and verifying a presentation (OID4VP)
 
@@ -121,7 +120,7 @@ sequenceDiagram
    - `dcql_query` (pasted into the verifier UI or provided via `DEFAULT_DCQL_QUERY` / `DCQL_QUERY_FILE`)
 2. **Wallet Authorization Endpoint** – If `VERIFIER_WALLET_AUTH_ENDPOINT` is unset, the request targets the built-in wallet (`/oid4vp/auth`). Otherwise, the same request is sent to the external wallet you configured.
 3. **Wallet Response** – The wallet evaluates the DCQL query against its credential store, selects matching SD-JWT credentials, and posts them back as the `vp_token` JSON object (`{ "<credential-id>": ["<dc+sd-jwt>", ...] }`) alongside `state`/`nonce`. DCQL already binds credentials to request IDs.
-4. **Verification** – `/verifier/callback` verifies `state`/`nonce`, validates the SD-JWT signature against the configured trust list (`src/main/resources/trust-list.json`), and recomputes the disclosure digests. Only issuers listed in the trust list (Keycloak by default) are accepted.
+4. **Verification** – `/verifier/callback` verifies `state`/`nonce`, validates the SD-JWT signature against the configured trust list (`verifier/src/main/resources/trust-list.json`), and recomputes the disclosure digests. Only issuers listed in the trust list (Keycloak by default) are accepted.
 
 ### Pointing the verifier at an external wallet
 
@@ -142,7 +141,7 @@ The verifier forwards the `dcql_query` verbatim, so any compliant OID4VP wallet 
 Mutual TLS is often required when the wallet calls an issuer. `RestClientConfig` wires an `HttpClient` that loads a client certificate if `WALLET_TLS_KEY_STORE` is configured. Supply a keystore so outbound HTTPS connections present the correct certificate:
 
 ```
-WALLET_TLS_KEY_STORE=config/holder-client.p12
+WALLET_TLS_KEY_STORE=demo-app/config/holder-client.p12
 WALLET_TLS_KEY_STORE_PASSWORD=changeit
 WALLET_TLS_KEY_STORE_TYPE=PKCS12
 ```
@@ -174,7 +173,7 @@ Optional DCQL helpers:
 - `credential_set` lets you narrow acceptable credentials by id/vct/format (array of objects such as `{ "id": "pid" }` or `{ "vct": "https://credentials.example.com/identity_credential" }`).
 - `claim_set` lets you express claim groups that must be satisfied together (array of objects like `{ "claims": [ { "path": ["given_name"] }, { "path": ["family_name"] } ] }`).
 
-The trust list anchors verification to the Keycloak realm certificate stored under `config/keycloak/keys/wallet-demo-ec-cert.pem` (ES256). Add further certificates to `src/main/resources/trust-list.json` when integrating additional issuers (for example, a sandbox or a production EUDI wallet).
+The trust list anchors verification to the Keycloak realm certificate stored under `demo-app/config/keycloak/keys/wallet-demo-ec-cert.pem` (ES256). Add further certificates to `verifier/src/main/resources/trust-list.json` when integrating additional issuers (for example, a sandbox or a production EUDI wallet).
 
 ### Using an external wallet
 
@@ -183,9 +182,9 @@ Set `VERIFIER_WALLET_AUTH_ENDPOINT` to the authorization endpoint of the wallet 
 ### Mock OID4VCI issuer with credential builder
 
 - Open `/mock-issuer` (or click “Issue with Mock Issuer” in the wallet) to build SD-JWT credentials without authenticating. Pick a credential configuration, fill the pre-configured claim fields, and preview the SD-JWT in encoded/decoded form.
-- Credential types and claims come from `mock-issuer.configurations` (`config/mock-issuer-configurations.json` by default; see `MockIssuerProperties`). You can create new credential types ad-hoc in the builder UI—they are persisted to that config file and instantly available.
+- Credential types and claims come from `mock-issuer.configurations` (`demo-app/config/mock-issuer-configurations.json` by default; see `MockIssuerProperties`). You can create new credential types ad-hoc in the builder UI—they are persisted to that config file and instantly available.
 - Generate a credential offer to receive a `pre-authorized_code`, `credential_offer_uri`, and `openid-credential-offer://` deep link. The mock issuer advertises metadata at `/mock-issuer/.well-known/openid-credential-issuer` and exposes `/mock-issuer/token`, `/mock-issuer/credential`, and `/mock-issuer/nonce`.
-- The mock issuer signs with `config/mock-issuer-keys.json`; the verifier can trust it by selecting the “Mock Issuer (local)” trust list from `src/main/resources/trust-list-mock.json`.
+- The mock issuer signs with `demo-app/config/mock-issuer-keys.json`; the verifier can trust it by selecting the “Mock Issuer (local)” trust list from `verifier/src/main/resources/trust-list-mock.json`.
 
  ### Configuration
 
@@ -198,7 +197,7 @@ OIDC_CLIENT_ID=wallet-mock
 OIDC_CLIENT_SECRET=secret-wallet
 CREDENTIAL_STORAGE_DIR=data/credentials
 WALLET_DID=did:example:mock-wallet
-WALLET_KEY_FILE=config/wallet-keys.json
+WALLET_KEY_FILE=demo-app/config/wallet-keys.json
 VERIFIER_CLIENT_ID=wallet-verifier
 VERIFIER_CLIENT_ID_SCHEME=pre-registered
 VERIFIER_WALLET_AUTH_ENDPOINT=
@@ -212,7 +211,7 @@ VERIFIER_MAX_REQUEST_OBJECT_INLINE_BYTES=12000
 Credential configurations and scopes are discovered from the issuer metadata (`credential_configurations_supported`); no manual list is maintained in `application.yml`.
 The built-in same-device demo wallet endpoints (`/oid4vp/auth`) stay enabled to support quick flows; point the verifier at an external wallet by setting `VERIFIER_WALLET_AUTH_ENDPOINT`.
 
-Mock issuer credential types live under `mock-issuer.configurations` (see `MockIssuerProperties`) and default to `config/mock-issuer-configurations.json`. Each entry defines `id`, `format`, `scope`, `name`, `vct`, and a list of `claims` (`name`, `label`, `defaultValue`, `required`). The builder UI renders only these claims, so you can lock the mock credentials to a known schema.
+Mock issuer credential types live under `mock-issuer.configurations` (see `MockIssuerProperties`) and default to `demo-app/config/mock-issuer-configurations.json`. Each entry defines `id`, `format`, `scope`, `name`, `vct`, and a list of `claims` (`name`, `label`, `defaultValue`, `required`). The builder UI renders only these claims, so you can lock the mock credentials to a known schema.
 
 ## Integration tests
 
@@ -230,11 +229,15 @@ Run `mvn verify -Paws-smoke -Daws.wallet.base-url=https://wallet.example.com/wal
 
 ## Project structure
 
-- `config/` – single home for key material (`wallet-keys.json`, `verifier-keys.json` for encryption + verifier_attestation/x509 PoP) and Keycloak assets (`keycloak/realm-export.json`, `keycloak/keys/…`, override verifier path via `VERIFIER_KEYS_FILE`)
-- `docker-compose.yml` – Keycloak setup with realm import
-- `src/main/java` – Spring Boot application (wallet controllers, OIDC helpers, credential issuer client, verifier, OID4VP handler)
-- `src/main/resources/templates` – Thymeleaf templates for wallet, verifier, and OID4VP submission
-- `src/test/java/de/arbeitsagentur/keycloak/wallet/WalletIntegrationTest.java` – Testcontainers-based system test
+- `demo-app/` – Spring Boot entry point aggregating all modules, integration tests, and runtime config defaults.
+- `demo-app/config/` – key material (`wallet-keys.json`, `verifier-keys.json`, mock-issuer keys/configs) and Keycloak assets (`keycloak/realm-export.json`, `keycloak/keys/...`).
+- `app-common/` – shared helpers (key handling, debug logging, wallet properties).
+- `sdjwt-lib/` – SD-JWT credential builder/parser/verifier and selective disclosure utilities.
+- `mdoc-lib/` – mDoc/CBOR credential builder/parser/verifier/viewer utilities.
+- `wallet/` – wallet issuance flow, credential storage, and OID4VP consent UI.
+- `mock-issuer/` – mock issuer API and credential builder UI.
+- `verifier/` – verifier endpoints, DCQL builder UI, trust-list handling.
+- `docker-compose.yml` – Keycloak setup with realm import (mounts `demo-app/config/keycloak`).
 
 ## Deploying to Kubernetes (AWS/EKS)
 
@@ -249,11 +252,11 @@ AWS_PROFILE=AccountAdministratorAccess-207613817683 helm upgrade --install walle
   --set wallet.image.tag=<wallet-image-tag> \
   --set keycloak.image.repository=<keycloak-image-repo> \
   --set keycloak.image.tag=<keycloak-image-tag> \
-  --set-file keycloak.realmJson=config/keycloak/realm-export.json \
-  --set-file wallet.files.walletKeys=config/wallet-keys.json \
-  --set-file wallet.files.verifierKeys=config/verifier-keys.json \
-  --set-file wallet.files.mockIssuerKeys=config/mock-issuer-keys.json \
-  --set-file wallet.files.mockIssuerConfigurations=config/mock-issuer-configurations.json
+  --set-file keycloak.realmJson=demo-app/config/keycloak/realm-export.json \
+  --set-file wallet.files.walletKeys=demo-app/config/wallet-keys.json \
+  --set-file wallet.files.verifierKeys=demo-app/config/verifier-keys.json \
+  --set-file wallet.files.mockIssuerKeys=demo-app/config/mock-issuer-keys.json \
+  --set-file wallet.files.mockIssuerConfigurations=demo-app/config/mock-issuer-configurations.json
 ```
 
 See `charts/eudi-wallet-demo/README.md` for the small set of remaining values (image tags, storage class, TLS/truststore, and host/ingress settings).
