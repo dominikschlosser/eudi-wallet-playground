@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.2.0...v1.3.0) (2025-12-04)
+
+
+### Features
+
+* support mDoc/MSO ([e2a754f](https://github.com/ba-itsys/eudi-wallet-playground/commit/e2a754f88b0c0d67655a5097c41f09dbe1223a95))
+
+
+### Bug Fixes
+
+* update action docker/login to v3 ([84a0848](https://github.com/ba-itsys/eudi-wallet-playground/commit/84a0848b7d512e448319ac95f4e2bb76410b327d))
+
 ## [1.2.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.1.0...v1.2.0) (2025-12-03)
 
 
