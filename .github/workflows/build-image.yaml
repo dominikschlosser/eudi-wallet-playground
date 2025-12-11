@@ -1,4 +1,4 @@
-name: Build and push image
+name: Build and push image to ghcr.io
 on:
   push:
     tags: '**'
@@ -9,6 +9,9 @@ jobs:
     # Run only for the ba-itsys organization
     if: github.repository_owner == 'ba-itsys'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
