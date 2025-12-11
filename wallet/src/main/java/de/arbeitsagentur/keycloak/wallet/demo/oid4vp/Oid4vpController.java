@@ -34,6 +34,7 @@ import com.nimbusds.jwt.JWT;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import com.nimbusds.jwt.JWTParser;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -46,6 +47,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.servlet.ModelAndView;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
+import org.springframework.web.util.UriComponentsBuilder;
 import jakarta.servlet.http.HttpSession;
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -75,6 +78,7 @@ public class Oid4vpController {
     private final DebugLogService debugLogService;
     private final SessionService sessionService;
     private final RestTemplate restTemplate;
+    private final String publicBaseUrl;
     private final SdJwtParser sdJwtParser;
     private static final String SESSION_REQUEST = "oid4vp_request";
     private static final String POST_LOGIN_REDIRECT = "postLoginRedirect";
@@ -85,7 +89,8 @@ public class Oid4vpController {
                             ObjectMapper objectMapper,
                             DebugLogService debugLogService,
                             SessionService sessionService,
-                            RestTemplate restTemplate) {
+                            RestTemplate restTemplate,
+                            @Value("${wallet.public-base-url:}") String publicBaseUrl) {
         this.presentationService = presentationService;
         this.walletKeyService = walletKeyService;
         this.walletProperties = walletProperties;
@@ -93,6 +98,7 @@ public class Oid4vpController {
         this.debugLogService = debugLogService;
         this.sessionService = sessionService;
         this.restTemplate = restTemplate;
+        this.publicBaseUrl = publicBaseUrl;
         this.sdJwtParser = new SdJwtParser(objectMapper);
     }
 
@@ -107,7 +113,8 @@ public class Oid4vpController {
                                    @RequestParam(name = "request", required = false) String requestObject,
                                    @RequestParam(name = "request_uri", required = false) String requestUri,
                                    @RequestParam(name = "client_cert", required = false) String clientCert,
-                                   HttpSession httpSession) {
+                                   HttpSession httpSession,
+                                   HttpServletRequest servletRequest) {
         WalletSession walletSession = sessionService.getSession(httpSession);
         String targetResponseUri = responseUri != null && !responseUri.isBlank() ? responseUri : redirectUri;
         PendingRequest pending;
@@ -165,11 +172,11 @@ public class Oid4vpController {
             );
         }
         httpSession.setAttribute(SESSION_REQUEST, pending);
-        httpSession.setAttribute(POST_LOGIN_REDIRECT, "/oid4vp/continue");
+        httpSession.setAttribute(POST_LOGIN_REDIRECT, continueUrl(servletRequest));
         if (walletSession == null || !walletSession.isAuthenticated()) {
             return new ModelAndView("redirect:/auth/login");
         }
-        return continuePending(httpSession);
+        return continuePending(httpSession, servletRequest);
     }
 
     @PostMapping("/oid4vp/consent")
@@ -249,14 +256,14 @@ public class Oid4vpController {
     }
 
     @GetMapping("/oid4vp/continue")
-    public ModelAndView continuePending(HttpSession httpSession) {
+    public ModelAndView continuePending(HttpSession httpSession, HttpServletRequest servletRequest) {
         PendingRequest pending = (PendingRequest) httpSession.getAttribute(SESSION_REQUEST);
         if (pending == null) {
             return errorView("Presentation request not found or expired");
         }
         WalletSession walletSession = sessionService.getSession(httpSession);
         if (walletSession == null || !walletSession.isAuthenticated()) {
-            httpSession.setAttribute(POST_LOGIN_REDIRECT, "/oid4vp/continue");
+            httpSession.setAttribute(POST_LOGIN_REDIRECT, continueUrl(servletRequest));
             return new ModelAndView("redirect:/auth/login");
         }
         var options = pending.options();
@@ -300,6 +307,28 @@ public class Oid4vpController {
             mv.addObject("userEmail", walletSession.getUserProfile().email());
         }
         return mv;
+    }
+
+    private String continueUrl(HttpServletRequest request) {
+        return UriComponentsBuilder.fromUri(currentBaseUri(request))
+                .path("/oid4vp/continue")
+                .build(true)
+                .toUriString();
+    }
+
+    private URI currentBaseUri(HttpServletRequest request) {
+        if (publicBaseUrl != null && !publicBaseUrl.isBlank()) {
+            URI base = URI.create(publicBaseUrl);
+            if (!base.getPath().endsWith("/")) {
+                return UriComponentsBuilder.fromUri(base).path("/").build(true).toUri();
+            }
+            return base;
+        }
+        URI base = URI.create(ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString());
+        if (!base.getPath().endsWith("/")) {
+            return UriComponentsBuilder.fromUri(base).path("/").build(true).toUri();
+        }
+        return base;
     }
 
     private ModelAndView errorView(String message) {

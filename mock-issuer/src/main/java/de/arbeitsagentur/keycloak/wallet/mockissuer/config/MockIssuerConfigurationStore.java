@@ -1,17 +1,19 @@
 package de.arbeitsagentur.keycloak.wallet.mockissuer.config;
 
-import tools.jackson.core.JacksonException;
-import tools.jackson.core.type.TypeReference;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -106,11 +108,26 @@ public class MockIssuerConfigurationStore {
     }
 
     private Optional<List<MockIssuerProperties.CredentialConfiguration>> loadFromFile(Path file) {
-        if (file == null || !Files.exists(file)) {
+        if (file == null) {
             return Optional.empty();
         }
+        JsonNode node = null;
+        boolean fromClasspath = false;
         try {
-            JsonNode node = objectMapper.readTree(file.toFile());
+            if (Files.exists(file)) {
+                node = objectMapper.readTree(file.toFile());
+            } else {
+                ClassPathResource resource = new ClassPathResource(file.toString());
+                if (resource.exists()) {
+                    fromClasspath = true;
+                    try (InputStream in = resource.getInputStream()) {
+                        node = objectMapper.readTree(in);
+                    }
+                } else {
+                    LOG.warn("Mock issuer configuration file {} not found on filesystem or classpath", file);
+                    return Optional.empty();
+                }
+            }
             JsonNode configsNode = node.isObject() ? node.get("configurations") : node;
             if (configsNode == null || !configsNode.isArray()) {
                 LOG.warn("Ignoring mock issuer configuration file {} because it does not contain an array", file);
@@ -123,9 +140,16 @@ public class MockIssuerConfigurationStore {
                 LOG.warn("Mock issuer configuration file {} is present but empty", file);
                 return Optional.empty();
             }
+            LOG.info("Loaded {} mock issuer credential configuration(s) from {}{}",
+                    parsed.size(),
+                    fromClasspath ? "classpath:" : "",
+                    file);
             return Optional.of(parsed);
         } catch (JacksonException e) {
             LOG.warn("Failed to read mock issuer configurations from {}", file, e);
+            return Optional.empty();
+        } catch (Exception e) {
+            LOG.warn("Failed to load mock issuer configuration file {}", file, e);
             return Optional.empty();
         }
     }

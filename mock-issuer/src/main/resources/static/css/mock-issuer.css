@@ -224,6 +224,7 @@ select {
   font-weight: 700;
   cursor: pointer;
   transition: all 0.2s ease;
+  appearance: none;
 }
 .section-tab:hover {
   border-color: #cbd5e1;
@@ -383,6 +384,9 @@ pre {
 }
 .is-hidden {
   display: none;
+}
+.builder.is-active {
+  display: block;
 }
 @media (max-width: 640px) {
   body {

@@ -70,7 +70,7 @@
         </div>
       </div>
 
-      <div class="builder" id="configuration-editor" data-section-block="configuration-editor">
+      <div class="builder is-hidden" id="configuration-editor" data-section-block="configuration-editor">
         <div class="builder-title">
           <div>
             <div class="muted">Define and save credential types</div>
@@ -131,7 +131,7 @@
         <div id="configuration-feedback" class="alert success" style="display:none;"></div>
       </div>
 
-      <div class="builder" id="credential-builder" data-section-block="credential-builder">
+      <div class="builder is-active" id="credential-builder" data-section-block="credential-builder">
         <div class="builder-title">
           <div>
             <div class="muted">Issue SD-JWT or mDoc credentials</div>
@@ -233,7 +233,8 @@
     <script th:inline="javascript">
       (() => {
         const issuer = /*[[${issuer}]]*/ "";
-        let configurationList = [...(/*[[${configurationData}]]*/ [])];
+        const initialConfigurations = /*[[${configurationData}]]*/ [];
+        let configurationList = Array.isArray(initialConfigurations) ? [...initialConfigurations] : [];
         let defaultConfigurationId = /*[[${defaultConfigurationId}]]*/ "";
         const configurationFile = /*[[${configurationFile}]]*/ "";
 
@@ -313,6 +314,7 @@
           sectionBlocks.forEach((block) => {
             const isActive = block.dataset.sectionBlock === sectionId;
             block.classList.toggle("is-hidden", !isActive);
+            block.classList.toggle("is-active", isActive);
             block.setAttribute("aria-hidden", isActive ? "false" : "true");
           });
         }

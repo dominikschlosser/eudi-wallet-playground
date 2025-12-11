@@ -1,0 +1,53 @@
+{
+  "configurations": [
+    {
+      "id": "mock-pid-sdjwt",
+      "format": "dc+sd-jwt",
+      "scope": "mock-identity-credential",
+      "name": "Mock PID (SD-JWT)",
+      "vct": "urn:example:pid:mock",
+      "claims": [
+        { "name": "given_name", "label": "Given name", "defaultValue": "Alice", "required": true },
+        { "name": "family_name", "label": "Family name", "defaultValue": "Holder", "required": true },
+        { "name": "birthdate", "label": "Birthdate", "defaultValue": "1990-01-01", "required": true },
+        { "name": "address.country", "label": "Country", "defaultValue": "DE", "required": true },
+        { "name": "document_number", "label": "Document number", "defaultValue": "DOC-MOCK-1234", "required": true },
+        { "name": "nationalities", "label": "Nationalities", "defaultValue": "[\"DE\"]", "required": false }
+      ]
+    },
+    {
+      "id": "mock-pid-mdoc",
+      "format": "mso_mdoc",
+      "scope": "mock-identity-mdoc",
+      "name": "Mock PID (mDoc)",
+      "vct": "urn:example:pid:mock",
+      "claims": [
+        { "name": "given_name", "label": "Given name", "defaultValue": "Alice", "required": true },
+        { "name": "family_name", "label": "Family name", "defaultValue": "Holder", "required": true },
+        { "name": "birthdate", "label": "Birthdate", "defaultValue": "1990-01-01", "required": true },
+        { "name": "address.country", "label": "Country", "defaultValue": "DE", "required": true },
+        { "name": "document_number", "label": "Document number", "defaultValue": "DOC-MOCK-1234", "required": true },
+        { "name": "nationalities", "label": "Nationalities", "defaultValue": "[\"DE\"]", "required": false }
+      ]
+    },
+    {
+      "id": "mock-mdl",
+      "format": "mso_mdoc",
+      "scope": "mock-mdl",
+      "name": "Mock mDL",
+      "vct": "org.iso.18013.5.1.mDL",
+      "claims": [
+        { "name": "family_name", "label": "Family name", "defaultValue": "Holder", "required": true },
+        { "name": "given_name", "label": "Given name", "defaultValue": "Alice", "required": true },
+        { "name": "birth_date", "label": "Birthdate", "defaultValue": "1990-01-01", "required": true },
+        { "name": "issue_date", "label": "Issue date", "defaultValue": "2024-01-01", "required": true },
+        { "name": "expiry_date", "label": "Expiry date", "defaultValue": "2034-01-01", "required": true },
+        { "name": "issuing_country", "label": "Issuing country (ISO 3166-1 alpha-3)", "defaultValue": "DEU", "required": true },
+        { "name": "issuing_authority", "label": "Issuing authority", "defaultValue": "Example Authority", "required": true },
+        { "name": "document_number", "label": "Document number", "defaultValue": "MDL-EXAMPLE-1234", "required": true },
+        { "name": "driving_privileges", "label": "Driving privileges (JSON)", "defaultValue": "[{\"vehicle_category_code\":\"B\",\"issue_date\":\"2024-01-01\",\"expiry_date\":\"2034-01-01\",\"codes\":[]}]", "required": true },
+        { "name": "portrait", "label": "Portrait (base64)", "defaultValue": "portrait-placeholder-base64", "required": false }
+      ]
+    }
+  ]
+}
