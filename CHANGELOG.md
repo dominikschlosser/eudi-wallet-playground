@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.1](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.3.0...v1.3.1) (2025-12-11)
+
+
+### Bug Fixes
+
+* also build modules ([95f797d](https://github.com/ba-itsys/eudi-wallet-playground/commit/95f797d5c4c347fbbef487c576b054149f5c3d18))
+* **ci:** use GitHub App token in release-please workflow ([28a692f](https://github.com/ba-itsys/eudi-wallet-playground/commit/28a692f0f6d8fade8beb877cd75da3f31c96bfab))
+* **ci:** use GitHub App token in release-please workflow ([a545a2f](https://github.com/ba-itsys/eudi-wallet-playground/commit/a545a2fb7757c84a62fc6e2f8168593068242dba))
+
 ## [1.3.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.2.0...v1.3.0) (2025-12-04)
 
 
