@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.3.4...v1.4.0) (2026-01-15)
+
+
+### Features
+
+* OIDF conformance test, keycloak verifier, HAIP support, DC-API Chrome extension ([5496e45](https://github.com/ba-itsys/eudi-wallet-playground/commit/5496e455a9fa076bb78c1fe911dba09c3e206443))
+
 ## [1.3.4](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.3.3...v1.3.4) (2025-12-11)
 
 
