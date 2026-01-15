@@ -3,7 +3,7 @@
     <parent>
         <groupId>de.arbeitagentur.opdt</groupId>
         <artifactId>eudi-wallet-playground</artifactId>
-        <version>1.4.0</version>
+        <version>1.4.1-SNAPSHOT</version>
     </parent>
     <artifactId>sdjwt-lib</artifactId>
     <packaging>jar</packaging>
