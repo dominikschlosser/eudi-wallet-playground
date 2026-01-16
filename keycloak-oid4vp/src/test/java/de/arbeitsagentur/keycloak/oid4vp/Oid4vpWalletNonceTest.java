@@ -15,9 +15,21 @@
  */
 package de.arbeitsagentur.keycloak.oid4vp;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.SingleUseObjectProvider;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Tests for wallet_nonce support in OID4VP redirect flow.
@@ -25,6 +37,40 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the verifier MUST return a new request object containing the wallet_nonce claim.
  */
 class Oid4vpWalletNonceTest {
+
+    private KeycloakSession session;
+    private SingleUseObjectProvider singleUseProvider;
+    private Map<String, Map<String, String>> inMemoryStore;
+
+    @BeforeEach
+    void setUp() {
+        session = mock(KeycloakSession.class);
+        singleUseProvider = mock(SingleUseObjectProvider.class);
+        inMemoryStore = new ConcurrentHashMap<>();
+
+        when(session.singleUseObjects()).thenReturn(singleUseProvider);
+
+        // Mock put to store in memory
+        doAnswer(invocation -> {
+            String key = invocation.getArgument(0);
+            @SuppressWarnings("unchecked")
+            Map<String, String> notes = invocation.getArgument(2);
+            inMemoryStore.put(key, new ConcurrentHashMap<>(notes));
+            return null;
+        }).when(singleUseProvider).put(anyString(), anyLong(), anyMap());
+
+        // Mock get to retrieve and remove from memory
+        when(singleUseProvider.get(anyString())).thenAnswer(invocation -> {
+            String key = invocation.getArgument(0);
+            return inMemoryStore.remove(key);
+        });
+
+        // Mock remove
+        when(singleUseProvider.remove(anyString())).thenAnswer(invocation -> {
+            String key = invocation.getArgument(0);
+            return inMemoryStore.remove(key) != null;
+        });
+    }
 
     @Test
     void testRequestObjectStoreWithRebuildParams() {
@@ -41,6 +87,7 @@ class Oid4vpWalletNonceTest {
         );
 
         String id = store.store(
+                session,
                 "jwt-content",
                 "encryption-key-json",
                 "state123",
@@ -52,7 +99,7 @@ class Oid4vpWalletNonceTest {
 
         assertThat(id).isNotNull();
 
-        Oid4vpRequestObjectStore.StoredRequestObject stored = store.resolve(id);
+        Oid4vpRequestObjectStore.StoredRequestObject stored = store.resolve(session, id);
         assertThat(stored).isNotNull();
         assertThat(stored.requestObjectJwt()).isEqualTo("jwt-content");
         assertThat(stored.encryptionKeyJson()).isEqualTo("encryption-key-json");
@@ -75,9 +122,9 @@ class Oid4vpWalletNonceTest {
         Oid4vpRequestObjectStore store = new Oid4vpRequestObjectStore();
 
         // Use the old store method without rebuildParams
-        String id = store.store("jwt", "enc-key", "state", "nonce");
+        String id = store.store(session, "jwt", "enc-key", "state", "nonce");
 
-        Oid4vpRequestObjectStore.StoredRequestObject stored = store.resolve(id);
+        Oid4vpRequestObjectStore.StoredRequestObject stored = store.resolve(session, id);
         assertThat(stored).isNotNull();
         assertThat(stored.requestObjectJwt()).isEqualTo("jwt");
         assertThat(stored.encryptionKeyJson()).isEqualTo("enc-key");
@@ -91,9 +138,9 @@ class Oid4vpWalletNonceTest {
         Oid4vpRequestObjectStore store = new Oid4vpRequestObjectStore();
 
         // Use the store method with session info but without rebuildParams
-        String id = store.store("jwt", "enc-key", "state", "nonce", "root-session", "client");
+        String id = store.store(session, "jwt", "enc-key", "state", "nonce", "root-session", "client");
 
-        Oid4vpRequestObjectStore.StoredRequestObject stored = store.resolve(id);
+        Oid4vpRequestObjectStore.StoredRequestObject stored = store.resolve(session, id);
         assertThat(stored).isNotNull();
         assertThat(stored.rootSessionId()).isEqualTo("root-session");
         assertThat(stored.clientId()).isEqualTo("client");
@@ -108,19 +155,19 @@ class Oid4vpWalletNonceTest {
                 "client-id", "plain", "response-uri", null, null, null, null
         );
 
-        store.store("jwt1", "enc1", "state-A", "nonce1", null, null, rebuildParams);
-        store.store("jwt2", "enc2", "state-B", "nonce2", null, null, rebuildParams);
+        store.store(session, "jwt1", "enc1", "state-A", "nonce1", null, null, rebuildParams);
+        store.store(session, "jwt2", "enc2", "state-B", "nonce2", null, null, rebuildParams);
 
-        Oid4vpRequestObjectStore.StoredRequestObject foundA = store.resolveByState("state-A");
+        Oid4vpRequestObjectStore.StoredRequestObject foundA = store.resolveByState(session, "state-A");
         assertThat(foundA).isNotNull();
         assertThat(foundA.requestObjectJwt()).isEqualTo("jwt1");
         assertThat(foundA.rebuildParams()).isNotNull();
 
-        Oid4vpRequestObjectStore.StoredRequestObject foundB = store.resolveByState("state-B");
+        Oid4vpRequestObjectStore.StoredRequestObject foundB = store.resolveByState(session, "state-B");
         assertThat(foundB).isNotNull();
         assertThat(foundB.requestObjectJwt()).isEqualTo("jwt2");
 
-        Oid4vpRequestObjectStore.StoredRequestObject notFound = store.resolveByState("state-C");
+        Oid4vpRequestObjectStore.StoredRequestObject notFound = store.resolveByState(session, "state-C");
         assertThat(notFound).isNull();
     }
 

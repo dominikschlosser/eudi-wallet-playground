@@ -26,7 +26,7 @@ import com.nimbusds.jose.jwk.JWK;
 import com.upokecenter.cbor.CBOREncodeOptions;
 import com.upokecenter.cbor.CBORObject;
 import com.upokecenter.cbor.CBORType;
-import de.arbeitsagentur.keycloak.wallet.common.util.HexUtils;
+import de.arbeitsagentur.keycloak.wallet.mdoc.util.HexUtils;
 import de.arbeitsagentur.keycloak.wallet.common.credential.CredentialBuildResult;
 
 import java.security.MessageDigest;

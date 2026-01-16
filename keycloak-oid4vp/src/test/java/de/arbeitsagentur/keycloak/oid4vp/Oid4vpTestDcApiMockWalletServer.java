@@ -81,7 +81,7 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
     private static final String GERMAN_PID_VCT = "urn:eudi:pid:de:1";
 
     // Verifier-issued user credential (for user matching after initial registration)
-    private static final String VERIFIER_USER_CREDENTIAL_VCT = "urn:verifier:user_credential:1";
+    private static final String VERIFIER_USER_CREDENTIAL_VCT = "urn:arbeitsagentur:user_credential:1";
 
     // Default PID claim values
     private static final String DEFAULT_FAMILY_NAME = "Mustermann";
@@ -101,7 +101,7 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
     private final MdocCredentialBuilder mdocCredentialBuilder;
     private final MdocDeviceResponseBuilder mdocDeviceResponseBuilder;
     private final ECKey issuerKey;
-    private final ECKey holderKey;
+    private ECKey holderKey; // Can be replaced with external key for OID4VCI flow
     private final AtomicInteger requestCount = new AtomicInteger();
     private volatile String lastResponseUri;
     private volatile String lastResponseMode;
@@ -225,6 +225,54 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
     void clearSimulatedCredentials() {
         LOG.info("[MockWallet] Clearing simulated credentials");
         this.nextVerifierUserId.set(null);
+        this.issuedUserCredential.set(null);
+    }
+
+    // Storage for actually issued credentials via OID4VCI
+    private final AtomicReference<String> issuedUserCredential = new AtomicReference<>();
+
+    /**
+     * Store a credential that was issued via OID4VCI.
+     * This credential will be presented in subsequent multi-credential responses.
+     *
+     * @param sdJwtCredential The issued SD-JWT credential (without key binding JWT)
+     */
+    void storeIssuedCredential(String sdJwtCredential) {
+        LOG.info("[MockWallet] Storing issued credential (length: {})", sdJwtCredential != null ? sdJwtCredential.length() : 0);
+        this.issuedUserCredential.set(sdJwtCredential);
+    }
+
+    /**
+     * Check if the wallet has an issued credential stored.
+     */
+    boolean hasIssuedCredential() {
+        return this.issuedUserCredential.get() != null;
+    }
+
+    /**
+     * Get the stored issued credential.
+     */
+    String getIssuedCredential() {
+        return this.issuedUserCredential.get();
+    }
+
+    /**
+     * Set the holder key to use for credential presentations.
+     * This allows sharing the key with an OID4VCI client so that
+     * credentials issued via OID4VCI can be properly presented with key binding.
+     *
+     * @param holderKey The EC key to use for holder proof
+     */
+    void setHolderKey(ECKey holderKey) {
+        LOG.info("[MockWallet] Setting external holder key: {}", holderKey.getKeyID());
+        this.holderKey = holderKey;
+    }
+
+    /**
+     * Get the current holder key (public part only).
+     */
+    ECKey getHolderPublicKey() {
+        return this.holderKey.toPublicJWK();
     }
 
     @Override
@@ -331,7 +379,9 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
         String dcqlQuery = params.get("dcql_query");
         boolean multiCredential = isMultiCredentialRequired(dcqlQuery);
         String verifierUserId = nextVerifierUserId.getAndSet(null);
-        LOG.info("[MockWallet] Multi-credential mode: {}, verifierUserId: {}", multiCredential, verifierUserId);
+        boolean hasIssuedCredential = issuedUserCredential.get() != null;
+        LOG.info("[MockWallet] Multi-credential mode: {}, verifierUserId: {}, hasIssuedCredential: {}",
+                multiCredential, verifierUserId, hasIssuedCredential);
 
         Map<String, String> fields = new LinkedHashMap<>();
         if (encrypted) {
@@ -343,7 +393,7 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
                             "error_description", errorDesc != null ? errorDesc : "",
                             "state", state
                     ));
-                } else if (multiCredential && verifierUserId != null) {
+                } else if (multiCredential && (verifierUserId != null || hasIssuedCredential)) {
                     // Build multi-credential VP token
                     Map<String, List<String>> vpTokenMap = buildMultiCredentialVpToken(dcqlQuery, nonce, audience, verifierUserId);
                     payload = objectMapper.writeValueAsString(Map.of("vp_token", vpTokenMap, "state", state));
@@ -365,7 +415,7 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
             if (errorDesc != null && !errorDesc.isBlank()) {
                 fields.put("error_description", errorDesc);
             }
-        } else if (multiCredential && verifierUserId != null) {
+        } else if (multiCredential && (verifierUserId != null || hasIssuedCredential)) {
             // Build multi-credential VP token
             Map<String, List<String>> vpTokenMap = buildMultiCredentialVpToken(dcqlQuery, nonce, audience, verifierUserId);
             fields.put("state", state);
@@ -901,6 +951,54 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
     }
 
     /**
+     * Add key binding JWT to an existing SD-JWT credential.
+     * This is used for credentials issued via OID4VCI that need to be presented with proof of possession.
+     *
+     * @param sdJwtCredential The SD-JWT credential (issuer JWT + disclosures, no key binding)
+     * @param nonce The nonce for key binding
+     * @param audience The audience for the presentation
+     * @return The credential with key binding JWT appended
+     */
+    private String addKeyBindingToCredential(String sdJwtCredential, String nonce, String audience) {
+        try {
+            // Parse the SD-JWT to get its parts
+            SdJwtUtils.SdJwtParts parts = sdJwtParser.split(sdJwtCredential);
+
+            // Compute the sd_hash
+            String sdHash = SdJwtUtils.computeSdHash(parts, objectMapper);
+
+            // Build the key binding JWT
+            JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.ES256)
+                    .type(new JOSEObjectType("kb+jwt"))
+                    .keyID(holderKey.getKeyID())
+                    .build();
+            JWTClaimsSet claimsSet = new JWTClaimsSet.Builder()
+                    .audience(audience)
+                    .issueTime(Date.from(Instant.now()))
+                    .expirationTime(Date.from(Instant.now().plusSeconds(300)))
+                    .claim("nonce", nonce)
+                    .claim("sd_hash", sdHash)
+                    .build();
+            SignedJWT kbJwt = new SignedJWT(header, claimsSet);
+            kbJwt.sign(new ECDSASigner(holderKey));
+
+            // Rebuild the credential with key binding
+            String rebuilt = parts.signedJwt();
+            if (parts.disclosures() != null) {
+                for (String disclosure : parts.disclosures()) {
+                    if (disclosure != null && !disclosure.isBlank()) {
+                        rebuilt = rebuilt + "~" + disclosure;
+                    }
+                }
+            }
+            return rebuilt + "~" + kbJwt.serialize();
+        } catch (Exception e) {
+            LOG.error("[MockWallet] Failed to add key binding to credential: {}", e.getMessage(), e);
+            throw new IllegalStateException("Failed to add key binding to credential", e);
+        }
+    }
+
+    /**
      * Build a multi-credential VP token for DCQL queries that require multiple credentials.
      * Returns a map of credential ID to list of credentials (OID4VP format).
      *
@@ -937,8 +1035,17 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
                     credential = buildGermanPidPresentation(nonce, audience);
                     LOG.info("[MockWallet] Built German PID credential for id: {}", credId);
                 } else if (vct.equals(VERIFIER_USER_CREDENTIAL_VCT)) {
-                    credential = buildVerifierUserCredentialPresentation(nonce, audience, userId);
-                    LOG.info("[MockWallet] Built verifier user credential for id: {}", credId);
+                    // Check if we have a real OID4VCI-issued credential stored
+                    String storedCredential = issuedUserCredential.get();
+                    if (storedCredential != null && !storedCredential.isBlank()) {
+                        credential = addKeyBindingToCredential(storedCredential, nonce, audience);
+                        LOG.info("[MockWallet] Using stored OID4VCI-issued credential with key binding for id: {}", credId);
+                    } else if (userId != null) {
+                        credential = buildVerifierUserCredentialPresentation(nonce, audience, userId);
+                        LOG.info("[MockWallet] Built simulated verifier user credential for id: {}", credId);
+                    } else {
+                        LOG.warn("[MockWallet] No stored credential and no userId for verifier user credential");
+                    }
                 } else if (vct.equals(PID_VCT_SD_JWT)) {
                     // Use the standard PID builder
                     Set<String> requestedClaims = extractRequestedClaims(dcqlQuery, "dc+sd-jwt");

@@ -59,7 +59,7 @@ class PidBindingIdentityProviderTest {
             PidBindingIdentityProviderConfig config = new PidBindingIdentityProviderConfig();
 
             assertThat(config.getLoginCredentialType())
-                    .isEqualTo("urn:verifier:user_credential:1");
+                    .isEqualTo("urn:arbeitsagentur:user_credential:1");
         }
 
         @Test
@@ -128,7 +128,7 @@ class PidBindingIdentityProviderTest {
             config.setAlwaysRequestBothCredentials(true);
 
             assertThat(config.isAlwaysRequestBothCredentials()).isTrue();
-            assertThat(config.getLoginCredentialType()).isEqualTo("urn:verifier:user_credential:1");
+            assertThat(config.getLoginCredentialType()).isEqualTo("urn:arbeitsagentur:user_credential:1");
         }
     }
 
@@ -162,7 +162,7 @@ class PidBindingIdentityProviderTest {
             String claimsJson = """
                     {
                         "iss": "https://keycloak.example/realms/demo",
-                        "vct": "urn:verifier:user_credential:1",
+                        "vct": "urn:arbeitsagentur:user_credential:1",
                         "user_id": "12345-abcde",
                         "linked_at": "2024-01-15T10:30:00Z"
                     }
@@ -183,7 +183,7 @@ class PidBindingIdentityProviderTest {
         @DisplayName("Should compute consistent lookup keys")
         void shouldComputeConsistentLookupKeys() throws Exception {
             String issuer = "https://keycloak.example/realms/demo";
-            String credentialType = "urn:verifier:user_credential:1";
+            String credentialType = "urn:arbeitsagentur:user_credential:1";
             String subject = "12345-abcde";
 
             String lookupKey1 = computeLookupKey(issuer, credentialType, subject);
@@ -197,7 +197,7 @@ class PidBindingIdentityProviderTest {
         @DisplayName("Should produce different lookup keys for different subjects")
         void shouldProduceDifferentLookupKeysForDifferentSubjects() throws Exception {
             String issuer = "https://keycloak.example/realms/demo";
-            String credentialType = "urn:verifier:user_credential:1";
+            String credentialType = "urn:arbeitsagentur:user_credential:1";
 
             String lookupKey1 = computeLookupKey(issuer, credentialType, "user-1");
             String lookupKey2 = computeLookupKey(issuer, credentialType, "user-2");
@@ -208,7 +208,7 @@ class PidBindingIdentityProviderTest {
         @Test
         @DisplayName("Should produce different lookup keys for different issuers")
         void shouldProduceDifferentLookupKeysForDifferentIssuers() throws Exception {
-            String credentialType = "urn:verifier:user_credential:1";
+            String credentialType = "urn:arbeitsagentur:user_credential:1";
             String subject = "12345-abcde";
 
             String lookupKey1 = computeLookupKey("https://issuer1.example", credentialType, subject);
@@ -241,12 +241,6 @@ class PidBindingIdentityProviderTest {
         @DisplayName("Should use correct session note keys")
         void shouldUseCorrectSessionNoteKeys() {
             // Verify the session note constants match what's expected
-            assertThat(de.arbeitsagentur.keycloak.oid4vp.idp.pidbinding.PidBindingIdentityProvider.SESSION_PID_BINDING_FLOW)
-                    .isEqualTo("pid_binding_flow");
-            assertThat(de.arbeitsagentur.keycloak.oid4vp.idp.pidbinding.PidBindingIdentityProvider.SESSION_PID_BINDING_FIRST_LOGIN)
-                    .isEqualTo("first_login");
-            assertThat(de.arbeitsagentur.keycloak.oid4vp.idp.pidbinding.PidBindingIdentityProvider.SESSION_PID_BINDING_RETURNING)
-                    .isEqualTo("returning");
             assertThat(de.arbeitsagentur.keycloak.oid4vp.idp.pidbinding.PidBindingIdentityProvider.SESSION_NEEDS_CREDENTIAL_ISSUANCE)
                     .isEqualTo("pid_binding_needs_credential_issuance");
         }

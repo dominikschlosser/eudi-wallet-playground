@@ -159,23 +159,6 @@
       "required" : false
     } ]
   }, {
-    "id" : "verifier_user_credential",
-    "format" : "dc+sd-jwt",
-    "scope" : "verifier_user_credential",
-    "name" : "Verifier User Credential",
-    "vct" : "urn:verifier:user_credential:1",
-    "claims" : [ {
-      "name" : "user_id",
-      "label" : "User ID (Keycloak User ID)",
-      "defaultValue" : "test-user-123",
-      "required" : true
-    }, {
-      "name" : "linked_at",
-      "label" : "Linked At (ISO timestamp)",
-      "defaultValue" : "2024-01-01T00:00:00Z",
-      "required" : true
-    } ]
-  }, {
     "id" : "eu.europa.ec.eudi.pid_mso_mdoc",
     "format" : "mso_mdoc",
     "scope" : "eu.europa.ec.eudi.pid_mso_mdoc",

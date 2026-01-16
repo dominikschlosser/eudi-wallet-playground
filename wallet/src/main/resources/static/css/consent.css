@@ -190,3 +190,62 @@ pre {
   letter-spacing: 0.05em;
   font-weight: 700;
 }
+
+/* Include checkbox styling */
+.include-checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+  padding-top: 0.25rem;
+}
+.include-checkbox input {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+  height: 0;
+  width: 0;
+}
+.include-checkbox .checkmark {
+  height: 24px;
+  width: 24px;
+  background-color: rgba(15, 23, 42, 0.6);
+  border: 2px solid rgba(56, 189, 248, 0.5);
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+.include-checkbox:hover .checkmark {
+  border-color: #38bdf8;
+  background-color: rgba(56, 189, 248, 0.1);
+}
+.include-checkbox input:checked ~ .checkmark {
+  background-color: #38bdf8;
+  border-color: #38bdf8;
+}
+.include-checkbox .checkmark:after {
+  content: "";
+  position: absolute;
+  display: none;
+}
+.include-checkbox input:checked ~ .checkmark:after {
+  display: block;
+}
+.include-checkbox .checkmark:after {
+  left: 9px;
+  top: 5px;
+  width: 6px;
+  height: 12px;
+  border: solid #0b1224;
+  border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg);
+}
+
+/* Dim excluded credentials */
+.descriptor:has(.credential-include-toggle:not(:checked)) {
+  opacity: 0.5;
+}
+.descriptor:has(.credential-include-toggle:not(:checked)) .disclosed {
+  pointer-events: none;
+}

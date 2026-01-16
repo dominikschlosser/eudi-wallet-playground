@@ -39,7 +39,7 @@ public class PidBindingIdentityProviderConfig extends Oid4vpIdentityProviderConf
 
     // Login credential type issued by this verifier
     public static final String LOGIN_CREDENTIAL_TYPE = "loginCredentialType";
-    public static final String DEFAULT_LOGIN_CREDENTIAL_TYPE = "urn:verifier:user_credential:1";
+    public static final String DEFAULT_LOGIN_CREDENTIAL_TYPE = "urn:arbeitsagentur:user_credential:1";
 
     // Credential issuer URL for OID4VCI credential issuance
     public static final String CREDENTIAL_ISSUER_URL = "credentialIssuerUrl";
@@ -47,6 +47,18 @@ public class PidBindingIdentityProviderConfig extends Oid4vpIdentityProviderConf
     // Credential configuration ID to use for issuance
     public static final String CREDENTIAL_CONFIGURATION_ID = "credentialConfigurationId";
     public static final String DEFAULT_CREDENTIAL_CONFIGURATION_ID = "user-binding-credential";
+
+    // OID4VCI client ID (must be a client with oid4vci.enabled=true)
+    public static final String OID4VCI_CLIENT_ID = "oid4vciClientId";
+    public static final String DEFAULT_OID4VCI_CLIENT_ID = "pid-binding-wallet";
+
+    // Wallet URL for same-device credential issuance (OID4VCI)
+    // Options:
+    //   - "native" or empty: Use openid-credential-offer:// URI directly (for mobile wallets)
+    //   - Web URL (e.g., http://localhost:3000/wallet): Wrap offer in web wallet URL
+    public static final String CREDENTIAL_ISSUANCE_WALLET_URL = "credentialIssuanceWalletUrl";
+    public static final String DEFAULT_CREDENTIAL_ISSUANCE_WALLET_URL = "http://localhost:3000/wallet";
+    public static final String NATIVE_WALLET_URL = "native";
 
     // Whether to always request both credentials (even for potential first-time users)
     // When false, first request PID only, then on subsequent logins request both
@@ -79,7 +91,7 @@ public class PidBindingIdentityProviderConfig extends Oid4vpIdentityProviderConf
 
     /**
      * Get the login credential type (VCT for the credential issued by this verifier).
-     * Default: urn:verifier:user_credential:1
+     * Default: urn:arbeitsagentur:user_credential:1
      */
     public String getLoginCredentialType() {
         String value = getConfig().get(LOGIN_CREDENTIAL_TYPE);
@@ -113,6 +125,44 @@ public class PidBindingIdentityProviderConfig extends Oid4vpIdentityProviderConf
 
     public void setCredentialConfigurationId(String credentialConfigurationId) {
         getConfig().put(CREDENTIAL_CONFIGURATION_ID, credentialConfigurationId);
+    }
+
+    /**
+     * Get the OID4VCI client ID for pre-authorized code flow.
+     * This client must have oid4vci.enabled=true in Keycloak.
+     * Default: pid-binding-wallet
+     */
+    public String getOid4vciClientId() {
+        String value = getConfig().get(OID4VCI_CLIENT_ID);
+        return value != null && !value.isBlank() ? value : DEFAULT_OID4VCI_CLIENT_ID;
+    }
+
+    public void setOid4vciClientId(String clientId) {
+        getConfig().put(OID4VCI_CLIENT_ID, clientId);
+    }
+
+    /**
+     * Get the wallet URL for same-device credential issuance.
+     * This URL should open the wallet app with credential offer handling.
+     * Default: http://localhost:3000/wallet
+     * Set to "native" to use openid-credential-offer:// URI directly.
+     */
+    public String getCredentialIssuanceWalletUrl() {
+        String value = getConfig().get(CREDENTIAL_ISSUANCE_WALLET_URL);
+        return value != null && !value.isBlank() ? value : DEFAULT_CREDENTIAL_ISSUANCE_WALLET_URL;
+    }
+
+    /**
+     * Check if native wallet mode is enabled.
+     * When true, the openid-credential-offer:// URI is used directly.
+     */
+    public boolean isNativeWalletMode() {
+        String value = getConfig().get(CREDENTIAL_ISSUANCE_WALLET_URL);
+        return NATIVE_WALLET_URL.equalsIgnoreCase(value);
+    }
+
+    public void setCredentialIssuanceWalletUrl(String walletUrl) {
+        getConfig().put(CREDENTIAL_ISSUANCE_WALLET_URL, walletUrl);
     }
 
     /**

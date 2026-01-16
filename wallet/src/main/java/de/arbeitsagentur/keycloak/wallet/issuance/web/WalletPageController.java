@@ -19,6 +19,7 @@ import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.issuance.oidc.OidcClient;
 import de.arbeitsagentur.keycloak.wallet.issuance.service.CredentialService;
 import de.arbeitsagentur.keycloak.wallet.issuance.service.MockIssuerFlowService;
+import de.arbeitsagentur.keycloak.wallet.issuance.service.Oid4vciClientService;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.SessionService;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.TokenSet;
 import de.arbeitsagentur.keycloak.wallet.issuance.session.WalletSession;
@@ -48,6 +49,8 @@ import java.util.stream.Collectors;
 
 @Controller
 public class WalletPageController {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(WalletPageController.class);
+
     private final SessionService sessionService;
     private final CredentialStore credentialStore;
     private final CredentialService credentialService;
@@ -58,6 +61,7 @@ public class WalletPageController {
     private final DebugLogService debugLogService;
     private final MockIssuerFlowService mockIssuerFlowService;
     private final MockIssuerConfigurationStore mockIssuerConfigurationStore;
+    private final Oid4vciClientService oid4vciClientService;
 
     public WalletPageController(SessionService sessionService,
                                 CredentialStore credentialStore,
@@ -66,7 +70,8 @@ public class WalletPageController {
                                 ObjectMapper objectMapper,
                                 DebugLogService debugLogService,
                                 MockIssuerFlowService mockIssuerFlowService,
-                                MockIssuerConfigurationStore mockIssuerConfigurationStore) {
+                                MockIssuerConfigurationStore mockIssuerConfigurationStore,
+                                Oid4vciClientService oid4vciClientService) {
         this.sessionService = sessionService;
         this.credentialStore = credentialStore;
         this.credentialService = credentialService;
@@ -77,11 +82,31 @@ public class WalletPageController {
         this.debugLogService = debugLogService;
         this.mockIssuerFlowService = mockIssuerFlowService;
         this.mockIssuerConfigurationStore = mockIssuerConfigurationStore;
+        this.oid4vciClientService = oid4vciClientService;
     }
 
     @GetMapping({"/", "/wallet"})
-    public String wallet(Model model, HttpSession httpSession) {
+    public String wallet(Model model, HttpSession httpSession,
+                         @RequestParam(value = "credentialOffer", required = false) String credentialOffer) {
         WalletSession session = sessionService.getSession(httpSession);
+
+        // Handle credential offer if present (OID4VCI same-device flow)
+        if (credentialOffer != null && !credentialOffer.isBlank()) {
+            LOG.info("[Wallet] Received credential offer: {}", credentialOffer.substring(0, Math.min(100, credentialOffer.length())) + "...");
+            try {
+                String ownerId = session.isAuthenticated() && session.getUserProfile() != null
+                        ? session.getUserProfile().sub()
+                        : CredentialStore.MOCK_ISSUER_OWNER;
+                Oid4vciClientService.CredentialReceiveResult result = oid4vciClientService.receiveCredential(credentialOffer, ownerId);
+                model.addAttribute("message", "Credential received successfully from " + result.issuerUrl());
+                LOG.info("[Wallet] Successfully received credential: configId={}, issuer={}",
+                        result.configurationId(), result.issuerUrl());
+            } catch (Exception e) {
+                LOG.error("[Wallet] Failed to receive credential", e);
+                model.addAttribute("error", "Failed to receive credential: " + e.getMessage());
+            }
+        }
+
         IssuerAvailability issuerAvailability = resolveIssuerAvailability();
         model.addAttribute("session", session);
         model.addAttribute("authenticated", session.isAuthenticated());
@@ -104,7 +129,7 @@ public class WalletPageController {
         WalletSession session = sessionService.getSession(httpSession);
         if (!session.isAuthenticated()) {
             model.addAttribute("error", "Not authenticated");
-            return wallet(model, httpSession);
+            return wallet(model, httpSession, null);
         }
         TokenSet tokens = session.getTokenSet();
         if (tokens != null && tokens.needsRefresh()) {
@@ -114,13 +139,13 @@ public class WalletPageController {
                 session.setTokenSet(null);
                 session.setUserProfile(null);
                 model.addAttribute("error", "Session expired. Please sign in again.");
-                return wallet(model, httpSession);
+                return wallet(model, httpSession, null);
             }
             session.setTokenSet(tokens);
         }
         if (tokens == null) {
             model.addAttribute("error", "Missing tokens");
-            return wallet(model, httpSession);
+            return wallet(model, httpSession, null);
         }
         try {
             credentialService.issueCredential(
@@ -133,7 +158,7 @@ public class WalletPageController {
         } catch (Exception e) {
             model.addAttribute("error", "Credential issuance failed: " + e.getMessage());
         }
-        return wallet(model, httpSession);
+        return wallet(model, httpSession, null);
     }
 
     @PostMapping("/mock-issue")
@@ -154,7 +179,7 @@ public class WalletPageController {
         } catch (Exception e) {
             model.addAttribute("error", "Mock issuance failed: " + e.getMessage());
         }
-        return wallet(model, httpSession);
+        return wallet(model, httpSession, null);
     }
 
     @PostMapping("/credentials/delete")
@@ -168,7 +193,7 @@ public class WalletPageController {
         } else {
             model.addAttribute("message", "Deleted credential " + file);
         }
-        return wallet(model, httpSession);
+        return wallet(model, httpSession, null);
     }
 
     private List<DisplayCredential> loadDisplayCredentials(WalletSession session) {

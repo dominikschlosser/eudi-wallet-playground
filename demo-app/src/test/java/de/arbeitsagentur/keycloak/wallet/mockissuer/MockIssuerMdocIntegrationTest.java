@@ -29,7 +29,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import de.arbeitsagentur.keycloak.wallet.common.crypto.WalletKeyService;
 import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocParser;
-import de.arbeitsagentur.keycloak.wallet.common.util.HexUtils;
+import de.arbeitsagentur.keycloak.wallet.mdoc.util.HexUtils;
 import org.junit.jupiter.api.Test;
 import com.upokecenter.cbor.CBORObject;
 import com.upokecenter.cbor.CBORType;

@@ -137,7 +137,7 @@ final class Oid4vpTestKeycloakSetup {
                 {
                   "id": "user_binding",
                   "format": "dc+sd-jwt",
-                  "meta": { "vct_values": ["urn:verifier:user_credential:1"] },
+                  "meta": { "vct_values": ["urn:arbeitsagentur:user_credential:1"] },
                   "claims": [
                     { "path": ["user_id"] }
                   ]
@@ -329,7 +329,7 @@ final class Oid4vpTestKeycloakSetup {
     static void configureMultiCredentialFlow(KeycloakAdminClient admin, String realm) throws Exception {
         configureDcqlQuery(admin, realm, MULTI_CREDENTIAL_DCQL_QUERY);
         configureUserMappingClaim(admin, realm, "user_id");
-        configureAllowedCredentialTypes(admin, realm, "urn:eudi:pid:de:1,urn:verifier:user_credential:1");
+        configureAllowedCredentialTypes(admin, realm, "urn:eudi:pid:de:1,urn:arbeitsagentur:user_credential:1");
     }
 
     /**
@@ -433,10 +433,10 @@ final class Oid4vpTestKeycloakSetup {
         // The lookup key is computed from: issuer + credentialType + subject (user_id)
         // For verifier credentials:
         // - issuer: https://mock-issuer.example (same as mock wallet uses)
-        // - credentialType: urn:verifier:user_credential:1
+        // - credentialType: urn:arbeitsagentur:user_credential:1
         // - subject: the user_id claim value (which is the Keycloak user ID)
         String issuer = "https://mock-issuer.example";
-        String credentialType = "urn:verifier:user_credential:1";
+        String credentialType = "urn:arbeitsagentur:user_credential:1";
         String subject = keycloakUserId;
 
         String lookupKey = computeLookupKey(issuer, credentialType, subject);
@@ -444,10 +444,77 @@ final class Oid4vpTestKeycloakSetup {
     }
 
     /**
+     * Update the federated identity to use the verifier credential lookup key with custom issuer.
+     * This is used for PID binding flow where the issuer is the Keycloak realm URL.
+     *
+     * @param admin The admin client
+     * @param realm The realm name
+     * @param keycloakUserId The Keycloak user ID
+     * @param idpAlias The identity provider alias (e.g., "german-pid")
+     * @param keycloakBaseUrl The Keycloak base URL (e.g., "http://127.0.0.1:8080")
+     */
+    static void updateFederatedIdentityForVerifierCredential(KeycloakAdminClient admin, String realm,
+                                                              String keycloakUserId, String idpAlias,
+                                                              String keycloakBaseUrl) throws Exception {
+        // The lookup key is computed from: issuer + credentialType + subject (user_id)
+        // For PID binding flow:
+        // - issuer: Keycloak realm URL (e.g., http://127.0.0.1:8080/realms/pid-binding-demo)
+        // - credentialType: urn:arbeitsagentur:user_credential:1
+        // - subject: the user_id claim value (which is the Keycloak user ID)
+        String issuer = keycloakBaseUrl + "/realms/" + realm;
+        String credentialType = "urn:arbeitsagentur:user_credential:1";
+        String subject = keycloakUserId;
+
+        String lookupKey = computeLookupKey(issuer, credentialType, subject);
+        updateFederatedIdentity(admin, realm, keycloakUserId, idpAlias, lookupKey);
+    }
+
+    /**
+     * Get the federated identity for a user from a specific IdP.
+     *
+     * @return The federated identity map, or null if not found
+     */
+    static Map<String, Object> getFederatedIdentity(KeycloakAdminClient admin, String realm,
+                                                     String userId, String idpAlias) throws Exception {
+        List<Map<String, Object>> identities = admin.getJsonList(
+                "/admin/realms/" + realm + "/users/" + userId + "/federated-identity");
+        return identities.stream()
+                .filter(id -> idpAlias.equals(id.get("identityProvider")))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * Verify the federated identity has the expected lookup key.
+     *
+     * @return true if the federated identity exists with the expected lookup key
+     */
+    static boolean verifyFederatedIdentityLookupKey(KeycloakAdminClient admin, String realm,
+                                                     String keycloakUserId, String idpAlias,
+                                                     String keycloakBaseUrl) throws Exception {
+        Map<String, Object> identity = getFederatedIdentity(admin, realm, keycloakUserId, idpAlias);
+        if (identity == null) {
+            return false;
+        }
+        String actualLookupKey = String.valueOf(identity.get("userId"));
+        String expectedLookupKey = computeExpectedLookupKey(keycloakBaseUrl, realm, keycloakUserId);
+        return expectedLookupKey.equals(actualLookupKey);
+    }
+
+    /**
+     * Compute the expected lookup key for the PID binding credential.
+     */
+    static String computeExpectedLookupKey(String keycloakBaseUrl, String realm, String keycloakUserId) {
+        String issuer = keycloakBaseUrl + "/realms/" + realm;
+        String credentialType = "urn:arbeitsagentur:user_credential:1";
+        return computeLookupKey(issuer, credentialType, keycloakUserId);
+    }
+
+    /**
      * Compute the lookup key from issuer, credential type, and subject.
      * This must match the algorithm in Oid4vpIdentityProvider.computeLookupKey().
      */
-    private static String computeLookupKey(String issuer, String credentialType, String subject) {
+    static String computeLookupKey(String issuer, String credentialType, String subject) {
         String combined = issuer + "\0" + credentialType + "\0" + subject;
         try {
             byte[] hash = java.security.MessageDigest.getInstance("SHA-256")

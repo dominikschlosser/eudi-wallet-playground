@@ -22,6 +22,7 @@ import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocVerifier;
 import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtVerifier;
 
 import java.net.URI;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -30,9 +31,11 @@ public final class Oid4vpVerifierService {
     private final ObjectMapper objectMapper;
     private final SdJwtVerifier sdJwtVerifier;
     private final MdocVerifier mdocVerifier;
+    private final Oid4vpTrustListService trustListService;
 
     public Oid4vpVerifierService(ObjectMapper objectMapper, Oid4vpTrustListService trustListService) {
         this.objectMapper = objectMapper;
+        this.trustListService = trustListService;
         this.sdJwtVerifier = new SdJwtVerifier(objectMapper, trustListService);
         this.mdocVerifier = new MdocVerifier(trustListService);
     }
@@ -129,6 +132,8 @@ public final class Oid4vpVerifierService {
                                                                      String expectedResponseUri,
                                                                      byte[] expectedJwkThumbprint,
                                                                      boolean trustX5cFromCredential) throws Exception {
+        LOG.debugf("verifyMultiCredential called: trustX5cFromCredential=%b, trustListId=%s",
+                trustX5cFromCredential, trustListId);
         Map<String, VerifiedPresentation> results = new LinkedHashMap<>();
 
         if (vpToken == null || vpToken.isBlank()) {
@@ -214,6 +219,12 @@ public final class Oid4vpVerifierService {
                                                          boolean trustX5cFromCredential) throws Exception {
         String normalized = credential.trim();
 
+        // If trustX5cFromCredential is enabled, extract and register x5c certificate before verification
+        if (trustX5cFromCredential) {
+            LOG.debugf("Attempting to register x5c from credential to trust list '%s'", trustListId);
+            registerX5cFromCredential(normalized, trustListId);
+        }
+
         if (sdJwtVerifier.isSdJwt(normalized)) {
             Exception firstError = null;
             try {
@@ -259,6 +270,49 @@ public final class Oid4vpVerifierService {
         }
 
         throw new IllegalArgumentException("Unsupported credential format");
+    }
+
+    /**
+     * Extract x5c certificate from credential and register it to the trust list.
+     * This enables trusting self-signed or dynamically issued credentials.
+     */
+    private void registerX5cFromCredential(String credential, String trustListId) {
+        try {
+            // Extract the JWT part (before any ~ disclosure separator)
+            String jwtPart = credential.contains("~") ? credential.split("~")[0] : credential;
+
+            // Extract the header (first part before the period)
+            String[] jwtParts = jwtPart.split("\\.");
+            if (jwtParts.length < 2) {
+                LOG.debug("Cannot extract x5c: invalid JWT structure");
+                return;
+            }
+
+            String headerBase64 = jwtParts[0];
+            String headerJson = new String(Base64.getUrlDecoder().decode(headerBase64));
+            JsonNode header = objectMapper.readTree(headerJson);
+
+            // Check for x5c array in header
+            JsonNode x5cNode = header.get("x5c");
+            if (x5cNode == null || !x5cNode.isArray() || x5cNode.isEmpty()) {
+                LOG.debug("No x5c certificate found in credential header");
+                return;
+            }
+
+            // Get the first certificate (leaf certificate)
+            String certBase64 = x5cNode.get(0).asText();
+            if (certBase64 == null || certBase64.isBlank()) {
+                LOG.debug("Empty x5c certificate in credential header");
+                return;
+            }
+
+            // Convert to PEM format and register
+            String certPem = "-----BEGIN CERTIFICATE-----\n" + certBase64 + "\n-----END CERTIFICATE-----";
+            trustListService.registerCertificate(trustListId, certPem);
+            LOG.infof("Registered x5c certificate from credential to trust list '%s'", trustListId);
+        } catch (Exception e) {
+            LOG.warnf("Failed to extract/register x5c certificate from credential: %s", e.getMessage());
+        }
     }
 
     private String dcApiAudienceFromResponseUri(String responseUri) {

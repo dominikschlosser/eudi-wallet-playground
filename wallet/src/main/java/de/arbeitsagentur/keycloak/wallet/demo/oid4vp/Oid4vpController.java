@@ -263,9 +263,21 @@ public class Oid4vpController {
             httpSession.removeAttribute(SESSION_REQUEST);
             return noMatchErrorView(pending, "Your wallet does not contain a credential that matches what the verifier requested.");
         }
+        // Extract which descriptors are included (checkbox checked)
+        Set<String> includedDescriptors = extractIncludedDescriptors(request.getParameterMap());
+        // Filter options to only include checked descriptors
+        var filteredOptions = filterOptionsByInclusion(options.get(), includedDescriptors);
+        if (filteredOptions.options().isEmpty()) {
+            httpSession.removeAttribute(SESSION_REQUEST);
+            return submitResponse(pending, Map.of(
+                    "state", pending.state(),
+                    "error", "access_denied",
+                    "error_description", "No credentials selected for presentation"
+            ));
+        }
         Map<String, String> selections = extractSelections(httpSession, pending, request.getParameterMap());
-        Optional<List<DescriptorMatch>> chosen = presentationService.selectDistinctMatches(options.get(), selections);
-        if (chosen.isEmpty() || chosen.get().size() != options.get().options().size()) {
+        Optional<List<DescriptorMatch>> chosen = presentationService.selectDistinctMatches(filteredOptions, selections);
+        if (chosen.isEmpty() || chosen.get().size() != filteredOptions.options().size()) {
             httpSession.removeAttribute(SESSION_REQUEST);
             return noMatchErrorView(pending, "Could not select matching credentials for all requested credential types.");
         }
@@ -964,6 +976,37 @@ public class Oid4vpController {
         }
         session.setAttribute(SESSION_REQUEST, pending.withSelections(selections));
         return selections;
+    }
+
+    /**
+     * Extract which descriptors are included based on checkbox values.
+     * Checkboxes use the format "include-{descriptorId}" with value "true".
+     */
+    private Set<String> extractIncludedDescriptors(Map<String, String[]> params) {
+        Set<String> included = new HashSet<>();
+        if (params != null) {
+            params.forEach((key, values) -> {
+                if (key != null && key.startsWith("include-") && values != null && values.length > 0) {
+                    String descriptorId = key.substring("include-".length());
+                    if (!descriptorId.isBlank() && "true".equals(values[0])) {
+                        included.add(descriptorId);
+                    }
+                }
+            });
+        }
+        return included;
+    }
+
+    /**
+     * Filter presentation options to only include descriptors that were checked.
+     */
+    private PresentationService.PresentationOptions filterOptionsByInclusion(
+            PresentationService.PresentationOptions options,
+            Set<String> includedDescriptors) {
+        List<PresentationService.DescriptorOptions> filtered = options.options().stream()
+                .filter(opt -> includedDescriptors.contains(opt.request().id()))
+                .toList();
+        return new PresentationService.PresentationOptions(filtered);
     }
 
     private String deriveVct(Map<String, Object> credential) {

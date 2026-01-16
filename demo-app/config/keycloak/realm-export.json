@@ -362,7 +362,9 @@
         "vc.proof_signing_alg_values_supported": "ES256",
         "vc.display": "[{\"name\":\"Mock Identity Credential\",\"locale\":\"en\"}]",
         "vc.credential_build_config.hash_algorithm": "SHA-256",
-        "vc.credential_build_config.token_jws_type": "JWS"
+        "vc.credential_build_config.token_jws_type": "JWS",
+        "vc.credential_build_config.signingAlgorithm": "ES256",
+        "vc.credential_build_config.signingKeyId": "wallet-demo-ec"
       },
       "protocolMappers": [
         {
@@ -423,7 +425,9 @@
         "vc.proof_signing_alg_values_supported": "ES256",
         "vc.display": "[{\"name\":\"Alternate Credential\",\"locale\":\"en\"}]",
         "vc.credential_build_config.hash_algorithm": "SHA-256",
-        "vc.credential_build_config.token_jws_type": "JWS"
+        "vc.credential_build_config.token_jws_type": "JWS",
+        "vc.credential_build_config.signingAlgorithm": "ES256",
+        "vc.credential_build_config.signingKeyId": "wallet-demo-ec"
       },
       "protocolMappers": [
         {
@@ -471,7 +475,9 @@
         "vc.proof_signing_alg_values_supported": "ES256",
         "vc.display": "[{\"name\":\"Person Identification Data\",\"locale\":\"en\"}]",
         "vc.credential_build_config.hash_algorithm": "SHA-256",
-        "vc.credential_build_config.token_jws_type": "JWS"
+        "vc.credential_build_config.token_jws_type": "JWS",
+        "vc.credential_build_config.signingAlgorithm": "ES256",
+        "vc.credential_build_config.signingKeyId": "wallet-demo-ec"
       },
       "protocolMappers": [
         {
@@ -1348,6 +1354,9 @@
           ],
           "algorithm": [
             "ES256"
+          ],
+          "kid": [
+            "wallet-demo-ec"
           ]
         }
       },

@@ -108,7 +108,40 @@
       "config": {}
     }
   ],
-  "users": [],
+  "users": [
+    {
+      "username": "test",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Test",
+      "lastName": "User",
+      "email": "test@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "test",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["default-roles-pid-binding-demo"]
+    },
+    {
+      "username": "test2",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Test2",
+      "lastName": "User2",
+      "email": "test2@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "test2",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["default-roles-pid-binding-demo"]
+    }
+  ],
   "clientScopeMappings": {
     "account": [
       {
@@ -131,8 +164,8 @@
         "include.in.token.scope": "true",
         "vc.credential_configuration_id": "user-binding-credential",
         "vc.credential_identifier": "user-binding-credential",
-        "vc.verifiable_credential_type": "urn:verifier:user_credential:1",
-        "vc.supported_credential_types": "VerifiableCredential,urn:verifier:user_credential:1",
+        "vc.verifiable_credential_type": "urn:arbeitsagentur:user_credential:1",
+        "vc.supported_credential_types": "VerifiableCredential,urn:arbeitsagentur:user_credential:1",
         "vc.credential_contexts": "https://www.w3.org/2018/credentials/v1",
         "vc.format": "dc+sd-jwt",
         "vc.proof_signing_alg_values_supported": "ES256",
@@ -148,7 +181,7 @@
           "consentRequired": false,
           "config": {
             "claim.name": "user_id",
-            "userAttribute": "id",
+            "userAttribute": "user_id",
             "jsonType.label": "String",
             "vc.mandatory": "true",
             "vc.display": "[{\"name\":\"User ID\",\"locale\":\"en\"}]"
@@ -161,9 +194,9 @@
           "consentRequired": false,
           "config": {
             "claim.name": "linked_at",
-            "claim.value": "${timestamp}",
+            "claim.value": "2026-01-01T00:00:00Z",
             "jsonType.label": "String",
-            "vc.mandatory": "true",
+            "vc.mandatory": "false",
             "vc.display": "[{\"name\":\"Linked at\",\"locale\":\"en\"}]"
           }
         }
@@ -573,30 +606,33 @@
     {
       "alias": "german-pid",
       "displayName": "Sign in with German eID",
-      "providerId": "oid4vp",
+      "providerId": "pid-binding",
       "enabled": true,
       "trustEmail": false,
       "storeToken": false,
       "addReadTokenRoleOnCreate": false,
       "authenticateByDefault": false,
       "linkOnly": false,
-      "firstBrokerLoginFlowAlias": "first broker login",
+      "firstBrokerLoginFlowAlias": "PID Binding First Broker Login",
       "config": {
         "clientId": "not-used",
         "clientSecret": "not-used",
-        "enforceHaip": "true",
+        "enforceHaip": "false",
+        "trustX5cFromCredential": "true",
         "dcApiEnabled": "true",
         "sameDeviceEnabled": "true",
         "crossDeviceEnabled": "true",
         "trustListJson": "{\"issuers\":[{\"name\":\"wallet-demo-keycloak-es256\",\"certificate\":\"-----BEGIN CERTIFICATE-----\\nMIIBKDCB0AIJAMWyff2HSfBqMAoGCCqGSM49BAMCMB0xGzAZBgNVBAMMEldhbGxl\\ndC1LZXljbG9hay1FUzAeFw0yNTExMjAyMTM2MDlaFw0zNTExMTgyMTM2MDlaMB0x\\nGzAZBgNVBAMMEldhbGxldC1LZXljbG9hay1FUzBZMBMGByqGSM49AgEGCCqGSM49\\nAwEHA0IABCnd2p3iD21IlzbJMVUUVTyE2FDXQa3eyxYTCSak/hEtbdBdbWmH0nKk\\nd9YklVqIUVD4VpkLDbXjhuuE38B8pQQwCgYIKoZIzj0EAwIDRwAwRAIgLd3B7Vw2\\nOqZJiRzWc3SA52fCFZmDLqAuK4qJ/OOBMEECIDXD3RlynumLDTPm+YQtv6kpsNoT\\nPccoMH7i50+TvmdF\\n-----END CERTIFICATE-----\"},{\"name\":\"mock-issuer-es256\",\"certificate\":\"-----BEGIN CERTIFICATE-----\\nMIIBgTCCASegAwIBAgIUBjEaIhGcW5pPX7vCtXbqMyql7ewwCgYIKoZIzj0EAwIw\\nFjEUMBIGA1UEAwwLbW9jay1pc3N1ZXIwHhcNMjUxMjAxMDkzOTI2WhcNMzUxMTI5\\nMDkzOTI2WjAWMRQwEgYDVQQDDAttb2NrLWlzc3VlcjBZMBMGByqGSM49AgEGCCqG\\nSM49AwEHA0IABCSGo02fNJ4ilyIJVsnR90UMvBEhbDxpvIN/X+Rq4y9qjCA35Inb\\nwm5jF0toypoov4aagJGaRkwzmvOy1JMlamKjUzBRMB0GA1UdDgQWBBR2mOx26507\\n8nBXsRCf07e99RBlDDAfBgNVHSMEGDAWgBR2mOx265078nBXsRCf07e99RBlDDAP\\nBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQDc1Evb58VWAGTNgiad\\nstQmCL6YL3ChASt/VLhgA/ogbAIgK5DjLQuY0dVDTaDccEC9s/uaKu+z5u28ZtQj\\nVK65zFU=\\n-----END CERTIFICATE-----\"}]}",
-        "dcqlQuery": "{\"credentials\":[{\"id\":\"german_pid\",\"format\":\"dc+sd-jwt\",\"meta\":{\"vct_values\":[\"urn:eudi:pid:de:1\"]},\"claims\":[{\"path\":[\"family_name\"]},{\"path\":[\"given_name\"]},{\"path\":[\"birthdate\"]},{\"path\":[\"nationalities\"]},{\"path\":[\"issuing_country\"]}]}]}",
-        "userMappingClaim": "given_name",
-        "userMappingClaimMdoc": "given_name",
+        "pidCredentialType": "urn:eudi:pid:de:1",
+        "loginCredentialType": "urn:arbeitsagentur:user_credential:1",
+        "pidRequestedClaims": "given_name,family_name,birthdate",
+        "credentialIssuerUrl": "",
+        "credentialConfigurationId": "user-binding-credential",
+        "credentialIssuanceWalletUrl": "http://localhost:3000/wallet",
         "dcApiRequestMode": "signed",
         "sameDeviceWalletUrl": "http://localhost:3000/oid4vp/auth",
         "clientIdScheme": "plain",
-        "credentialSetMode": "optional",
-        "allowedCredentialTypes": "urn:eudi:pid:de:1"
+        "allowedCredentialTypes": "urn:eudi:pid:de:1,urn:arbeitsagentur:user_credential:1"
       }
     }
   ],
@@ -738,5 +774,32 @@
         }
       }
     ]
-  }
+  },
+  "authenticationFlows": [
+    {
+      "alias": "PID Binding First Broker Login",
+      "description": "First broker login flow for German PID binding. Requires linking to existing account with username/password, then offers credential issuance.",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "idp-username-password-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "pid-binding-credential-issuance",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    }
+  ]
 }

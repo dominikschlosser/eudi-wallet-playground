@@ -12,7 +12,7 @@
     <name>keycloak-oid4vp</name>
 
     <properties>
-        <keycloak.version>26.4.5</keycloak.version>
+        <keycloak.version>26.5.0</keycloak.version>
         <playwright.version>1.49.0</playwright.version>
     </properties>
 
@@ -47,15 +47,10 @@
             <version>${project.version}</version>
         </dependency>
 
-        <!-- QR Code generation for cross-device flow -->
+        <!-- QR Code generation for cross-device flow (core only, no JavaFX dependency) -->
         <dependency>
             <groupId>com.google.zxing</groupId>
             <artifactId>core</artifactId>
-            <version>3.5.3</version>
-        </dependency>
-        <dependency>
-            <groupId>com.google.zxing</groupId>
-            <artifactId>javase</artifactId>
             <version>3.5.3</version>
         </dependency>
 
@@ -68,6 +63,12 @@
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
             <version>3.26.3</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>5.14.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -147,6 +148,16 @@
                         <configuration>
                             <outputDirectory>${project.build.directory}/providers</outputDirectory>
                             <includeScope>runtime</includeScope>
+                            <!-- Exclude dependencies that Keycloak already provides or that cause conflicts -->
+                            <excludeGroupIds>
+                                org.springframework,org.springframework.boot,
+                                ch.qos.logback,org.apache.logging.log4j,org.slf4j,
+                                org.jboss.logging,org.hibernate.validator,jakarta.validation,
+                                com.fasterxml.jackson.core,com.fasterxml,
+                                org.yaml,io.micrometer,jakarta.annotation,
+                                org.apache.tomcat.embed,commons-logging,org.jspecify,
+                                com.google.errorprone
+                            </excludeGroupIds>
                         </configuration>
                     </execution>
                 </executions>

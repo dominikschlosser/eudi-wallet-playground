@@ -34,15 +34,25 @@
 
       <form method="post" th:action="@{/oid4vp/consent}" style="margin-top:1rem;display:flex;flex-direction:column;gap:1rem;">
         <div th:each="opt : ${descriptorOptions}" class="descriptor">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-            <div>
-              <h3 th:text="'Credential request: ' + ${opt.request().id()}">Descriptor</h3>
-              <small style="color:#475569;">Select a credential to fulfill this request</small>
-              <div style="display:flex;align-items:center;gap:0.35rem;margin-top:0.35rem;"
-                   th:with="requestedVct=${descriptorVcts != null ? descriptorVcts[opt.request().id()] : null}"
-                   th:if="${requestedVct}">
-                <span style="color:#94a3b8;font-size:0.9rem;">Requested VCT</span>
-                <span class="badge secondary" th:text="${requestedVct}">vct</span>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem;flex-wrap:wrap;">
+            <div style="display:flex;align-items:flex-start;gap:0.75rem;">
+              <label class="include-checkbox" th:title="'Include ' + ${opt.request().id()} + ' in response'">
+                <input type="checkbox"
+                       th:name="'include-' + ${opt.request().id()}"
+                       value="true"
+                       checked="checked"
+                       class="credential-include-toggle" />
+                <span class="checkmark"></span>
+              </label>
+              <div>
+                <h3 th:text="'Credential request: ' + ${opt.request().id()}">Descriptor</h3>
+                <small style="color:#475569;">Uncheck to exclude this credential from response</small>
+                <div style="display:flex;align-items:center;gap:0.35rem;margin-top:0.35rem;"
+                     th:with="requestedVct=${descriptorVcts != null ? descriptorVcts[opt.request().id()] : null}"
+                     th:if="${requestedVct}">
+                  <span style="color:#94a3b8;font-size:0.9rem;">Requested VCT</span>
+                  <span class="badge secondary" th:text="${requestedVct}">vct</span>
+                </div>
               </div>
             </div>
           </div>

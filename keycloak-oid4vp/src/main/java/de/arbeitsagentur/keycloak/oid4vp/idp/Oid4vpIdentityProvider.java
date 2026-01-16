@@ -16,6 +16,8 @@
 package de.arbeitsagentur.keycloak.oid4vp.idp;
 
 import com.nimbusds.jose.jwk.JWK;
+import de.arbeitsagentur.keycloak.oid4vp.CredentialClaimsExtractor;
+import de.arbeitsagentur.keycloak.oid4vp.FederatedIdentityKeyGenerator;
 import de.arbeitsagentur.keycloak.oid4vp.Oid4vpConfig;
 import de.arbeitsagentur.keycloak.oid4vp.Oid4vpDcApiRequestObjectService;
 import de.arbeitsagentur.keycloak.oid4vp.Oid4vpQrCodeService;
@@ -23,6 +25,8 @@ import de.arbeitsagentur.keycloak.oid4vp.Oid4vpRedirectFlowService;
 import de.arbeitsagentur.keycloak.oid4vp.Oid4vpRequestObjectStore;
 import de.arbeitsagentur.keycloak.oid4vp.Oid4vpTrustListService;
 import de.arbeitsagentur.keycloak.oid4vp.Oid4vpVerifierService;
+import de.arbeitsagentur.keycloak.oid4vp.VpTokenProcessor;
+import de.arbeitsagentur.keycloak.oid4vp.VpTokenVerificationResult;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.FormParam;
 import jakarta.ws.rs.GET;
@@ -57,12 +61,8 @@ import org.keycloak.sessions.RootAuthenticationSessionModel;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -87,14 +87,15 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
     static final String SESSION_EFFECTIVE_CLIENT_ID = "oid4vp_effective_client_id";
 
     protected final ObjectMapper objectMapper;
-    private final Oid4vpVerifierService verifierService;
+    protected final Oid4vpVerifierService verifierService;
+    protected final VpTokenProcessor vpTokenProcessor;
     private final Oid4vpDcApiRequestObjectService dcApiRequestObjectService;
     private final Oid4vpRedirectFlowService redirectFlowService;
     private final Oid4vpQrCodeService qrCodeService;
     private final Oid4vpTrustListService trustListService;
 
     // Shared request object store for redirect flows (same-device and cross-device)
-    // Note: In production, this should be cluster-aware (use Infinispan cache or similar)
+    // Uses Keycloak's SingleUseObjectProvider for cluster-aware storage
     private static final Oid4vpRequestObjectStore REQUEST_OBJECT_STORE = new Oid4vpRequestObjectStore();
 
     public Oid4vpIdentityProvider(KeycloakSession session,
@@ -105,6 +106,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         this.objectMapper = objectMapper;
         this.trustListService = trustListService;
         this.verifierService = new Oid4vpVerifierService(objectMapper, trustListService);
+        this.vpTokenProcessor = new VpTokenProcessor(verifierService, objectMapper);
         this.dcApiRequestObjectService = new Oid4vpDcApiRequestObjectService(session, objectMapper);
         this.redirectFlowService = new Oid4vpRedirectFlowService(session, objectMapper);
         this.qrCodeService = new Oid4vpQrCodeService();
@@ -329,6 +331,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
                     );
 
                     String requestObjectId = REQUEST_OBJECT_STORE.store(
+                            session,
                             signedRequest.jwt(),
                             signedRequest.encryptionKeyJson(),
                             state,
@@ -541,197 +544,87 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
             }
         }
 
-        // Verify the VP token
-        // When both DC API and redirect flow are enabled, we may need to try both response_uris
-        // because the wallet uses different response_uris for SessionTranscript depending on the flow used
+        // Verify the VP token using VpTokenProcessor (handles format detection and retry)
         boolean trustX5c = getConfig().getEffectiveTrustX5cFromCredential();
-        LOG.infof("[OID4VP-IDP] Verifying VP token with trustListId: %s, trustX5c: %b (HAIP enforced: %b)",
-                getConfig().getTrustListId(), trustX5c, getConfig().isEnforceHaip());
-
-        // Check if this might be a multi-credential response
-        // Multi-credential vp_token format: {"cred_id1": ["cred1"], "cred_id2": ["cred2"]}
-        boolean isMultiCredential = isLikelyMultiCredentialVpToken(vpToken);
-        LOG.infof("[OID4VP-IDP] VP token appears to be multi-credential: %b", isMultiCredential);
-
         String redirectFlowResponseUri = authSession.getAuthNote(SESSION_REDIRECT_FLOW_RESPONSE_URI);
+        LOG.infof("[OID4VP-IDP] Verifying VP token with trustListId: %s, trustX5c: %b",
+                getConfig().getTrustListId(), trustX5c);
+
+        VpTokenVerificationResult result = vpTokenProcessor.process(
+                vpToken,
+                getConfig().getTrustListId(),
+                clientId,
+                expectedNonce,
+                responseUri,
+                jwkThumbprint,
+                trustX5c,
+                redirectFlowResponseUri
+        );
+        LOG.infof("[OID4VP-IDP] VP token verified, format: %s, credentials: %d",
+                result.format(), result.credentials().size());
+
+        // Extract identity info from verified credentials
         Map<String, Object> claims;
         String subject;
         String issuer;
         String credentialType;
         Oid4vpVerifierService.PresentationType presentationType;
-        String credentialFormat;
         String userMappingClaimName;
 
-        if (isMultiCredential) {
-            // Multi-credential verification
-            LOG.infof("[OID4VP-IDP] Processing multi-credential VP token");
-            Map<String, Oid4vpVerifierService.VerifiedPresentation> verifiedCredentials;
-            try {
-                verifiedCredentials = verifierService.verifyMultiCredential(
-                        vpToken,
-                        getConfig().getTrustListId(),
-                        clientId,
-                        expectedNonce,
-                        responseUri,
-                        jwkThumbprint,
-                        trustX5c
-                );
-                LOG.infof("[OID4VP-IDP] Multi-credential VP token verified successfully, credentials: %s",
-                        verifiedCredentials.keySet());
-            } catch (Exception e) {
-                // Try with redirect flow response_uri
-                if (redirectFlowResponseUri != null && !redirectFlowResponseUri.equals(responseUri)) {
-                    try {
-                        verifiedCredentials = verifierService.verifyMultiCredential(
-                                vpToken,
-                                getConfig().getTrustListId(),
-                                clientId,
-                                expectedNonce,
-                                redirectFlowResponseUri,
-                                jwkThumbprint,
-                                trustX5c
-                        );
-                    } catch (Exception e2) {
-                        LOG.errorf(e2, "[OID4VP-IDP] Multi-credential VP verification failed: %s", e2.getMessage());
-                        throw new IdentityBrokerException("VP verification failed: " + e2.getMessage(), e2);
-                    }
-                } else {
-                    LOG.errorf(e, "[OID4VP-IDP] Multi-credential VP verification failed: %s", e.getMessage());
-                    throw new IdentityBrokerException("VP verification failed: " + e.getMessage(), e);
-                }
-            }
-
-            // Find the verifier credential (for user matching) and PID credential (for attributes)
-            // The verifier credential has vct=urn:verifier:user_credential:1
-            Oid4vpVerifierService.VerifiedPresentation verifierCred = null;
-            Oid4vpVerifierService.VerifiedPresentation pidCred = null;
-            for (var entry : verifiedCredentials.entrySet()) {
-                String vct = extractClaim(entry.getValue().claims(), "vct");
-                LOG.infof("[OID4VP-IDP] Credential '%s' has vct: %s", entry.getKey(), vct);
-                if ("urn:verifier:user_credential:1".equals(vct)) {
-                    verifierCred = entry.getValue();
-                } else {
-                    // Assume any other credential is the PID
-                    pidCred = entry.getValue();
-                }
-            }
-
-            if (verifierCred != null) {
-                // Use user_id from verifier credential for matching
-                subject = extractClaim(verifierCred.claims(), "user_id");
-                issuer = extractClaim(verifierCred.claims(), "iss");
-                credentialType = "urn:verifier:user_credential:1";
-                presentationType = verifierCred.type();
-                LOG.infof("[OID4VP-IDP] Using verifier credential for matching: user_id=%s, iss=%s", subject, issuer);
-            } else if (pidCred != null) {
-                // Fallback to PID credential
-                presentationType = pidCred.type();
-                credentialFormat = presentationType == Oid4vpVerifierService.PresentationType.MDOC
-                        ? Oid4vpIdentityProviderConfig.FORMAT_MSO_MDOC
-                        : Oid4vpIdentityProviderConfig.FORMAT_SD_JWT_VC;
-                userMappingClaimName = getConfig().getUserMappingClaimForFormat(credentialFormat);
-                subject = extractClaim(pidCred.claims(), userMappingClaimName);
-                issuer = extractClaim(pidCred.claims(), "iss");
-                credentialType = extractCredentialType(pidCred.claims(), presentationType);
-                LOG.infof("[OID4VP-IDP] Using PID credential for matching (no verifier credential found)");
-            } else {
+        if (result.isMultiCredential()) {
+            // For multi-credential, search all credentials for the user mapping claim
+            VpTokenVerificationResult.VerifiedCredential primary = result.getPrimaryCredential();
+            if (primary == null) {
                 throw new IdentityBrokerException("No valid credential found in multi-credential response");
             }
-
-            // Merge claims from all credentials (PID claims take precedence for attributes)
-            claims = new LinkedHashMap<>();
-            for (var entry : verifiedCredentials.entrySet()) {
-                claims.putAll(entry.getValue().claims());
-            }
-            // Re-add PID claims last to ensure they take precedence
-            if (pidCred != null) {
-                claims.putAll(pidCred.claims());
-            }
-
-            // Set format based on primary credential (verifier cred or PID)
-            credentialFormat = presentationType == Oid4vpVerifierService.PresentationType.MDOC
-                    ? Oid4vpIdentityProviderConfig.FORMAT_MSO_MDOC
-                    : Oid4vpIdentityProviderConfig.FORMAT_SD_JWT_VC;
-            userMappingClaimName = verifierCred != null ? "user_id" : getConfig().getUserMappingClaimForFormat(credentialFormat);
-
-        } else {
-            // Single credential verification (existing logic)
-            Oid4vpVerifierService.VerifiedPresentation verified;
-            try {
-                verified = verifierService.verify(
-                        vpToken,
-                        getConfig().getTrustListId(),
-                        clientId,
-                        expectedNonce,
-                        responseUri,
-                        jwkThumbprint,
-                        trustX5c
-                );
-                LOG.infof("[OID4VP-IDP] VP token verified successfully, type: %s", verified != null ? verified.type() : "null");
-            } catch (Exception e) {
-                // If verification failed and we have a different redirect flow response_uri, try with that
-                boolean isSessionTranscriptMismatch = e.getMessage() != null &&
-                        (e.getMessage().contains("SessionTranscript mismatch") ||
-                         (e.getCause() != null && e.getCause().getMessage() != null &&
-                          e.getCause().getMessage().contains("SessionTranscript mismatch")));
-
-                if (isSessionTranscriptMismatch && redirectFlowResponseUri != null &&
-                        !redirectFlowResponseUri.equals(responseUri)) {
-                    LOG.infof("[OID4VP-IDP] First verification failed with SessionTranscript mismatch, retrying with redirect flow response_uri: %s",
-                            redirectFlowResponseUri);
-                    try {
-                        verified = verifierService.verify(
-                                vpToken,
-                                getConfig().getTrustListId(),
-                                clientId,
-                                expectedNonce,
-                                redirectFlowResponseUri,
-                                jwkThumbprint,
-                                trustX5c
-                        );
-                        LOG.infof("[OID4VP-IDP] VP token verified successfully with redirect flow response_uri, type: %s",
-                                verified != null ? verified.type() : "null");
-                    } catch (Exception e2) {
-                        LOG.errorf(e2, "[OID4VP-IDP] VP verification failed with both response_uris: %s", e2.getMessage());
-                        throw new IdentityBrokerException("VP verification failed: " + e2.getMessage(), e2);
-                    }
-                } else {
-                    LOG.errorf(e, "[OID4VP-IDP] VP verification failed: %s", e.getMessage());
-                    throw new IdentityBrokerException("VP verification failed: " + e.getMessage(), e);
-                }
-            }
-
-            // Extract credential metadata
-            claims = verified.claims();
-            LOG.infof("[OID4VP-IDP] Extracted claims: %s", claims);
-
-            presentationType = verified.type();
-            credentialFormat = presentationType == Oid4vpVerifierService.PresentationType.MDOC
+            presentationType = primary.presentationType();
+            String credentialFormat = presentationType == Oid4vpVerifierService.PresentationType.MDOC
                     ? Oid4vpIdentityProviderConfig.FORMAT_MSO_MDOC
                     : Oid4vpIdentityProviderConfig.FORMAT_SD_JWT_VC;
             userMappingClaimName = getConfig().getUserMappingClaimForFormat(credentialFormat);
+            claims = result.mergedClaims();
 
-            subject = extractClaim(claims, userMappingClaimName);
-            issuer = extractClaim(claims, "iss");
-            credentialType = extractCredentialType(claims, presentationType);
-
-            // For mDoc credentials, issuer may not be in claims - use a synthetic value
-            if ((issuer == null || issuer.isBlank()) && presentationType == Oid4vpVerifierService.PresentationType.MDOC) {
-                issuer = "mdoc-trusted-issuer";
-                LOG.infof("[OID4VP-IDP] Using synthetic issuer for mDoc credential: %s", issuer);
+            // Find the credential that contains the mapping claim
+            VpTokenVerificationResult.VerifiedCredential matchingCred = null;
+            for (VpTokenVerificationResult.VerifiedCredential cred : result.credentials().values()) {
+                if (CredentialClaimsExtractor.extractClaim(cred.claims(), userMappingClaimName) != null) {
+                    matchingCred = cred;
+                    break;
+                }
             }
+            if (matchingCred != null) {
+                subject = CredentialClaimsExtractor.extractClaim(matchingCred.claims(), userMappingClaimName);
+                issuer = matchingCred.issuer();
+                credentialType = matchingCred.credentialType();
+            } else {
+                subject = CredentialClaimsExtractor.extractClaim(claims, userMappingClaimName);
+                issuer = primary.issuer();
+                credentialType = primary.credentialType();
+            }
+            LOG.infof("[OID4VP-IDP] Multi-credential: using merged claims for identity");
+        } else {
+            // Single credential
+            VpTokenVerificationResult.VerifiedCredential primary = result.getPrimaryCredential();
+            claims = primary.claims();
+            presentationType = primary.presentationType();
+            String credentialFormat = presentationType == Oid4vpVerifierService.PresentationType.MDOC
+                    ? Oid4vpIdentityProviderConfig.FORMAT_MSO_MDOC
+                    : Oid4vpIdentityProviderConfig.FORMAT_SD_JWT_VC;
+            userMappingClaimName = getConfig().getUserMappingClaimForFormat(credentialFormat);
+            subject = CredentialClaimsExtractor.extractClaim(claims, userMappingClaimName);
+            issuer = primary.issuer();
+            credentialType = primary.credentialType();
         }
 
-        LOG.infof("[OID4VP-IDP] Extracted - subject: %s, issuer: %s, credentialType: %s (userMappingClaim: %s, format: %s)",
-                subject, issuer, credentialType, userMappingClaimName, credentialFormat);
+        LOG.infof("[OID4VP-IDP] Extracted - subject: %s, issuer: %s, credentialType: %s",
+                subject, issuer, credentialType);
 
         if (subject == null || subject.isBlank()) {
-            LOG.warnf("[OID4VP-IDP] Missing subject claim '%s' in credential (format: %s)", userMappingClaimName, credentialFormat);
+            LOG.warnf("[OID4VP-IDP] Missing subject claim '%s' in credential", userMappingClaimName);
             throw new IdentityBrokerException("Missing subject claim in credential");
         }
 
         // Validate issuer and credential type against config
-        LOG.infof("[OID4VP-IDP] Validating issuer and credential type against config");
         if (!getConfig().isIssuerAllowed(issuer)) {
             LOG.warnf("[OID4VP-IDP] Issuer not allowed: %s", issuer);
             throw new IdentityBrokerException("Issuer not allowed: " + issuer);
@@ -740,156 +633,31 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
             LOG.warnf("[OID4VP-IDP] Credential type not allowed: %s", credentialType);
             throw new IdentityBrokerException("Credential type not allowed: " + credentialType);
         }
-        LOG.infof("[OID4VP-IDP] Issuer and credential type validation passed");
 
         // Compute the composite lookup key (used as federated user ID)
-        String lookupKey = computeLookupKey(issuer, credentialType, subject);
-        LOG.infof("[OID4VP-IDP] Computed lookup key: %s", lookupKey);
+        String lookupKey = FederatedIdentityKeyGenerator.computeLookupKey(issuer, credentialType, subject);
+        LOG.debugf("[OID4VP-IDP] Computed lookup key: %s", lookupKey);
 
-        // Build credential metadata JSON for bi-directional matching
-        // This is stored in the FederatedIdentity token field
-        String credentialMetadata = buildCredentialMetadataJson(issuer, credentialType, subject, userMappingClaimName, claims);
-        LOG.infof("[OID4VP-IDP] Built credential metadata JSON: %s", credentialMetadata);
+        // Build credential metadata JSON (stored in FederatedIdentity.token for bi-directional matching)
+        String credentialMetadata = CredentialClaimsExtractor.buildCredentialMetadataJson(
+                issuer, credentialType, subject, userMappingClaimName, claims, objectMapper);
 
-        // Create brokered identity context (Keycloak 26+ API)
-        LOG.infof("[OID4VP-IDP] Creating BrokeredIdentityContext with id: %s", lookupKey);
+        // Create brokered identity context
         BrokeredIdentityContext context = new BrokeredIdentityContext(lookupKey, getConfig());
         context.setIdp(this);
-
-        // Set required username from subject claim
         context.setUsername(subject);
-        LOG.infof("[OID4VP-IDP] Set username: %s", subject);
-
-        // Store credential metadata in token field (saved to FederatedIdentity.token)
-        // This enables bi-directional matching: credential -> user and user -> credential
         context.setToken(credentialMetadata);
-        LOG.infof("[OID4VP-IDP] Set token (credential metadata) on context");
 
-        // Store claims and context data for IdP mappers to access
-        // Mappers use oid4vp_claims to extract credential claims and map to user attributes
+        // Store claims for IdP mappers
         context.getContextData().put("oid4vp_claims", claims);
         context.getContextData().put("oid4vp_issuer", issuer);
         context.getContextData().put("oid4vp_credential_type", credentialType);
         context.getContextData().put("oid4vp_subject", subject);
         context.getContextData().put("oid4vp_presentation_type", presentationType.name());
-        LOG.infof("[OID4VP-IDP] Added context data for first login flow");
 
-        // Clear session notes
         clearSessionNotes(authSession);
-        LOG.infof("[OID4VP-IDP] Cleared session notes");
-
-        LOG.infof("[OID4VP-IDP] ========== processCallback completed successfully ==========");
+        LOG.infof("[OID4VP-IDP] processCallback completed: user=%s, lookupKey=%s", subject, lookupKey);
         return context;
-    }
-
-    /**
-     * Compute the lookup key from issuer, credential type, and subject.
-     * This key is used as the federated user ID for O(1) lookup.
-     */
-    private static String computeLookupKey(String issuer, String credentialType, String subject) {
-        if (issuer == null || credentialType == null || subject == null) {
-            throw new IllegalArgumentException("issuer, credentialType, and subject are required");
-        }
-        String combined = issuer + "\0" + credentialType + "\0" + subject;
-        try {
-            byte[] hash = MessageDigest.getInstance("SHA-256")
-                    .digest(combined.getBytes(StandardCharsets.UTF_8));
-            return Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to compute lookup key", e);
-        }
-    }
-
-    /**
-     * Build JSON metadata for the credential, stored in FederatedIdentity.token.
-     * This enables bi-directional matching: credential -> user and user -> credential.
-     */
-    private String buildCredentialMetadataJson(String issuer, String credentialType, String subject,
-                                                String userMappingClaim, Map<String, Object> claims) {
-        try {
-            Map<String, Object> metadata = new LinkedHashMap<>();
-            metadata.put("issuer", issuer);
-            metadata.put("credential_type", credentialType);
-            metadata.put("subject", subject);
-            metadata.put("user_mapping_claim", userMappingClaim);
-            metadata.put("linked_at", Instant.now().toString());
-
-            // Include matched claim values for bi-directional verification
-            Map<String, Object> matchedClaims = new LinkedHashMap<>();
-            String mappingValue = extractClaim(claims, userMappingClaim);
-            if (mappingValue != null) {
-                matchedClaims.put(userMappingClaim, mappingValue);
-            }
-            // Also store common identity claims
-            for (String claimName : List.of("sub", "personal_id", "email", "given_name", "family_name")) {
-                String value = extractClaim(claims, claimName);
-                if (value != null && !matchedClaims.containsKey(claimName)) {
-                    matchedClaims.put(claimName, value);
-                }
-            }
-            if (!matchedClaims.isEmpty()) {
-                metadata.put("matched_claims", matchedClaims);
-            }
-
-            return objectMapper.writeValueAsString(metadata);
-        } catch (Exception e) {
-            LOG.warnf("Failed to build credential metadata JSON: %s", e.getMessage());
-            return "{}";
-        }
-    }
-
-    /**
-     * Check if a vp_token looks like a multi-credential response.
-     * Multi-credential format: {"cred_id1": ["cred1"], "cred_id2": ["cred2"]}
-     * Single credential format: {"pid": ["cred"]} or just "cred"
-     * <p>
-     * We consider it multi-credential if:
-     * 1. It's a JSON object
-     * 2. It has more than one key, OR
-     * 3. It has a key that's not "pid" (the standard single-credential wrapper)
-     */
-    private boolean isLikelyMultiCredentialVpToken(String vpToken) {
-        if (vpToken == null || vpToken.isBlank()) {
-            return false;
-        }
-        String trimmed = vpToken.trim();
-        if (!trimmed.startsWith("{")) {
-            return false;
-        }
-        try {
-            var node = objectMapper.readTree(trimmed);
-            if (!node.isObject()) {
-                return false;
-            }
-            // Count keys and check for non-"pid" keys
-            int keyCount = node.size();
-            if (keyCount > 1) {
-                return true;
-            }
-            // Check if the single key is "pid" (standard single-credential wrapper)
-            var props = node.properties();
-            for (var entry : props) {
-                String fieldName = entry.getKey();
-                // If we find a key that's not "pid", it's likely multi-credential
-                if (!"pid".equals(fieldName)) {
-                    // But check if it looks like a credential array
-                    var value = entry.getValue();
-                    if (value != null && value.isArray() && !value.isEmpty()) {
-                        var firstElement = value.get(0);
-                        if (firstElement != null && firstElement.isTextual()) {
-                            String text = firstElement.asText();
-                            // Check if it looks like a credential (SD-JWT or base64)
-                            if (text.contains(".") || text.length() > 100) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            return false;
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     private String computeClientId(AuthenticationRequest request) {
@@ -935,27 +703,6 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
             return "%s://%s:%d".formatted(scheme, uri.getHost(), port);
         }
         return "%s://%s".formatted(scheme, uri.getHost());
-    }
-
-    private String extractClaim(Map<String, Object> claims, String claimName) {
-        if (claims == null || claimName == null) {
-            return null;
-        }
-        Object value = claims.get(claimName);
-        return value != null ? value.toString() : null;
-    }
-
-    private String extractCredentialType(Map<String, Object> claims, Oid4vpVerifierService.PresentationType type) {
-        // For SD-JWT, use vct claim
-        if (claims.containsKey("vct")) {
-            return extractClaim(claims, "vct");
-        }
-        // For mDoc, use docType
-        if (claims.containsKey("docType")) {
-            return extractClaim(claims, "docType");
-        }
-        // Fallback
-        return type == Oid4vpVerifierService.PresentationType.MDOC ? "mso_mdoc" : "dc+sd-jwt";
     }
 
     private byte[] computeJwkThumbprint(String jwkJson) {
@@ -1378,7 +1125,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
                 if (authSession == null && state != null) {
                     LOG.infof("[OID4VP-ENDPOINT] Trying REQUEST_OBJECT_STORE lookup by state: %s", state);
                     try {
-                        Oid4vpRequestObjectStore.StoredRequestObject storedRequest = REQUEST_OBJECT_STORE.resolveByState(state);
+                        Oid4vpRequestObjectStore.StoredRequestObject storedRequest = REQUEST_OBJECT_STORE.resolveByState(session, state);
                         if (storedRequest != null && storedRequest.rootSessionId() != null) {
                             LOG.infof("[OID4VP-ENDPOINT] Found stored request with rootSessionId: %s, clientId: %s",
                                     storedRequest.rootSessionId(), storedRequest.clientId());
@@ -1521,7 +1268,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
 
                 // Clean up stored request objects for this state to allow clean retry
                 if (state != null) {
-                    REQUEST_OBJECT_STORE.removeByState(state);
+                    REQUEST_OBJECT_STORE.removeByState(session, state);
                     LOG.infof("[OID4VP-ENDPOINT] Removed request objects for state after IdentityBrokerException: %s", state);
                 }
 
@@ -1561,7 +1308,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
 
                 // Clean up stored request objects for this state to allow clean retry
                 if (state != null) {
-                    REQUEST_OBJECT_STORE.removeByState(state);
+                    REQUEST_OBJECT_STORE.removeByState(session, state);
                     LOG.infof("[OID4VP-ENDPOINT] Removed request objects for state after unexpected error: %s", state);
                 }
 
@@ -1633,7 +1380,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
                         .build();
             }
 
-            Oid4vpRequestObjectStore.StoredRequestObject stored = REQUEST_OBJECT_STORE.resolve(id);
+            Oid4vpRequestObjectStore.StoredRequestObject stored = REQUEST_OBJECT_STORE.resolve(session, id);
             if (stored == null) {
                 LOG.warnf("[OID4VP-ENDPOINT] Request object not found or expired: %s", id);
                 return Response.status(Response.Status.NOT_FOUND)
@@ -1675,7 +1422,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
                         .build();
             }
 
-            Oid4vpRequestObjectStore.StoredRequestObject stored = REQUEST_OBJECT_STORE.resolve(id);
+            Oid4vpRequestObjectStore.StoredRequestObject stored = REQUEST_OBJECT_STORE.resolve(session, id);
             if (stored == null) {
                 LOG.warnf("[OID4VP-ENDPOINT] Request object not found or expired: %s", id);
                 return Response.status(Response.Status.NOT_FOUND)
@@ -1730,7 +1477,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
 
             // Clean up stored request objects for this state to allow clean retry
             if (state != null) {
-                REQUEST_OBJECT_STORE.removeByState(state);
+                REQUEST_OBJECT_STORE.removeByState(session, state);
                 LOG.infof("[OID4VP-ENDPOINT] Removed request objects for state: %s", state);
             }
 

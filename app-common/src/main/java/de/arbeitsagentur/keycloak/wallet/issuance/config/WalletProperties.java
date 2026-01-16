@@ -63,6 +63,10 @@ public record WalletProperties(
         return "%s/realms/%s/protocol/openid-connect/auth".formatted(keycloakBaseUrl, realm);
     }
 
+    public String issuerUrl() {
+        return "%s/realms/%s".formatted(keycloakBaseUrl, realm);
+    }
+
     public String nonceEndpoint() {
         return "%s/realms/%s/protocol/oid4vc/nonce".formatted(keycloakBaseUrl, realm);
     }

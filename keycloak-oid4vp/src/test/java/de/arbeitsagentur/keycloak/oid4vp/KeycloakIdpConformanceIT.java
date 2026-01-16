@@ -161,7 +161,7 @@ class KeycloakIdpConformanceIT {
                 "ngrok binary not found on PATH; required for conformance tests");
 
         // Create Keycloak container first (but don't start yet)
-        keycloak = new GenericContainer<>("quay.io/keycloak/keycloak:26.4.5")
+        keycloak = new GenericContainer<>("quay.io/keycloak/keycloak:26.5.0")
                 .withEnv("KEYCLOAK_ADMIN", "admin")
                 .withEnv("KEYCLOAK_ADMIN_PASSWORD", "admin")
                 .withEnv("KC_PROXY_HEADERS", "xforwarded")

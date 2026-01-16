@@ -113,7 +113,7 @@ class WalletIntegrationTest {
     static GenericContainer<?> keycloak = createKeycloakContainer();
 
     private static GenericContainer<?> createKeycloakContainer() {
-        GenericContainer<?> container = new GenericContainer<>("quay.io/keycloak/keycloak:26.4.5")
+        GenericContainer<?> container = new GenericContainer<>("quay.io/keycloak/keycloak:26.5.0")
                 .withEnv("KEYCLOAK_ADMIN", "admin")
                 .withEnv("KEYCLOAK_ADMIN_PASSWORD", "admin")
                 .withExposedPorts(8080)
@@ -188,6 +188,16 @@ class WalletIntegrationTest {
         Files.deleteIfExists(keyFile);
     }
 
+    /**
+     * Refresh trust list with Keycloak's dynamically generated keys.
+     * Call this after credential issuance so the PS384 key exists.
+     */
+    private void refreshKeycloakTrustList() {
+        String keycloakJwksUrl = "http://%s:%d/realms/wallet-demo/protocol/openid-connect/certs"
+                .formatted(keycloak.getHost(), keycloak.getMappedPort(8080));
+        trustListService.addJwksUrl(keycloakJwksUrl);
+    }
+
     @Test
     void endToEndCredentialIssuance() throws Exception {
         URI base = URI.create("http://localhost:" + serverPort);
@@ -233,6 +243,8 @@ class WalletIntegrationTest {
                     .startsWith("DOC-");
 
             assertThat(Files.list(credentialDir)).isNotEmpty();
+
+            refreshKeycloakTrustList();
 
             String dcql = """
                     {
@@ -909,6 +921,7 @@ class WalletIntegrationTest {
             try (CloseableHttpResponse issueResponse = client.execute(new HttpPost(base.resolve("/api/issue")), context)) {
                 assertThat(issueResponse.getCode()).isEqualTo(200);
             }
+            refreshKeycloakTrustList();
             String dcql = objectMapper.writeValueAsString(Map.of(
                     "credentials", List.of(
                             Map.of(
@@ -1086,6 +1099,16 @@ class WalletIntegrationTest {
             HttpPost consentPost = new HttpPost(base.resolve("/oid4vp/consent"));
             List<NameValuePair> consentParams = new ArrayList<>();
             consentParams.add(new BasicNameValuePair("decision", "accept"));
+            // Include all checked checkboxes for credential inclusion
+            consentPage.document().select("input[type=checkbox][name^=include-]").forEach(checkbox -> {
+                if (checkbox.hasAttr("checked")) {
+                    consentParams.add(new BasicNameValuePair(checkbox.attr("name"), checkbox.attr("value")));
+                }
+            });
+            // Include hidden selection inputs
+            consentPage.document().select("input[type=hidden][name^=selection-]").forEach(hidden -> {
+                consentParams.add(new BasicNameValuePair(hidden.attr("name"), hidden.attr("value")));
+            });
             consentPost.setEntity(new UrlEncodedFormEntity(consentParams, StandardCharsets.UTF_8));
             String vpTokenValue;
             try (CloseableHttpResponse consentResponse = client.execute(consentPost, context)) {
@@ -1164,7 +1187,21 @@ class WalletIntegrationTest {
             // should still render radios when multiple credentials match a single request
             assertThat(radios).hasSize(2);
             HttpPost consentPost = new HttpPost(base.resolve("/oid4vp/consent"));
-            consentPost.setEntity(new UrlEncodedFormEntity(List.of(new BasicNameValuePair("decision", "accept")), StandardCharsets.UTF_8));
+            List<NameValuePair> consentParams = new ArrayList<>();
+            consentParams.add(new BasicNameValuePair("decision", "accept"));
+            // Include all checked checkboxes for credential inclusion
+            consentPage.document().select("input[type=checkbox][name^=include-]").forEach(checkbox -> {
+                if (checkbox.hasAttr("checked")) {
+                    consentParams.add(new BasicNameValuePair(checkbox.attr("name"), checkbox.attr("value")));
+                }
+            });
+            // Select first radio option (default behavior)
+            radioGroups.forEach((name, inputs) -> {
+                if (!inputs.isEmpty()) {
+                    consentParams.add(new BasicNameValuePair(name, inputs.get(0).attr("value")));
+                }
+            });
+            consentPost.setEntity(new UrlEncodedFormEntity(consentParams, StandardCharsets.UTF_8));
             try (CloseableHttpResponse consentResponse = client.execute(consentPost, context)) {
                 String body = new String(consentResponse.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
                 assertThat(consentResponse.getCode()).isEqualTo(200);
@@ -1266,9 +1303,21 @@ class WalletIntegrationTest {
                 assertThat(startResponse.getCode()).isEqualTo(302);
                 walletAuth = resolveRedirect(base, startResponse.getFirstHeader("Location").getValue());
             }
-            fetchHtmlFollowingRedirects(client, context, walletAuth);
+            HtmlPage consentPage = fetchHtmlFollowingRedirects(client, context, walletAuth);
+            List<NameValuePair> consentParams = new ArrayList<>();
+            consentParams.add(new BasicNameValuePair("decision", "accept"));
+            // Include all checked checkboxes for credential inclusion
+            consentPage.document().select("input[type=checkbox][name^=include-]").forEach(checkbox -> {
+                if (checkbox.hasAttr("checked")) {
+                    consentParams.add(new BasicNameValuePair(checkbox.attr("name"), checkbox.attr("value")));
+                }
+            });
+            // Include hidden selection inputs
+            consentPage.document().select("input[type=hidden][name^=selection-]").forEach(hidden -> {
+                consentParams.add(new BasicNameValuePair(hidden.attr("name"), hidden.attr("value")));
+            });
             HttpPost consentPost = new HttpPost(base.resolve("/oid4vp/consent"));
-            consentPost.setEntity(new UrlEncodedFormEntity(List.of(new BasicNameValuePair("decision", "accept")), StandardCharsets.UTF_8));
+            consentPost.setEntity(new UrlEncodedFormEntity(consentParams, StandardCharsets.UTF_8));
             try (CloseableHttpResponse consentResponse = client.execute(consentPost, context)) {
                 String body = new String(consentResponse.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
                 assertThat(consentResponse.getCode()).isEqualTo(200);
@@ -1316,6 +1365,7 @@ class WalletIntegrationTest {
             try (CloseableHttpResponse issueResponse = client.execute(new HttpPost(base.resolve("/api/issue")), context)) {
                 assertThat(issueResponse.getCode()).isEqualTo(200);
             }
+            refreshKeycloakTrustList();
 
             String clientMetadata = objectMapper.writeValueAsString(Map.of(
                     "jwks", objectMapper.readTree(verifierKeyService.publicJwksJson()),
@@ -1645,6 +1695,7 @@ class WalletIntegrationTest {
             try (CloseableHttpResponse issueResponse = client.execute(new HttpPost(base.resolve("/api/issue")), context)) {
                 assertThat(issueResponse.getCode()).isEqualTo(200);
             }
+            refreshKeycloakTrustList();
             SelfSignedMaterial attestation = generateSelfSignedCert();
             String dcql = fetchDefaultDcqlQuery(client, context, base);
             URI walletAuth = startPresentationRequest(client, context, base, dcql, List.of("given_name"), null,
@@ -1686,6 +1737,7 @@ class WalletIntegrationTest {
             try (CloseableHttpResponse issueResponse = client.execute(new HttpPost(base.resolve("/api/issue")), context)) {
                 assertThat(issueResponse.getCode()).isEqualTo(200);
             }
+            refreshKeycloakTrustList();
             String dcql = fetchDefaultDcqlQuery(client, context, base);
             PresentationForm form = initiatePresentationFlow(client, context, base, dcql, "accept",
                     List.of("given_name"), null, null, false,
@@ -1951,6 +2003,16 @@ class WalletIntegrationTest {
 
         List<NameValuePair> consentParams = new ArrayList<>();
         consentParams.add(new BasicNameValuePair("decision", decision));
+        // Include checked checkboxes for credential inclusion (include-{descriptorId})
+        document.document().select("input[type=checkbox][name^=include-]").forEach(checkbox -> {
+            if (checkbox.hasAttr("checked")) {
+                consentParams.add(new BasicNameValuePair(checkbox.attr("name"), checkbox.attr("value")));
+            }
+        });
+        // Include hidden inputs for single-candidate selection (selection-{descriptorId})
+        document.document().select("input[type=hidden][name^=selection-]").forEach(hidden -> {
+            consentParams.add(new BasicNameValuePair(hidden.attr("name"), hidden.attr("value")));
+        });
         Map<String, List<Element>> radioGroups = document.document().select("input[type=radio][name^=selection-]")
                 .stream()
                 .collect(Collectors.groupingBy(input -> input.attr("name"), Collectors.toList()));

@@ -73,7 +73,11 @@ public class TrustListService implements
                 }
                 PublicKey publicKey = parsePublicKey(certPem);
                 if (publicKey instanceof RSAPublicKey rsaPublicKey) {
+                    // Add verifiers for common RSA algorithms (PKCS#1 v1.5 and PSS)
                     verifiers.add(new TrustedVerifier(JWSAlgorithm.RS256, new RSASSAVerifier(rsaPublicKey)));
+                    verifiers.add(new TrustedVerifier(JWSAlgorithm.PS256, new RSASSAVerifier(rsaPublicKey)));
+                    verifiers.add(new TrustedVerifier(JWSAlgorithm.PS384, new RSASSAVerifier(rsaPublicKey)));
+                    verifiers.add(new TrustedVerifier(JWSAlgorithm.PS512, new RSASSAVerifier(rsaPublicKey)));
                     keys.add(rsaPublicKey);
                 } else if (publicKey instanceof ECPublicKey ecPublicKey) {
                     verifiers.add(new TrustedVerifier(JWSAlgorithm.ES256, new ECDSAVerifier(ecPublicKey)));
@@ -174,6 +178,39 @@ public class TrustListService implements
             return verifier != null && jwt.verify(verifier);
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    /**
+     * Adds keys from a JWKS URL to the default trust list.
+     * Useful for tests that need to trust dynamically-generated keys.
+     */
+    public void addJwksUrl(String jwksUrl) {
+        try {
+            var jwkSet = com.nimbusds.jose.jwk.JWKSet.load(java.net.URI.create(jwksUrl).toURL());
+            List<TrustedVerifier> verifiers = new ArrayList<>(trustLists.getOrDefault(defaultTrustListId, List.of()));
+            List<PublicKey> keys = new ArrayList<>(trustListKeys.getOrDefault(defaultTrustListId, List.of()));
+            for (var jwk : jwkSet.getKeys()) {
+                try {
+                    if (jwk instanceof com.nimbusds.jose.jwk.RSAKey rsaKey) {
+                        RSAPublicKey pubKey = rsaKey.toRSAPublicKey();
+                        verifiers.add(new TrustedVerifier(JWSAlgorithm.RS256, new RSASSAVerifier(pubKey)));
+                        verifiers.add(new TrustedVerifier(JWSAlgorithm.PS256, new RSASSAVerifier(pubKey)));
+                        verifiers.add(new TrustedVerifier(JWSAlgorithm.PS384, new RSASSAVerifier(pubKey)));
+                        verifiers.add(new TrustedVerifier(JWSAlgorithm.PS512, new RSASSAVerifier(pubKey)));
+                        keys.add(pubKey);
+                    } else if (jwk instanceof com.nimbusds.jose.jwk.ECKey ecKey) {
+                        ECPublicKey pubKey = ecKey.toECPublicKey();
+                        verifiers.add(new TrustedVerifier(JWSAlgorithm.ES256, new ECDSAVerifier(pubKey)));
+                        keys.add(pubKey);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+            trustLists.put(defaultTrustListId, verifiers);
+            trustListKeys.put(defaultTrustListId, List.copyOf(keys));
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to load JWKS from " + jwksUrl, e);
         }
     }
 

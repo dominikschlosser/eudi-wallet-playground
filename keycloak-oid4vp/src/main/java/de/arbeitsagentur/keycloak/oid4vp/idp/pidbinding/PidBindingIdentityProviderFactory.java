@@ -62,7 +62,7 @@ public class PidBindingIdentityProviderFactory extends AbstractIdentityProviderF
                     .label("Login Credential Type")
                     .helpText("VCT for the login credential issued by this verifier. " +
                               "This credential contains the Keycloak user ID. " +
-                              "Default: urn:verifier:user_credential:1")
+                              "Default: urn:arbeitsagentur:user_credential:1")
                     .type(ProviderConfigProperty.STRING_TYPE)
                     .defaultValue(PidBindingIdentityProviderConfig.DEFAULT_LOGIN_CREDENTIAL_TYPE)
                     .add()

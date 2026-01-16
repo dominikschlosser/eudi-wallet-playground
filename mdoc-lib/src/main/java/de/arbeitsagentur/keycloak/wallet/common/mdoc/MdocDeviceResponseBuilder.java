@@ -25,7 +25,7 @@ import com.nimbusds.jose.jwk.Curve;
 import com.upokecenter.cbor.CBOREncodeOptions;
 import com.upokecenter.cbor.CBORObject;
 import com.upokecenter.cbor.CBORType;
-import de.arbeitsagentur.keycloak.wallet.common.util.HexUtils;
+import de.arbeitsagentur.keycloak.wallet.mdoc.util.HexUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

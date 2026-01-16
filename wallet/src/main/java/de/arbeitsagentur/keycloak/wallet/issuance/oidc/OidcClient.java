@@ -274,6 +274,10 @@ public class OidcClient {
         descriptor.put("type", "openid_credential");
         descriptor.put("format", "dc+sd-jwt");
         descriptor.put("credential_configuration_id", configId);
+        // Add locations array with issuer URL (required by Keycloak for authorization_details validation)
+        ArrayNode locations = objectMapper.createArrayNode();
+        locations.add(properties.issuerUrl());
+        descriptor.set("locations", locations);
         arr.add(descriptor);
     }
 

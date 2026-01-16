@@ -15,7 +15,7 @@
  */
 package de.arbeitsagentur.keycloak.wallet.common.mdoc;
 
-import de.arbeitsagentur.keycloak.wallet.common.util.HexUtils;
+import de.arbeitsagentur.keycloak.wallet.mdoc.util.HexUtils;
 import com.upokecenter.cbor.CBOREncodeOptions;
 import com.upokecenter.cbor.CBORObject;
 import com.upokecenter.cbor.CBORType;

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package de.arbeitsagentur.keycloak.wallet.common.util;
+package de.arbeitsagentur.keycloak.wallet.mdoc.util;
 
 import com.upokecenter.cbor.CBORObject;
 import com.upokecenter.cbor.CBORType;
