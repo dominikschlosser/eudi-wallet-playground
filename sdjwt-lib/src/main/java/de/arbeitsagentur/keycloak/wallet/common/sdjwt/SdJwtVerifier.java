@@ -45,6 +45,8 @@ public class SdJwtVerifier {
     private static final Logger LOG = LoggerFactory.getLogger(SdJwtVerifier.class);
     /** Default maximum age for KB-JWT iat claim to prevent replay attacks (5 minutes) */
     public static final Duration DEFAULT_KB_JWT_MAX_AGE = Duration.ofMinutes(5);
+    /** Clock skew tolerance in seconds for timestamp validation */
+    private static final long CLOCK_SKEW_SECONDS = 60;
 
     private final SdJwtParser sdJwtParser;
     private final ObjectMapper objectMapper;
@@ -93,7 +95,7 @@ public class SdJwtVerifier {
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
         }
         validateTimestamps(jwt);
-        validateAudienceAndNonce(jwt, expectedAudience, expectedNonce);
+        validateAudienceAndNonceLenient(jwt, expectedAudience, expectedNonce);
         boolean disclosuresValid = SdJwtUtils.verifyDisclosures(jwt, parts, objectMapper);
         if (!disclosuresValid) {
             throw new IllegalStateException("Credential signature not trusted");
@@ -130,68 +132,93 @@ public class SdJwtVerifier {
                                     SdJwtUtils.SdJwtParts presentationParts,
                                     String expectedAudience,
                                     String expectedNonce) throws Exception {
+        validateHolderBindingInputs(keyBindingJwt, presentationParts);
+
+        SignedJWT holderBinding = SignedJWT.parse(keyBindingJwt);
+        validateKeyBindingType(holderBinding);
+
+        verifyHolderBindingSignature(holderBinding, presentationParts.signedJwt());
+        validateKeyBindingTimestamps(holderBinding);
+        validateKeyBindingAudienceAndNonce(holderBinding, expectedAudience, expectedNonce);
+        validateSdHash(holderBinding, presentationParts);
+    }
+
+    private void validateHolderBindingInputs(String keyBindingJwt, SdJwtUtils.SdJwtParts parts) {
         if (keyBindingJwt == null || keyBindingJwt.isBlank()) {
             throw new IllegalStateException("Missing key binding JWT");
         }
-        if (presentationParts == null || presentationParts.signedJwt() == null || presentationParts.signedJwt().isBlank()) {
+        if (parts == null || parts.signedJwt() == null || parts.signedJwt().isBlank()) {
             throw new IllegalStateException("Missing SD-JWT");
         }
-        SignedJWT holderBinding = SignedJWT.parse(keyBindingJwt);
-        validateKeyBindingType(holderBinding);
-        PublicKey credentialKey = extractHolderKey(presentationParts.signedJwt());
+    }
+
+    private void verifyHolderBindingSignature(SignedJWT holderBinding, String credentialJwt) throws Exception {
+        PublicKey credentialKey = extractHolderKey(credentialJwt);
         if (credentialKey == null) {
             throw new IllegalStateException("SD-JWT does not contain a holder binding key (cnf)");
         }
         if (!TrustedIssuerResolver.verifyWithKey(holderBinding, credentialKey)) {
             throw new IllegalStateException("Holder binding signature invalid");
         }
-        if (holderBinding.getJWTClaimsSet().getIssueTime() == null) {
+    }
+
+    private void validateKeyBindingTimestamps(SignedJWT holderBinding) throws Exception {
+        var claims = holderBinding.getJWTClaimsSet();
+        if (claims.getIssueTime() == null) {
             throw new IllegalStateException("Presentation missing iat");
         }
-        // Check KB-JWT max age to prevent replay attacks
-        Instant issuedAt = holderBinding.getJWTClaimsSet().getIssueTime().toInstant();
+        Instant issuedAt = claims.getIssueTime().toInstant();
         Instant now = Instant.now();
-        if (issuedAt.isAfter(now.plusSeconds(60))) {
-            // Allow small clock skew (60 seconds) for iat in the future
+        // Allow small clock skew (60 seconds) for iat in the future
+        if (issuedAt.isAfter(now.plusSeconds(CLOCK_SKEW_SECONDS))) {
             throw new IllegalStateException("Presentation iat is in the future");
         }
         if (issuedAt.plus(kbJwtMaxAge).isBefore(now)) {
             throw new IllegalStateException("Presentation too old (iat exceeds max age of " + kbJwtMaxAge.toSeconds() + "s)");
         }
-        if (holderBinding.getJWTClaimsSet().getExpirationTime() != null
-                && holderBinding.getJWTClaimsSet().getExpirationTime().toInstant().isBefore(now)) {
+        if (claims.getExpirationTime() != null && claims.getExpirationTime().toInstant().isBefore(now)) {
             throw new IllegalStateException("Presentation has expired");
         }
-        if (holderBinding.getJWTClaimsSet().getNotBeforeTime() != null
-                && holderBinding.getJWTClaimsSet().getNotBeforeTime().toInstant().isAfter(now)) {
+        if (claims.getNotBeforeTime() != null && claims.getNotBeforeTime().toInstant().isAfter(now)) {
             throw new IllegalStateException("Presentation not yet valid");
         }
+    }
+
+    private void validateKeyBindingAudienceAndNonce(SignedJWT holderBinding,
+                                                    String expectedAudience,
+                                                    String expectedNonce) throws Exception {
+        var claims = holderBinding.getJWTClaimsSet();
+
         if (expectedAudience == null || expectedAudience.isBlank()) {
             throw new IllegalStateException("Expected audience missing");
         }
-        if (holderBinding.getJWTClaimsSet().getAudience() == null || holderBinding.getJWTClaimsSet().getAudience().isEmpty()) {
+        if (claims.getAudience() == null || claims.getAudience().isEmpty()) {
             throw new IllegalStateException("Presentation missing aud");
         }
-        String aud = holderBinding.getJWTClaimsSet().getAudience().get(0);
+        String aud = claims.getAudience().get(0);
         if (!expectedAudience.equals(aud)) {
             LOG.error("Audience mismatch: expected='{}', actual='{}'", expectedAudience, aud);
             throw new IllegalStateException("Audience mismatch in presentation: expected='" + expectedAudience + "', actual='" + aud + "'");
         }
+
         if (expectedNonce == null || expectedNonce.isBlank()) {
             throw new IllegalStateException("Expected nonce missing");
         }
-        String nonce = holderBinding.getJWTClaimsSet().getStringClaim("nonce");
+        String nonce = claims.getStringClaim("nonce");
         if (nonce == null || nonce.isBlank()) {
             throw new IllegalStateException("Presentation missing nonce");
         }
         if (!expectedNonce.equals(nonce)) {
             throw new IllegalStateException("Nonce mismatch in presentation");
         }
+    }
+
+    private void validateSdHash(SignedJWT holderBinding, SdJwtUtils.SdJwtParts parts) throws Exception {
         String sdHash = holderBinding.getJWTClaimsSet().getStringClaim("sd_hash");
         if (sdHash == null || sdHash.isBlank()) {
             throw new IllegalStateException("Presentation missing sd_hash");
         }
-        String expectedSdHash = SdJwtUtils.computeSdHash(presentationParts, objectMapper);
+        String expectedSdHash = SdJwtUtils.computeSdHash(parts, objectMapper);
         if (expectedSdHash == null || !expectedSdHash.equals(sdHash)) {
             throw new IllegalStateException("sd_hash mismatch in presentation");
         }
@@ -209,59 +236,47 @@ public class SdJwtVerifier {
             return;
         }
         SignedJWT holderBinding = SignedJWT.parse(keyBindingJwt);
+        verifyHolderBindingSignatureForPlainJwt(holderBinding, credentialToken);
+        validateTimestamps(holderBinding);
+        validateAudienceAndNonceLenient(holderBinding, expectedAudience, expectedNonce);
+    }
+
+    private void verifyHolderBindingSignatureForPlainJwt(SignedJWT holderBinding, String credentialToken) throws Exception {
         PublicKey credentialKey = extractHolderKey(credentialToken);
         PublicKey kbKey = parsePublicJwk(holderBinding.getJWTClaimsSet().getJSONObjectClaim("cnf"));
+
         if (credentialKey != null && kbKey != null && !keysMatch(credentialKey, kbKey)) {
             throw new IllegalStateException("Holder binding key does not match credential cnf");
         }
+
         PublicKey keyToUse = credentialKey != null ? credentialKey : kbKey;
         if (keyToUse == null || !TrustedIssuerResolver.verifyWithKey(holderBinding, keyToUse)) {
             throw new IllegalStateException("Holder binding signature invalid");
         }
-        if (holderBinding.getJWTClaimsSet().getExpirationTime() != null
-                && holderBinding.getJWTClaimsSet().getExpirationTime().toInstant().isBefore(Instant.now())) {
-            throw new IllegalStateException("Presentation has expired");
-        }
-        if (holderBinding.getJWTClaimsSet().getNotBeforeTime() != null
-                && holderBinding.getJWTClaimsSet().getNotBeforeTime().toInstant().isAfter(Instant.now())) {
-            throw new IllegalStateException("Presentation not yet valid");
-        }
-        if (expectedAudience != null && holderBinding.getJWTClaimsSet().getAudience() != null
-                && !holderBinding.getJWTClaimsSet().getAudience().isEmpty()) {
-            String aud = holderBinding.getJWTClaimsSet().getAudience().get(0);
-            if (!expectedAudience.equals(aud)) {
-                throw new IllegalStateException("Audience mismatch in credential");
-            }
-        }
-        if (expectedNonce != null) {
-            String nonce = holderBinding.getJWTClaimsSet().getStringClaim("nonce");
-            if (nonce != null && !expectedNonce.equals(nonce)) {
-                throw new IllegalStateException("Nonce mismatch in presentation");
-            }
-        }
     }
 
     private void validateTimestamps(SignedJWT jwt) throws Exception {
-        if (jwt.getJWTClaimsSet().getExpirationTime() != null
-                && jwt.getJWTClaimsSet().getExpirationTime().toInstant().isBefore(Instant.now())) {
-            throw new IllegalStateException("Credential presentation expired");
+        var claims = jwt.getJWTClaimsSet();
+        Instant now = Instant.now();
+        if (claims.getExpirationTime() != null && claims.getExpirationTime().toInstant().isBefore(now)) {
+            throw new IllegalStateException("Presentation has expired");
         }
-        if (jwt.getJWTClaimsSet().getNotBeforeTime() != null
-                && jwt.getJWTClaimsSet().getNotBeforeTime().toInstant().isAfter(Instant.now())) {
-            throw new IllegalStateException("Credential presentation not yet valid");
+        if (claims.getNotBeforeTime() != null && claims.getNotBeforeTime().toInstant().isAfter(now)) {
+            throw new IllegalStateException("Presentation not yet valid");
         }
     }
 
-    private void validateAudienceAndNonce(SignedJWT jwt, String expectedAudience, String expectedNonce) throws Exception {
-        if (expectedAudience != null && jwt.getJWTClaimsSet().getAudience() != null
-                && !jwt.getJWTClaimsSet().getAudience().isEmpty()) {
-            String aud = jwt.getJWTClaimsSet().getAudience().get(0);
+    private void validateAudienceAndNonceLenient(SignedJWT jwt, String expectedAudience, String expectedNonce) throws Exception {
+        var claims = jwt.getJWTClaimsSet();
+        // Lenient: only check if both expected and actual values are present
+        if (expectedAudience != null && claims.getAudience() != null && !claims.getAudience().isEmpty()) {
+            String aud = claims.getAudience().get(0);
             if (!expectedAudience.equals(aud)) {
                 throw new IllegalStateException("Audience mismatch in credential");
             }
         }
         if (expectedNonce != null) {
-            String nonce = jwt.getJWTClaimsSet().getStringClaim("nonce");
+            String nonce = claims.getStringClaim("nonce");
             if (nonce != null && !expectedNonce.equals(nonce)) {
                 throw new IllegalStateException("Nonce mismatch in presentation");
             }

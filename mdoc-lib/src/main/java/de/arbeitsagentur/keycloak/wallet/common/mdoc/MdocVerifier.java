@@ -174,60 +174,76 @@ public class MdocVerifier {
         }
         LOG.info("[OID4VP-MDOC] verifySignature() checking {} trust list keys for trustListId: {}", keys.size(), trustListId);
 
-        // Extract x5chain certificate(s) from mDoc issuerAuth for comparison
-        List<X509Certificate> x5chainCerts = x5ChainCertificates(sign1);
-        if (!x5chainCerts.isEmpty()) {
-            X509Certificate cert = x5chainCerts.get(0);
-            if (cert.getPublicKey() instanceof ECPublicKey ecKeyFromX5c) {
-                String x5cX = Base64.getUrlEncoder().withoutPadding().encodeToString(
-                        toUnsignedBytes(ecKeyFromX5c.getW().getAffineX()));
-                LOG.info("[OID4VP-MDOC] mDoc issuerAuth x5chain public key x={}", x5cX);
-            }
-            // Log the full certificate in base64 for debugging (single line for log parsers)
-            try {
-                String certBase64 = Base64.getEncoder().encodeToString(cert.getEncoded());
-                LOG.info("[OID4VP-MDOC] mDoc issuerAuth x5chain certificate (base64): {}", certBase64);
-                LOG.info("[OID4VP-MDOC] mDoc issuerAuth x5chain subject: {}, issuer: {}",
-                        cert.getSubjectX500Principal().getName(), cert.getIssuerX500Principal().getName());
-            } catch (Exception e) {
-                LOG.warn("[OID4VP-MDOC] Could not log x5chain certificate: {}", e.getMessage());
-            }
-        }
-        List<PublicKey> x5chainKeys = x5chainCerts.stream()
-                .map(X509Certificate::getPublicKey)
-                .toList();
+        logX5ChainInfo(sign1);
 
+        if (tryVerifyWithTrustListKeys(sign1, keys, steps)) {
+            return;
+        }
+
+        throw new IllegalStateException("Credential signature not trusted");
+    }
+
+    private void logX5ChainInfo(Sign1Message sign1) {
+        List<X509Certificate> x5chainCerts = x5ChainCertificates(sign1);
+        if (x5chainCerts.isEmpty()) {
+            return;
+        }
+        X509Certificate cert = x5chainCerts.get(0);
+        logPublicKeyInfo(cert.getPublicKey(), "mDoc issuerAuth x5chain");
+        logCertificateInfo(cert);
+    }
+
+    private void logPublicKeyInfo(PublicKey key, String label) {
+        if (key instanceof ECPublicKey ecKey) {
+            String x = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                    toUnsignedBytes(ecKey.getW().getAffineX()));
+            LOG.info("[OID4VP-MDOC] {} public key x={}", label, x);
+        }
+    }
+
+    private void logCertificateInfo(X509Certificate cert) {
+        try {
+            String certBase64 = Base64.getEncoder().encodeToString(cert.getEncoded());
+            LOG.info("[OID4VP-MDOC] mDoc issuerAuth x5chain certificate (base64): {}", certBase64);
+            LOG.info("[OID4VP-MDOC] mDoc issuerAuth x5chain subject: {}, issuer: {}",
+                    cert.getSubjectX500Principal().getName(), cert.getIssuerX500Principal().getName());
+        } catch (Exception e) {
+            LOG.warn("[OID4VP-MDOC] Could not log x5chain certificate: {}", e.getMessage());
+        }
+    }
+
+    private boolean tryVerifyWithTrustListKeys(Sign1Message sign1, List<PublicKey> keys, VerificationStepSink steps) {
         for (int i = 0; i < keys.size(); i++) {
             PublicKey key = keys.get(i);
-            if (key instanceof ECPublicKey ecKey) {
-                String trustKeyX = Base64.getUrlEncoder().withoutPadding().encodeToString(
-                        toUnsignedBytes(ecKey.getW().getAffineX()));
-                LOG.info("[OID4VP-MDOC] Trust list key[{}] x={}", i, trustKeyX);
-            }
+            logPublicKeyInfo(key, "Trust list key[" + i + "]");
+
             OneKey coseKey = OneKeyFromPublicKey.build(key);
             if (coseKey == null) {
                 LOG.info("[OID4VP-MDOC] Trust list key[{}] could not be converted to OneKey", i);
                 continue;
             }
-            try {
-                boolean valid = sign1.validate(coseKey);
-                LOG.info("[OID4VP-MDOC] Trust list key[{}] validation result: {}", i, valid);
-                if (valid) {
-                    if (steps != null) {
-                        steps.add("Signature verified against trust-list.json",
-                                "Checked mDoc issuerAuth signature against trusted issuers in the trust list.",
-                                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
-                    }
-                    return;
-                }
-            } catch (Exception e) {
-                LOG.info("[OID4VP-MDOC] Trust list key[{}] validation exception: {}", i, e.getMessage());
+
+            if (tryValidateSignature(sign1, coseKey, i, steps)) {
+                return true;
             }
         }
+        return false;
+    }
 
-        // x5chain fallback verification has been removed
-        // All trusted issuer certificates must be in the trust list for production-grade verification
-        throw new IllegalStateException("Credential signature not trusted");
+    private boolean tryValidateSignature(Sign1Message sign1, OneKey coseKey, int keyIndex, VerificationStepSink steps) {
+        try {
+            boolean valid = sign1.validate(coseKey);
+            LOG.info("[OID4VP-MDOC] Trust list key[{}] validation result: {}", keyIndex, valid);
+            if (valid && steps != null) {
+                steps.add("Signature verified against trust-list.json",
+                        "Checked mDoc issuerAuth signature against trusted issuers in the trust list.",
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
+            }
+            return valid;
+        } catch (Exception e) {
+            LOG.info("[OID4VP-MDOC] Trust list key[{}] validation exception: {}", keyIndex, e.getMessage());
+            return false;
+        }
     }
 
     private List<X509Certificate> x5ChainCertificates(Sign1Message sign1) {
@@ -319,59 +335,110 @@ public class MdocVerifier {
                                   String expectedNonce,
                                   String expectedResponseUri,
                                   byte[] expectedJwkThumbprint) throws Exception {
+        // Extract and validate deviceSigned structure
         CBORObject deviceSigned = asMap(document.get("deviceSigned"));
         if (deviceSigned == null) {
             throw new IllegalStateException("Missing deviceSigned in DeviceResponse");
         }
-        CBORObject deviceAuth = deviceSigned.get("deviceAuth");
-        CBORObject deviceAuthMap = asMap(deviceAuth);
-        CBORObject deviceSignature = deviceAuthMap != null ? deviceAuthMap.get("deviceSignature") : deviceAuth;
-        Sign1Message sign1 = decodeDeviceSignature(deviceSignature);
-        PublicKey deviceKey = extractDeviceKey(mso.get("deviceKeyInfo"));
-        if (deviceKey == null) {
-            throw new IllegalStateException("Missing deviceKeyInfo in MSO");
-        }
-        OneKey coseKey = OneKeyFromPublicKey.build(deviceKey);
 
+        // Extract device signature and key
+        Sign1Message sign1 = extractDeviceSignature(deviceSigned);
+        OneKey coseKey = extractAndValidateDeviceKey(mso);
+
+        // Build expected transcript and set payload if needed
         CBORObject expectedTranscript = buildSessionTranscript(expectedClientId, expectedNonce, expectedJwkThumbprint, expectedResponseUri);
-        byte[] effectivePayloadBytes = sign1.GetContent();
-        if (effectivePayloadBytes == null || effectivePayloadBytes.length == 0) {
-            effectivePayloadBytes = buildDeviceAuthenticationPayload(expectedTranscript, docType, deviceSigned.get("nameSpaces"));
-            sign1.SetContent(effectivePayloadBytes);
-        }
+        byte[] effectivePayloadBytes = ensurePayloadContent(sign1, expectedTranscript, docType, deviceSigned);
 
+        // Verify signature
         if (coseKey == null || !sign1.validate(coseKey)) {
             throw new IllegalStateException("deviceAuth signature invalid");
         }
 
-        CBORObject payload = CBORObject.DecodeFromBytes(effectivePayloadBytes);
-        if (payload.HasMostOuterTag(24) && payload.getType() == CBORType.ByteString) {
-            payload = CBORObject.DecodeFromBytes(payload.GetByteString());
+        // Validate payload contents
+        validateDeviceAuthPayload(effectivePayloadBytes, docType, expectedTranscript);
+    }
+
+    private Sign1Message extractDeviceSignature(CBORObject deviceSigned) throws Exception {
+        CBORObject deviceAuth = deviceSigned.get("deviceAuth");
+        CBORObject deviceAuthMap = asMap(deviceAuth);
+        CBORObject deviceSignature = deviceAuthMap != null ? deviceAuthMap.get("deviceSignature") : deviceAuth;
+        return decodeDeviceSignature(deviceSignature);
+    }
+
+    private OneKey extractAndValidateDeviceKey(CBORObject mso) throws Exception {
+        PublicKey deviceKey = extractDeviceKey(mso.get("deviceKeyInfo"));
+        if (deviceKey == null) {
+            throw new IllegalStateException("Missing deviceKeyInfo in MSO");
         }
-        if (payload.getType() == CBORType.ByteString) {
-            payload = CBORObject.DecodeFromBytes(payload.GetByteString());
+        return OneKeyFromPublicKey.build(deviceKey);
+    }
+
+    private byte[] ensurePayloadContent(Sign1Message sign1, CBORObject expectedTranscript,
+                                        String docType, CBORObject deviceSigned) {
+        byte[] payloadBytes = sign1.GetContent();
+        if (payloadBytes == null || payloadBytes.length == 0) {
+            payloadBytes = buildDeviceAuthenticationPayload(expectedTranscript, docType, deviceSigned.get("nameSpaces"));
+            sign1.SetContent(payloadBytes);
         }
+        return payloadBytes;
+    }
+
+    private void validateDeviceAuthPayload(byte[] payloadBytes, String docType, CBORObject expectedTranscript) {
+        CBORObject payload = unwrapPayload(payloadBytes);
+
         if (payload.getType() != CBORType.Array || payload.size() < 3) {
             throw new IllegalStateException("Invalid deviceAuth payload");
         }
-        CBORObject context = payload.get(0);
-        if (context == null || context.getType() != CBORType.TextString || !"DeviceAuthentication".equals(context.AsString())) {
+
+        validateDeviceAuthContext(payload.get(0));
+        validateDocType(payload.get(2), docType);
+        validateSessionTranscript(payload.get(1), expectedTranscript);
+    }
+
+    private CBORObject unwrapPayload(byte[] payloadBytes) {
+        CBORObject payload = CBORObject.DecodeFromBytes(payloadBytes);
+        // Unwrap tag-24 embedded CBOR if present
+        if (payload.HasMostOuterTag(24) && payload.getType() == CBORType.ByteString) {
+            payload = CBORObject.DecodeFromBytes(payload.GetByteString());
+        }
+        // Unwrap additional byte string wrapper if present
+        if (payload.getType() == CBORType.ByteString) {
+            payload = CBORObject.DecodeFromBytes(payload.GetByteString());
+        }
+        return payload;
+    }
+
+    private void validateDeviceAuthContext(CBORObject context) {
+        if (context == null || context.getType() != CBORType.TextString) {
             throw new IllegalStateException("Invalid deviceAuth context");
         }
-        CBORObject sessionTranscript = payload.get(1);
-        CBORObject claimedDocType = payload.get(2);
-        if (docType != null
-                && claimedDocType != null
-                && claimedDocType.getType() == CBORType.TextString
-                && !docType.equals(claimedDocType.AsString())) {
+        if (!"DeviceAuthentication".equals(context.AsString())) {
+            throw new IllegalStateException("Invalid deviceAuth context");
+        }
+    }
+
+    private void validateDocType(CBORObject claimedDocType, String expectedDocType) {
+        if (expectedDocType == null || claimedDocType == null) {
+            return;
+        }
+        if (claimedDocType.getType() != CBORType.TextString) {
+            return;
+        }
+        if (!expectedDocType.equals(claimedDocType.AsString())) {
             throw new IllegalStateException("DocType mismatch in deviceAuth");
         }
+    }
 
-        if (sessionTranscript == null
-                || !Arrays.equals(sessionTranscript.EncodeToBytes(ENCODE_OPTIONS), expectedTranscript.EncodeToBytes(ENCODE_OPTIONS))) {
+    private void validateSessionTranscript(CBORObject actual, CBORObject expected) {
+        if (actual == null) {
+            throw new IllegalStateException("SessionTranscript mismatch in deviceAuth");
+        }
+        byte[] actualBytes = actual.EncodeToBytes(ENCODE_OPTIONS);
+        byte[] expectedBytes = expected.EncodeToBytes(ENCODE_OPTIONS);
+        if (!Arrays.equals(actualBytes, expectedBytes)) {
             LOG.debug("SessionTranscript MISMATCH! expected={}, actual={}",
-                    Base64.getUrlEncoder().withoutPadding().encodeToString(expectedTranscript.EncodeToBytes(ENCODE_OPTIONS)),
-                    sessionTranscript != null ? Base64.getUrlEncoder().withoutPadding().encodeToString(sessionTranscript.EncodeToBytes(ENCODE_OPTIONS)) : "null");
+                    Base64.getUrlEncoder().withoutPadding().encodeToString(expectedBytes),
+                    Base64.getUrlEncoder().withoutPadding().encodeToString(actualBytes));
             throw new IllegalStateException("SessionTranscript mismatch in deviceAuth");
         }
     }
@@ -411,42 +478,12 @@ public class MdocVerifier {
     }
 
     private CBORObject buildSessionTranscript(String clientId, String nonce, byte[] jwkThumbprint, String responseUri) throws Exception {
-        if (clientId == null || clientId.isBlank()) {
-            throw new IllegalStateException("Missing expected client_id for SessionTranscript");
-        }
-        if (nonce == null || nonce.isBlank()) {
-            throw new IllegalStateException("Missing expected nonce for SessionTranscript");
-        }
-        if (responseUri == null || responseUri.isBlank()) {
-            throw new IllegalStateException("Missing expected response_uri for SessionTranscript");
-        }
-
-        CBORObject info = CBORObject.NewArray();
-        info.Add(clientId);
-        info.Add(nonce);
-        if (jwkThumbprint != null && jwkThumbprint.length > 0) {
-            info.Add(jwkThumbprint);
-        } else {
-            info.Add(CBORObject.Null);
-        }
-        info.Add(responseUri);
-        byte[] infoBytes = info.EncodeToBytes(ENCODE_OPTIONS);
-        byte[] hash = MessageDigest.getInstance("SHA-256").digest(infoBytes);
-        LOG.debug("buildSessionTranscript inputs: clientId='{}', nonce='{}', jwkThumbprint={}, responseUri='{}' -> hash={}",
-                clientId, nonce,
-                jwkThumbprint != null ? Base64.getUrlEncoder().withoutPadding().encodeToString(jwkThumbprint) : "null",
-                responseUri,
-                Base64.getUrlEncoder().withoutPadding().encodeToString(hash));
-
-        CBORObject handover = CBORObject.NewArray();
-        handover.Add("OpenID4VPHandover");
-        handover.Add(hash);
-
-        CBORObject sessionTranscript = CBORObject.NewArray();
-        sessionTranscript.Add(CBORObject.Null);
-        sessionTranscript.Add(CBORObject.Null);
-        sessionTranscript.Add(handover);
-        return sessionTranscript;
+        return SessionTranscriptBuilder.create()
+                .clientId(clientId)
+                .nonce(nonce)
+                .jwkThumbprint(jwkThumbprint)
+                .responseUri(responseUri)
+                .build();
     }
 
     private void verifyDigests(CBORObject mso, CBORObject issuerSigned) throws Exception {
@@ -670,69 +707,19 @@ public class MdocVerifier {
     }
 
     private Object convertToJava(CBORObject value) {
-        if (value == null) {
-            return null;
-        }
-        value = decodeContainer(value);
-        switch (value.getType()) {
-            case TextString:
-                return value.AsString();
-            case Integer:
-                return value.AsInt64Value();
-            case Boolean:
-                return value.AsBoolean();
-            case ByteString:
-                return value.GetByteString();
-            case Map:
-                Map<String, Object> map = new LinkedHashMap<>();
-                for (CBORObject key : value.getKeys()) {
-                    map.put(mapKey(key), convertToJava(value.get(key)));
-                }
-                return map;
-            case Array:
-                List<Object> list = new ArrayList<>();
-                for (int i = 0; i < value.size(); i++) {
-                    list.add(convertToJava(value.get(i)));
-                }
-                return list;
-            default:
-                return value.ToObject(Object.class);
-        }
+        return CborConversionUtils.toJava(value);
     }
 
     private String mapKey(CBORObject key) {
-        if (key == null) {
-            return "";
-        }
-        return switch (key.getType()) {
-            case TextString -> key.AsString();
-            case Integer -> String.valueOf(key.AsInt64Value());
-            default -> key.toString();
-        };
+        return CborConversionUtils.mapKey(key);
     }
 
     private CBORObject decodeContainer(CBORObject value) {
-        if (value == null) {
-            return null;
-        }
-        if (value.HasMostOuterTag(24) && value.getType() == CBORType.ByteString) {
-            return CBORObject.DecodeFromBytes(value.GetByteString());
-        }
-        return value;
+        return CborConversionUtils.decodeContainer(value);
     }
 
     private Map<String, Object> toJavaMap(CBORObject value) {
-        Object converted = convertToJava(value);
-        if (converted instanceof Map<?, ?> map) {
-            Map<String, Object> result = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (entry.getKey() != null) {
-                    result.put(entry.getKey().toString(), entry.getValue());
-                }
-            }
-            return result;
-        }
-        return Map.of();
+        return CborConversionUtils.toJavaMap(value);
     }
 
     private Map<Integer, byte[]> collectDigestMapFromJava(Object digestContainer) {

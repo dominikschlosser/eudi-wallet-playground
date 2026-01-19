@@ -16,6 +16,7 @@
 package de.arbeitsagentur.keycloak.wallet.issuance.web;
 
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
+import de.arbeitsagentur.keycloak.wallet.common.util.ClaimDisplayFilter;
 import de.arbeitsagentur.keycloak.wallet.issuance.oidc.OidcClient;
 import de.arbeitsagentur.keycloak.wallet.issuance.service.CredentialService;
 import de.arbeitsagentur.keycloak.wallet.issuance.service.MockIssuerFlowService;
@@ -299,22 +300,7 @@ public class WalletPageController {
     }
 
     private Map<String, Object> filterDisplayClaims(Map<String, Object> claims) {
-        if (claims == null || claims.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Set<String> reserved = Set.of(
-                "iss", "aud", "exp", "nbf", "iat", "jti", "sub",
-                "cnf", "vct", "nonce", "_sd_alg", "_sd", "typ", "kid"
-        );
-        Map<String, Object> filtered = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> entry : claims.entrySet()) {
-            String key = entry.getKey();
-            if (key == null || reserved.contains(key) || key.startsWith("_")) {
-                continue;
-            }
-            filtered.put(key, entry.getValue());
-        }
-        return filtered;
+        return ClaimDisplayFilter.filterForDisplay(claims);
     }
 
     private String decodeMdoc(String raw) {

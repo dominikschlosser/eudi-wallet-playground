@@ -18,6 +18,8 @@ package de.arbeitsagentur.keycloak.wallet.demo.oid4vp;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
+import de.arbeitsagentur.keycloak.wallet.common.util.ClaimDisplayFilter;
+import de.arbeitsagentur.keycloak.wallet.common.util.JsonPathNormalizer;
 import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtParser;
 import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocParser;
 import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocSelectiveDiscloser;
@@ -119,74 +121,74 @@ public class PresentationService {
         }
         ensureUniqueDescriptorIds(definitions);
 
-        // Parse root-level credential_sets to determine which credentials are alternatives
-        List<CredentialSetQuery> credentialSetsOptions = parseRootCredentialSets(dcqlQuery);
+        Map<String, List<DescriptorMatch>> matchesByCredentialId = buildMatchesByCredentialId(definitions, entries);
+        List<CredentialSetQuery> credentialSets = parseRootCredentialSets(dcqlQuery);
 
-        // Build matches for all credentials
-        Map<String, List<DescriptorMatch>> matchesByCredentialId = new LinkedHashMap<>();
+        LOG.debug("credential_sets parsed: {} sets, matchesByCredentialId keys: {}",
+                credentialSets.size(), matchesByCredentialId.keySet());
+
+        if (!credentialSets.isEmpty()) {
+            return buildOptionsFromCredentialSets(credentialSets, matchesByCredentialId, definitions);
+        }
+        return buildOptionsRequiringAllCredentials(definitions, matchesByCredentialId);
+    }
+
+    private Map<String, List<DescriptorMatch>> buildMatchesByCredentialId(
+            List<CredentialRequest> definitions, List<CredentialStore.Entry> entries) {
+        Map<String, List<DescriptorMatch>> result = new LinkedHashMap<>();
         for (CredentialRequest definition : definitions) {
             List<MatchResult> candidates = findMatches(definition, entries);
-            matchesByCredentialId.put(definition.id(), candidates.stream().map(MatchResult::match).toList());
+            result.put(definition.id(), candidates.stream().map(MatchResult::match).toList());
+        }
+        return result;
+    }
+
+    private Optional<PresentationOptions> buildOptionsFromCredentialSets(
+            List<CredentialSetQuery> credentialSets,
+            Map<String, List<DescriptorMatch>> matchesByCredentialId,
+            List<CredentialRequest> definitions) {
+        Set<String> allRequiredCredIds = new HashSet<>();
+
+        for (CredentialSetQuery credentialSet : credentialSets) {
+            if (!credentialSet.required()) {
+                LOG.debug("Skipping non-required credential_set");
+                continue;
+            }
+
+            List<String> satisfiedOption = findFirstSatisfiedOption(credentialSet.options(), matchesByCredentialId);
+            if (satisfiedOption == null) {
+                LOG.debug("Required credential_set could not be satisfied");
+                return Optional.empty();
+            }
+            allRequiredCredIds.addAll(satisfiedOption);
         }
 
-        // If credential_sets is present, ALL required sets must be satisfied
-        // Each set must have ONE satisfiable option
-        // Per OID4VP 1.0 spec Section 6.2
-        LOG.debug("credential_sets parsed: {} sets, matchesByCredentialId keys: {}",
-                credentialSetsOptions.size(), matchesByCredentialId.keySet());
-        if (!credentialSetsOptions.isEmpty()) {
-            Set<String> allRequiredCredIds = new HashSet<>();
+        List<DescriptorOptions> options = allRequiredCredIds.stream()
+                .map(credId -> definitions.stream().filter(d -> credId.equals(d.id())).findFirst().orElse(null))
+                .filter(req -> req != null)
+                .map(req -> new DescriptorOptions(req, matchesByCredentialId.get(req.id())))
+                .toList();
+        return Optional.of(new PresentationOptions(options));
+    }
 
-            for (CredentialSetQuery credentialSet : credentialSetsOptions) {
-                // Skip non-required sets (required defaults to true per spec)
-                if (!credentialSet.required()) {
-                    LOG.debug("Skipping non-required credential_set");
-                    continue;
-                }
-
-                // Find first satisfiable option in this set
-                List<String> satisfiedOption = null;
-                for (List<String> option : credentialSet.options()) {
-                    // An option is satisfied if ALL credential IDs in it have matches
-                    boolean optionSatisfied = true;
-                    for (String credId : option) {
+    private List<String> findFirstSatisfiedOption(List<List<String>> options,
+                                                   Map<String, List<DescriptorMatch>> matchesByCredentialId) {
+        for (List<String> option : options) {
+            boolean allHaveMatches = option.stream()
+                    .allMatch(credId -> {
                         List<DescriptorMatch> matches = matchesByCredentialId.get(credId);
-                        if (matches == null || matches.isEmpty()) {
-                            optionSatisfied = false;
-                            break;
-                        }
-                    }
-                    if (optionSatisfied) {
-                        satisfiedOption = option;
-                        LOG.debug("credential_sets option satisfied: {}", option);
-                        break; // Take first satisfiable option (verifier's preference order)
-                    }
-                }
-
-                if (satisfiedOption == null) {
-                    // This required credential_set has no satisfiable option
-                    LOG.debug("Required credential_set could not be satisfied");
-                    return Optional.empty();
-                }
-
-                allRequiredCredIds.addAll(satisfiedOption);
+                        return matches != null && !matches.isEmpty();
+                    });
+            if (allHaveMatches) {
+                LOG.debug("credential_sets option satisfied: {}", option);
+                return option;
             }
-
-            // Build result with all credentials from all satisfied options
-            List<DescriptorOptions> options = new ArrayList<>();
-            for (String credId : allRequiredCredIds) {
-                CredentialRequest req = definitions.stream()
-                        .filter(d -> credId.equals(d.id()))
-                        .findFirst()
-                        .orElse(null);
-                if (req != null) {
-                    options.add(new DescriptorOptions(req, matchesByCredentialId.get(credId)));
-                }
-            }
-            return Optional.of(new PresentationOptions(options));
         }
+        return null;
+    }
 
-        // No credential_sets - require all credentials to have matches (original behavior)
+    private Optional<PresentationOptions> buildOptionsRequiringAllCredentials(
+            List<CredentialRequest> definitions, Map<String, List<DescriptorMatch>> matchesByCredentialId) {
         List<DescriptorOptions> options = new ArrayList<>();
         for (CredentialRequest definition : definitions) {
             List<DescriptorMatch> matches = matchesByCredentialId.get(definition.id());
@@ -443,28 +445,22 @@ public class PresentationService {
         Set<String> requestedClaims = definition.claims().stream()
                 .flatMap(c -> {
                     List<String> names = new ArrayList<>();
-            if (c.name() != null && !c.name().isBlank()) {
-                names.add(c.name());
-            }
-            if (c.jsonPath() != null && !c.jsonPath().isBlank()) {
-                String normalized = c.jsonPath();
-                if (normalized.startsWith("$.")) {
-                    normalized = normalized.substring(2);
-                }
-                if (normalized.startsWith("credentialSubject.")) {
-                    normalized = normalized.substring("credentialSubject.".length());
-                } else if (normalized.startsWith("vc.credentialSubject.")) {
-                    normalized = normalized.substring("vc.credentialSubject.".length());
-                }
-                names.add(normalized);
-                int dot = normalized.indexOf('.');
-                if (dot > 0) {
-                    names.add(normalized.substring(0, dot));
-                }
-            }
-            return names.stream();
-        })
-        .collect(Collectors.toSet());
+                    if (c.name() != null && !c.name().isBlank()) {
+                        names.add(c.name());
+                    }
+                    if (c.jsonPath() != null && !c.jsonPath().isBlank()) {
+                        String normalized = JsonPathNormalizer.normalize(c.jsonPath());
+                        if (normalized != null) {
+                            names.add(normalized);
+                            String first = JsonPathNormalizer.firstSegment(normalized);
+                            if (first != null) {
+                                names.add(first);
+                            }
+                        }
+                    }
+                    return names.stream();
+                })
+                .collect(Collectors.toSet());
         String vpToken = toVpToken(map, definition.claims(), requestedClaims);
         Map<String, Object> displayDisclosed = filterDisplayClaims(disclosed);
         return new DescriptorMatch(definition.id(), entry.fileName(), map, vpToken, definition.claims(), displayDisclosed,
@@ -472,30 +468,7 @@ public class PresentationService {
     }
 
     private Map<String, Object> filterDisplayClaims(Map<String, Object> claims) {
-        if (claims == null || claims.isEmpty()) {
-            return Map.of();
-        }
-        Set<String> hidden = Set.of(
-                "iss", "aud", "exp", "nbf", "iat", "jti", "sub",
-                "azp", "nonce", "at_hash", "c_hash", "s_hash", "auth_time", "acr", "amr", "sid", "session_state",
-                "cnf", "vct", "_sd_alg", "_sd", "kid", "typ"
-        );
-        Map<String, Object> filtered = new LinkedHashMap<>();
-        claims.forEach((key, value) -> {
-            if (key == null) {
-                return;
-            }
-            for (String prefix : hidden) {
-                if (key.equals(prefix) || key.startsWith(prefix + ".")) {
-                    return;
-                }
-            }
-            if (key.startsWith("_")) {
-                return;
-            }
-            filtered.put(key, value);
-        });
-        return filtered;
+        return ClaimDisplayFilter.filterForDisplay(claims);
     }
 
     private List<CredentialRequest> parseCredentialRequests(String dcqlQuery) {
@@ -736,28 +709,21 @@ public class PresentationService {
             List<String> paths = new ArrayList<>();
             if (claim.jsonPath() != null && !claim.jsonPath().isBlank()) {
                 paths.add(claim.jsonPath());
-                String normalized = claim.jsonPath().startsWith("$.")
-                        ? claim.jsonPath().substring(2)
-                        : claim.jsonPath();
-                if (!normalized.startsWith("credentialSubject") && !normalized.startsWith("vc.")) {
-                    paths.add("$.credentialSubject." + normalized);
-                    paths.add("$.vc.credentialSubject." + normalized);
+                String normalized = JsonPathNormalizer.normalize(claim.jsonPath());
+                if (normalized != null && !normalized.startsWith("credentialSubject") && !normalized.startsWith("vc.")) {
+                    paths.add(JsonPathNormalizer.toCredentialSubjectPath(normalized));
+                    paths.add(JsonPathNormalizer.toVcCredentialSubjectPath(normalized));
                 }
                 // Allow dotted claim names (like address.country) to match stored flat structures.
-                if (normalized.contains(".")) {
-                    String flat = normalized;
-                    if (flat.startsWith("credentialSubject.")) {
-                        flat = flat.substring("credentialSubject.".length());
-                    } else if (flat.startsWith("vc.credentialSubject.")) {
-                        flat = flat.substring("vc.credentialSubject.".length());
-                    }
+                String flat = JsonPathNormalizer.normalize(claim.jsonPath());
+                if (flat != null && flat.contains(".")) {
                     String bracketedFlat = "['" + flat.replace("'", "\\'") + "']";
                     paths.add("$.credentialSubject" + bracketedFlat);
                     paths.add("$.vc.credentialSubject" + bracketedFlat);
                 }
             } else {
-                paths.add("$.credentialSubject." + claim.name());
-                paths.add("$.vc.credentialSubject." + claim.name());
+                paths.add(JsonPathNormalizer.toCredentialSubjectPath(claim.name()));
+                paths.add(JsonPathNormalizer.toVcCredentialSubjectPath(claim.name()));
                 if (claim.name().contains(".")) {
                     String bracketed = "['" + claim.name().replace("'", "\\'") + "']";
                     paths.add("$.credentialSubject" + bracketed);
@@ -1086,53 +1052,57 @@ public class PresentationService {
         }
     }
 
+    private static final Set<String> SUPPRESSED_CLAIMS = Set.of("type", "vct");
+
     private Map<String, Object> filterClaims(Map<String, Object> disclosed, List<ClaimRequest> requests) {
         if (disclosed == null || disclosed.isEmpty() || requests == null || requests.isEmpty()) {
             return Map.of();
         }
-        Set<String> suppressed = Set.of("type", "vct");
         Map<String, Object> filtered = new LinkedHashMap<>();
         for (ClaimRequest req : requests) {
-            if (req == null || req.name() == null || req.name().isBlank()) {
+            if (req == null || req.name() == null || req.name().isBlank() || SUPPRESSED_CLAIMS.contains(req.name())) {
                 continue;
             }
-            if (suppressed.contains(req.name())) {
-                continue;
-            }
-            Object value = disclosed.get(req.name());
-            if (value == null && req.jsonPath() != null) {
-                String normalized = req.jsonPath();
-                if (normalized.startsWith("$.")) {
-                    normalized = normalized.substring(2);
-                }
-                value = disclosed.get(normalized);
-                if (value == null && normalized.startsWith("credentialSubject.")) {
-                    value = disclosed.get(normalized.substring("credentialSubject.".length()));
-                } else if (value == null && normalized.startsWith("vc.credentialSubject.")) {
-                    value = disclosed.get(normalized.substring("vc.credentialSubject.".length()));
-                }
-                if (value == null) {
-                    try {
-                        value = JsonPath.read(disclosed, req.jsonPath());
-                    } catch (Exception ignored) {
-                    }
-                }
-                if (value == null && !normalized.startsWith("$.")) {
-                    try {
-                        value = JsonPath.read(disclosed, "$." + normalized);
-                    } catch (Exception ignored) {
-                    }
-                }
-            }
-            // Support dotted claim names in flattened disclosures.
-            if (value == null && req.name().contains(".")) {
-                value = disclosed.get(req.name());
-            }
+            Object value = resolveClaimValue(disclosed, req);
             if (value != null) {
                 filtered.put(req.name(), value);
             }
         }
         return filtered;
+    }
+
+    private Object resolveClaimValue(Map<String, Object> disclosed, ClaimRequest req) {
+        Object value = disclosed.get(req.name());
+        if (value != null) {
+            return value;
+        }
+
+        if (req.jsonPath() != null) {
+            String normalized = JsonPathNormalizer.normalize(req.jsonPath());
+            if (normalized != null) {
+                value = disclosed.get(normalized);
+            }
+            if (value == null) {
+                value = tryJsonPath(disclosed, req.jsonPath());
+            }
+            if (value == null && normalized != null) {
+                value = tryJsonPath(disclosed, "$." + normalized);
+            }
+        }
+
+        // Support dotted claim names in flattened disclosures.
+        if (value == null && req.name().contains(".")) {
+            value = disclosed.get(req.name());
+        }
+        return value;
+    }
+
+    private Object tryJsonPath(Map<String, Object> data, String path) {
+        try {
+            return JsonPath.read(data, path);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private String toJsonArray(List<String> values) {

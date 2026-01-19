@@ -447,77 +447,22 @@ public class VerifierController {
             steps.add("Processing response (direct_post.jwt)",
                     "Response parameter contained a JWT/JWE; decode it to extract vp_token, state, nonce, and errors.",
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
-            try {
-                String decrypted = verifierKeyService.decrypt(encryptedResponse);
-                JsonNode node = objectMapper.readTree(decrypted);
-                if (state == null || state.isBlank()) {
-                    state = node.path("state").asText(state);
+            ParsedResponseFields parsed = decodeEncryptedResponse(encryptedResponse, steps);
+            if (parsed == null) {
+                if (wantsJson) {
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(Map.of("error", "Unable to decode response"));
                 }
-                if (vpTokenRaw == null || vpTokenRaw.isBlank()) {
-                    JsonNode vpNode = node.get("vp_token");
-                    if (vpNode != null && !vpNode.isNull()) {
-                        vpTokenRaw = vpNode.isTextual() ? vpNode.asText() : objectMapper.writeValueAsString(vpNode);
-                    }
-                }
-                if (idToken == null || idToken.isBlank()) {
-                    idToken = node.path("id_token").asText(null);
-                }
-                if (responseNonce == null || responseNonce.isBlank()) {
-                    responseNonce = node.path("nonce").asText(null);
-                }
-                if (error == null || error.isBlank()) {
-                    error = node.path("error").asText(null);
-                }
-                if (errorDescription == null || errorDescription.isBlank()) {
-                    errorDescription = node.path("error_description").asText(null);
-                }
-                if (keyBindingJwt == null || keyBindingJwt.isBlank()) {
-                    keyBindingJwt = node.path("key_binding_jwt").asText(null);
-                }
-                steps.add("Decrypted encrypted response (JWE)",
-                        "Decrypted response payload with verifier encryption key.",
-                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
-            } catch (Exception e) {
-                try {
-                    SignedJWT signed = SignedJWT.parse(encryptedResponse);
-                    JsonNode node = objectMapper.readTree(signed.getPayload().toString());
-                    if (state == null || state.isBlank()) {
-                        state = node.path("state").asText(state);
-                    }
-                    if (vpTokenRaw == null || vpTokenRaw.isBlank()) {
-                        JsonNode vpNode = node.get("vp_token");
-                        if (vpNode != null && !vpNode.isNull()) {
-                            vpTokenRaw = vpNode.isTextual() ? vpNode.asText() : objectMapper.writeValueAsString(vpNode);
-                        }
-                    }
-                    if (idToken == null || idToken.isBlank()) {
-                        idToken = node.path("id_token").asText(null);
-                    }
-                    if (responseNonce == null || responseNonce.isBlank()) {
-                        responseNonce = node.path("nonce").asText(null);
-                    }
-                    if (error == null || error.isBlank()) {
-                        error = node.path("error").asText(null);
-                    }
-                    if (errorDescription == null || errorDescription.isBlank()) {
-                        errorDescription = node.path("error_description").asText(null);
-                    }
-                    if (keyBindingJwt == null || keyBindingJwt.isBlank()) {
-                        keyBindingJwt = node.path("key_binding_jwt").asText(null);
-                    }
-                    steps.add("Parsed signed response (JWS)",
-                            "Decoded signed response JWT payload (signature not validated).",
-                            "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
-                } catch (Exception parseException) {
-                    steps.add("Unable to decode response", e.getMessage(), "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
-                    if (wantsJson) {
-                        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .body(Map.of("error", "Unable to decode response"));
-                    }
-                    return resultView(state, "Unable to decode response", false, steps.titles(), List.of(), vpTokenRaw, idToken, Map.of(), steps.details());
-                }
+                return resultView(state, "Unable to decode response", false, steps.titles(), List.of(), vpTokenRaw, idToken, Map.of(), steps.details());
             }
+            state = firstNonBlank(state, parsed.state());
+            vpTokenRaw = firstNonBlank(vpTokenRaw, parsed.vpToken());
+            idToken = firstNonBlank(idToken, parsed.idToken());
+            responseNonce = firstNonBlank(responseNonce, parsed.nonce());
+            error = firstNonBlank(error, parsed.error());
+            errorDescription = firstNonBlank(errorDescription, parsed.errorDescription());
+            keyBindingJwt = firstNonBlank(keyBindingJwt, parsed.keyBindingJwt());
         }
         String callbackRequestBody = (encryptedResponse != null && !encryptedResponse.isBlank() ? "response=" + encryptedResponse + "\n" : "")
                 + formBody(state, vpTokenRaw, idToken, responseNonce, error, errorDescription, keyBindingJwt, effectiveDpop);
@@ -1189,6 +1134,57 @@ public class VerifierController {
     }
 
     private record EncryptionResult(String payload, boolean encrypted, String alg, String enc) {
+    }
+
+    private record ParsedResponseFields(String state, String vpToken, String idToken, String nonce,
+                                         String error, String errorDescription, String keyBindingJwt) {
+    }
+
+    private ParsedResponseFields decodeEncryptedResponse(String encryptedResponse, VerificationSteps steps) {
+        // Try JWE decryption first
+        try {
+            String decrypted = verifierKeyService.decrypt(encryptedResponse);
+            JsonNode node = objectMapper.readTree(decrypted);
+            steps.add("Decrypted encrypted response (JWE)",
+                    "Decrypted response payload with verifier encryption key.",
+                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
+            return extractResponseFields(node);
+        } catch (Exception e) {
+            // Fall back to JWS parsing
+            try {
+                SignedJWT signed = SignedJWT.parse(encryptedResponse);
+                JsonNode node = objectMapper.readTree(signed.getPayload().toString());
+                steps.add("Parsed signed response (JWS)",
+                        "Decoded signed response JWT payload (signature not validated).",
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
+                return extractResponseFields(node);
+            } catch (Exception parseException) {
+                steps.add("Unable to decode response", e.getMessage(),
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
+                return null;
+            }
+        }
+    }
+
+    private ParsedResponseFields extractResponseFields(JsonNode node) {
+        String vpToken = null;
+        JsonNode vpNode = node.get("vp_token");
+        if (vpNode != null && !vpNode.isNull()) {
+            try {
+                vpToken = vpNode.isTextual() ? vpNode.asText() : objectMapper.writeValueAsString(vpNode);
+            } catch (Exception e) {
+                vpToken = vpNode.toString();
+            }
+        }
+        return new ParsedResponseFields(
+                node.path("state").asText(null),
+                vpToken,
+                node.path("id_token").asText(null),
+                node.path("nonce").asText(null),
+                node.path("error").asText(null),
+                node.path("error_description").asText(null),
+                node.path("key_binding_jwt").asText(null)
+        );
     }
 
     private URI parsePublicBase(String publicBaseUrl) {

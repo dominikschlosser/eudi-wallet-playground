@@ -131,34 +131,15 @@ public class TokenViewService {
         int tokenIndex = 0;
         for (String token : vpTokens) {
             String decoded = decodeVpTokenForDebug(token);
-            if (decoded == null || decoded.isBlank()) {
+            if (isBlank(decoded)) {
                 continue;
             }
-            if (!sb.isEmpty()) {
-                sb.append("\n\n");
-            }
             tokenIndex++;
-            if (vpTokens.size() > 1) {
-                sb.append("vp_token[").append(tokenIndex).append("]:\n");
-            } else {
-                sb.append("vp_token:\n");
-            }
-            sb.append(decoded);
+            String label = vpTokens.size() > 1 ? "vp_token[" + tokenIndex + "]" : "vp_token";
+            appendSection(sb, label, decoded);
         }
-        String kbDecoded = decodeJwtLike(keyBindingToken);
-        if (kbDecoded != null && !kbDecoded.isBlank()) {
-            if (!sb.isEmpty()) {
-                sb.append("\n\n");
-            }
-            sb.append("key_binding_jwt:\n").append(kbDecoded);
-        }
-        String dpopDecoded = decodeJwtLike(dpopToken);
-        if (dpopDecoded != null && !dpopDecoded.isBlank()) {
-            if (!sb.isEmpty()) {
-                sb.append("\n\n");
-            }
-            sb.append("dpop:\n").append(dpopDecoded);
-        }
+        appendSection(sb, "key_binding_jwt", decodeJwtLike(keyBindingToken));
+        appendSection(sb, "dpop", decodeJwtLike(dpopToken));
         return sb.toString();
     }
 
@@ -193,48 +174,26 @@ public class TokenViewService {
 
     private String decodeVpTokenForDebug(String token) {
         String presented = presentableToken(token);
-        if (presented == null || presented.isBlank()) {
+        if (isBlank(presented)) {
             return "";
         }
-
         if (!sdJwtParser.isSdJwt(presented)) {
             return decodeJwtLike(presented);
         }
 
-        StringBuilder sb = new StringBuilder();
         SdJwtUtils.SdJwtParts parts = sdJwtParser.split(presented);
-        String jwtPayload = decodeJwtLike(parts.signedJwt());
-        if (jwtPayload != null && !jwtPayload.isBlank()) {
-            sb.append("credential_jwt_payload:\n").append(jwtPayload);
-        }
-
         Map<String, Object> disclosedClaims = sdJwtParser.extractDisclosedClaims(parts);
-
         List<Map<String, Object>> decodedDisclosures = decodeDisclosures(parts.disclosures(), disclosedClaims);
+
+        StringBuilder sb = new StringBuilder();
+        appendSection(sb, "credential_jwt_payload", decodeJwtLike(parts.signedJwt()));
         if (!decodedDisclosures.isEmpty()) {
-            if (!sb.isEmpty()) {
-                sb.append("\n\n");
-            }
-            sb.append("disclosures:\n").append(prettyJson(decodedDisclosures));
+            appendSection(sb, "disclosures", prettyJson(decodedDisclosures));
         }
-
         if (disclosedClaims != null && !disclosedClaims.isEmpty()) {
-            if (!sb.isEmpty()) {
-                sb.append("\n\n");
-            }
-            sb.append("disclosed_claims:\n").append(prettyJson(disclosedClaims));
+            appendSection(sb, "disclosed_claims", prettyJson(disclosedClaims));
         }
-
-        if (parts.keyBindingJwt() != null && !parts.keyBindingJwt().isBlank()) {
-            String kbPayload = decodeJwtLike(parts.keyBindingJwt());
-            if (kbPayload != null && !kbPayload.isBlank()) {
-                if (!sb.isEmpty()) {
-                    sb.append("\n\n");
-                }
-                sb.append("sd_jwt_key_binding_jwt:\n").append(kbPayload);
-            }
-        }
-
+        appendSection(sb, "sd_jwt_key_binding_jwt", decodeJwtLike(parts.keyBindingJwt()));
         return sb.toString();
     }
 
@@ -352,6 +311,20 @@ public class TokenViewService {
         } catch (Exception e) {
             return String.valueOf(value);
         }
+    }
+
+    private void appendSection(StringBuilder sb, String label, String content) {
+        if (isBlank(content)) {
+            return;
+        }
+        if (!sb.isEmpty()) {
+            sb.append("\n\n");
+        }
+        sb.append(label).append(":\n").append(content);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private boolean isEncryptedJwe(String token) {

@@ -317,15 +317,12 @@ public class OidcClient {
     }
 
     private String decodeJwt(String token) {
-        if (token == null || !token.contains(".")) {
+        Map<String, Object> claims = parseJwtClaims(token);
+        if (claims.isEmpty()) {
             return "";
         }
         try {
-            String[] parts = token.split("\\.");
-            if (parts.length < 2) return "";
-            byte[] payload = Base64.getUrlDecoder().decode(parts[1]);
-            return objectMapper.writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(objectMapper.readTree(payload));
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(claims);
         } catch (Exception e) {
             return "";
         }

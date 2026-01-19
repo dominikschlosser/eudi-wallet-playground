@@ -18,16 +18,11 @@ package de.arbeitsagentur.keycloak.wallet.issuance.service;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
-import com.nimbusds.jose.JOSEException;
-import com.nimbusds.jose.JOSEObjectType;
-import com.nimbusds.jose.JWSAlgorithm;
-import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.jwk.ECKey;
-import com.nimbusds.jwt.JWTClaimsSet;
-import com.nimbusds.jwt.SignedJWT;
 import de.arbeitsagentur.keycloak.wallet.common.crypto.WalletKeyService;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
+import de.arbeitsagentur.keycloak.wallet.common.util.CredentialOfferUrlParser;
+import de.arbeitsagentur.keycloak.wallet.common.util.ProofJwtBuilder;
 import de.arbeitsagentur.keycloak.wallet.mockissuer.MockIssuerService;
 import de.arbeitsagentur.keycloak.wallet.mockissuer.MockIssuerService.BuilderRequest;
 import de.arbeitsagentur.keycloak.wallet.mockissuer.MockIssuerService.CredentialResult;
@@ -47,7 +42,6 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -151,45 +145,25 @@ public class MockIssuerFlowService {
         if (!StringUtils.hasText(raw)) {
             return null;
         }
-        String trimmed = raw.trim();
-        String offerPayload = null;
-        String offerUri = null;
         try {
-            if (trimmed.startsWith("openid-credential-offer://")) {
-                URI uri = URI.create(trimmed);
-                String query = uri.getRawQuery();
-                if (query != null) {
-                    for (String part : query.split("&")) {
-                        String[] kv = part.split("=", 2);
-                        if (kv.length != 2) {
-                            continue;
-                        }
-                        String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
-                        String value = URLDecoder.decode(kv[1], StandardCharsets.UTF_8);
-                        if ("credential_offer".equals(key)) {
-                            offerPayload = value;
-                        } else if ("credential_offer_uri".equals(key)) {
-                            offerUri = value;
-                        }
-                    }
-                }
-            } else if (trimmed.startsWith("{")) {
-                offerPayload = trimmed;
-            } else if (trimmed.startsWith("http")) {
-                offerUri = trimmed;
+            CredentialOfferUrlParser.ParseResult parsed = CredentialOfferUrlParser.parse(raw);
+            if (parsed == null) {
+                return null;
             }
 
-            if (offerPayload == null && offerUri != null) {
-                ParsedOffer local = resolveLocalOfferState(offerUri);
+            // Check for local offer state if we have a URI
+            if (!parsed.hasOfferJson() && parsed.hasOfferUri()) {
+                ParsedOffer local = resolveLocalOfferState(parsed.offerUri());
                 if (local != null) {
                     return local;
                 }
             }
 
-            if (offerPayload == null) {
+            if (!parsed.hasOfferJson()) {
                 return null;
             }
-            Map<String, Object> offer = objectMapper.readValue(offerPayload, new TypeReference<>() {});
+
+            Map<String, Object> offer = objectMapper.readValue(parsed.offerJson(), new TypeReference<>() {});
             String preAuth = extractPreAuthorizedCode(offer);
             if (!StringUtils.hasText(preAuth)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Credential offer missing pre-authorized_code");
@@ -293,27 +267,13 @@ public class MockIssuerFlowService {
     }
 
     private String buildProofJwt(String audience, String nonce) {
-        try {
-            ECKey key = walletKeyService.loadOrCreateKey();
-            JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.ES256)
-                    .jwk(key.toPublicJWK())
-                    .type(new JOSEObjectType("openid4vci-proof+jwt"))
-                    .build();
-            SignedJWT jwt = new SignedJWT(
-                    header,
-                    new JWTClaimsSet.Builder()
-                            .issuer("did:example:wallet")
-                            .audience(audience)
-                            .issueTime(new Date())
-                            .expirationTime(Date.from(Instant.now().plusSeconds(300)))
-                            .claim("nonce", nonce)
-                            .build()
-            );
-            jwt.sign(new ECDSASigner(key));
-            return jwt.serialize();
-        } catch (JOSEException e) {
-            throw new IllegalStateException("Failed to sign proof JWT", e);
-        }
+        ECKey key = walletKeyService.loadOrCreateKey();
+        return ProofJwtBuilder.withKey(key)
+                .audience(audience)
+                .nonce(nonce)
+                .issuer("did:example:wallet")
+                .expiration(java.time.Duration.ofSeconds(300))
+                .build();
     }
 
     private List<MockIssuerService.ClaimInput> defaultClaims(String configurationId) {

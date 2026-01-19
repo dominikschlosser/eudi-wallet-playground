@@ -69,54 +69,94 @@ public final class Oid4vpVerifierService {
         }
         String normalized = extracted.trim();
         String expectedDcApiAudience = dcApiAudienceFromResponseUri(expectedResponseUri);
-        if (sdJwtVerifier.isSdJwt(normalized)) {
-            Exception firstError = null;
+
+        return verifyCredentialWithAudienceFallback(
+                normalized, trustListId, expectedClientId, expectedDcApiAudience,
+                expectedNonce, expectedResponseUri, expectedJwkThumbprint);
+    }
+
+    /**
+     * Core verification logic with audience fallback.
+     * Tries expectedClientId first, then falls back to DC API audience if different.
+     */
+    private VerifiedPresentation verifyCredentialWithAudienceFallback(
+            String credential,
+            String trustListId,
+            String expectedClientId,
+            String expectedDcApiAudience,
+            String expectedNonce,
+            String expectedResponseUri,
+            byte[] expectedJwkThumbprint) throws Exception {
+
+        if (sdJwtVerifier.isSdJwt(credential)) {
+            return verifySdJwtWithFallback(credential, trustListId, expectedClientId, expectedDcApiAudience, expectedNonce);
+        }
+        if (mdocVerifier.isMdoc(credential)) {
+            return verifyMdocWithFallback(credential, trustListId, expectedClientId, expectedDcApiAudience,
+                    expectedNonce, expectedResponseUri, expectedJwkThumbprint);
+        }
+        throw new IllegalArgumentException("Unsupported credential format");
+    }
+
+    private VerifiedPresentation verifySdJwtWithFallback(String credential, String trustListId,
+                                                          String primaryAudience, String fallbackAudience,
+                                                          String expectedNonce) throws Exception {
+        Exception firstError = null;
+        try {
+            Map<String, Object> claims = sdJwtVerifier.verify(credential, trustListId, primaryAudience, expectedNonce, null, null);
+            return new VerifiedPresentation(PresentationType.SD_JWT, claims);
+        } catch (Exception e) {
+            firstError = e;
+        }
+
+        if (shouldTryFallbackAudience(primaryAudience, fallbackAudience)) {
             try {
-                Map<String, Object> claims = sdJwtVerifier.verify(normalized, trustListId, expectedClientId, expectedNonce, null, null);
+                Map<String, Object> claims = sdJwtVerifier.verify(credential, trustListId, fallbackAudience, expectedNonce, null, null);
                 return new VerifiedPresentation(PresentationType.SD_JWT, claims);
             } catch (Exception e) {
-                firstError = e;
+                e.addSuppressed(firstError);
+                throw e;
             }
-            if (expectedDcApiAudience != null
-                    && !expectedDcApiAudience.isBlank()
-                    && !expectedDcApiAudience.equals(expectedClientId)) {
-                try {
-                    Map<String, Object> claims = sdJwtVerifier.verify(normalized, trustListId, expectedDcApiAudience, expectedNonce, null, null);
-                    return new VerifiedPresentation(PresentationType.SD_JWT, claims);
-                } catch (Exception e) {
-                    e.addSuppressed(firstError);
-                    throw e;
-                }
-            }
-            throw firstError;
         }
-        if (mdocVerifier.isMdoc(normalized)) {
-            LOG.debugf("Detected mDoc format: expectedClientId=%s, expectedNonce=%s, expectedResponseUri=%s, expectedDcApiAudience=%s",
-                    expectedClientId, expectedNonce, expectedResponseUri, expectedDcApiAudience);
-            RuntimeException firstError = null;
+        throw firstError;
+    }
+
+    private VerifiedPresentation verifyMdocWithFallback(String credential, String trustListId,
+                                                         String primaryAudience, String fallbackAudience,
+                                                         String expectedNonce, String expectedResponseUri,
+                                                         byte[] expectedJwkThumbprint) {
+        LOG.debugf("Detected mDoc format: primaryAudience=%s, expectedNonce=%s, expectedResponseUri=%s, fallbackAudience=%s",
+                primaryAudience, expectedNonce, expectedResponseUri, fallbackAudience);
+
+        RuntimeException firstError = null;
+        try {
+            Map<String, Object> claims = mdocVerifier.verify(credential, trustListId, primaryAudience,
+                    expectedNonce, expectedResponseUri, expectedJwkThumbprint, null);
+            return new VerifiedPresentation(PresentationType.MDOC, claims);
+        } catch (RuntimeException e) {
+            LOG.debugf("First mDoc verification attempt failed: %s", e.getMessage());
+            firstError = e;
+        }
+
+        if (shouldTryFallbackAudience(primaryAudience, fallbackAudience)) {
+            LOG.debugf("Retrying mDoc verification with fallback audience: %s", fallbackAudience);
             try {
-                Map<String, Object> claims = mdocVerifier.verify(normalized, trustListId, expectedClientId, expectedNonce, expectedResponseUri, expectedJwkThumbprint, null);
+                Map<String, Object> claims = mdocVerifier.verify(credential, trustListId, fallbackAudience,
+                        expectedNonce, expectedResponseUri, expectedJwkThumbprint, null);
                 return new VerifiedPresentation(PresentationType.MDOC, claims);
             } catch (RuntimeException e) {
-                LOG.debugf("First mDoc verification attempt failed: %s", e.getMessage());
-                firstError = e;
+                LOG.debugf("Second mDoc verification attempt also failed: %s", e.getMessage());
+                e.addSuppressed(firstError);
+                throw e;
             }
-            if (expectedDcApiAudience != null
-                    && !expectedDcApiAudience.isBlank()
-                    && !expectedDcApiAudience.equals(expectedClientId)) {
-                LOG.debugf("Retrying mDoc verification with DC API audience: %s", expectedDcApiAudience);
-                try {
-                    Map<String, Object> claims = mdocVerifier.verify(normalized, trustListId, expectedDcApiAudience, expectedNonce, expectedResponseUri, expectedJwkThumbprint, null);
-                    return new VerifiedPresentation(PresentationType.MDOC, claims);
-                } catch (RuntimeException e) {
-                    LOG.debugf("Second mDoc verification attempt also failed: %s", e.getMessage());
-                    e.addSuppressed(firstError);
-                    throw e;
-                }
-            }
-            throw firstError;
         }
-        throw new IllegalArgumentException("Unsupported vp_token format");
+        throw firstError;
+    }
+
+    private boolean shouldTryFallbackAudience(String primaryAudience, String fallbackAudience) {
+        return fallbackAudience != null
+                && !fallbackAudience.isBlank()
+                && !fallbackAudience.equals(primaryAudience);
     }
 
     /**
@@ -158,39 +198,10 @@ public final class Oid4vpVerifierService {
             LOG.infof("Verifying multi-credential VP token with %d credentials", node.size());
 
             for (var entry : node.properties()) {
-                String credentialId = entry.getKey();
-                JsonNode credentialArray = entry.getValue();
-
-                if (!credentialArray.isArray() || credentialArray.isEmpty()) {
-                    LOG.warnf("Credential '%s' has invalid format (expected array), skipping", credentialId);
-                    continue;
-                }
-
-                // Get the first credential in the array
-                String credential = credentialArray.get(0).asText();
-                if (credential == null || credential.isBlank()) {
-                    LOG.warnf("Credential '%s' is empty, skipping", credentialId);
-                    continue;
-                }
-
-                LOG.infof("Verifying credential '%s' (length: %d)", credentialId, credential.length());
-
-                try {
-                    VerifiedPresentation verified = verifySingleCredential(
-                            credential,
-                            trustListId,
-                            expectedClientId,
-                            expectedDcApiAudience,
-                            expectedNonce,
-                            expectedResponseUri,
-                            expectedJwkThumbprint,
-                            trustX5cFromCredential
-                    );
-                    results.put(credentialId, verified);
-                    LOG.infof("Credential '%s' verified successfully, type: %s", credentialId, verified.type());
-                } catch (Exception e) {
-                    LOG.errorf("Failed to verify credential '%s': %s", credentialId, e.getMessage());
-                    throw new IllegalArgumentException("Failed to verify credential '" + credentialId + "': " + e.getMessage(), e);
+                VerifiedPresentation verified = verifyCredentialEntry(entry, trustListId, expectedClientId,
+                        expectedDcApiAudience, expectedNonce, expectedResponseUri, expectedJwkThumbprint, trustX5cFromCredential);
+                if (verified != null) {
+                    results.put(entry.getKey(), verified);
                 }
             }
 
@@ -203,6 +214,41 @@ public final class Oid4vpVerifierService {
             throw e;
         } catch (Exception e) {
             throw new IllegalArgumentException("Failed to parse multi-credential vp_token: " + e.getMessage(), e);
+        }
+    }
+
+    private VerifiedPresentation verifyCredentialEntry(Map.Entry<String, JsonNode> entry,
+                                                        String trustListId,
+                                                        String expectedClientId,
+                                                        String expectedDcApiAudience,
+                                                        String expectedNonce,
+                                                        String expectedResponseUri,
+                                                        byte[] expectedJwkThumbprint,
+                                                        boolean trustX5cFromCredential) throws Exception {
+        String credentialId = entry.getKey();
+        JsonNode credentialArray = entry.getValue();
+
+        if (!credentialArray.isArray() || credentialArray.isEmpty()) {
+            LOG.warnf("Credential '%s' has invalid format (expected array), skipping", credentialId);
+            return null;
+        }
+
+        String credential = credentialArray.get(0).asText();
+        if (credential == null || credential.isBlank()) {
+            LOG.warnf("Credential '%s' is empty, skipping", credentialId);
+            return null;
+        }
+
+        LOG.infof("Verifying credential '%s' (length: %d)", credentialId, credential.length());
+
+        try {
+            VerifiedPresentation verified = verifySingleCredential(credential, trustListId, expectedClientId,
+                    expectedDcApiAudience, expectedNonce, expectedResponseUri, expectedJwkThumbprint, trustX5cFromCredential);
+            LOG.infof("Credential '%s' verified successfully, type: %s", credentialId, verified.type());
+            return verified;
+        } catch (Exception e) {
+            LOG.errorf("Failed to verify credential '%s': %s", credentialId, e.getMessage());
+            throw new IllegalArgumentException("Failed to verify credential '" + credentialId + "': " + e.getMessage(), e);
         }
     }
 
@@ -219,57 +265,14 @@ public final class Oid4vpVerifierService {
                                                          boolean trustX5cFromCredential) throws Exception {
         String normalized = credential.trim();
 
-        // If trustX5cFromCredential is enabled, extract and register x5c certificate before verification
         if (trustX5cFromCredential) {
             LOG.debugf("Attempting to register x5c from credential to trust list '%s'", trustListId);
             registerX5cFromCredential(normalized, trustListId);
         }
 
-        if (sdJwtVerifier.isSdJwt(normalized)) {
-            Exception firstError = null;
-            try {
-                Map<String, Object> claims = sdJwtVerifier.verify(normalized, trustListId, expectedClientId, expectedNonce, null, null);
-                return new VerifiedPresentation(PresentationType.SD_JWT, claims);
-            } catch (Exception e) {
-                firstError = e;
-            }
-            if (expectedDcApiAudience != null
-                    && !expectedDcApiAudience.isBlank()
-                    && !expectedDcApiAudience.equals(expectedClientId)) {
-                try {
-                    Map<String, Object> claims = sdJwtVerifier.verify(normalized, trustListId, expectedDcApiAudience, expectedNonce, null, null);
-                    return new VerifiedPresentation(PresentationType.SD_JWT, claims);
-                } catch (Exception e) {
-                    e.addSuppressed(firstError);
-                    throw e;
-                }
-            }
-            throw firstError;
-        }
-
-        if (mdocVerifier.isMdoc(normalized)) {
-            RuntimeException firstError = null;
-            try {
-                Map<String, Object> claims = mdocVerifier.verify(normalized, trustListId, expectedClientId, expectedNonce, expectedResponseUri, expectedJwkThumbprint, null);
-                return new VerifiedPresentation(PresentationType.MDOC, claims);
-            } catch (RuntimeException e) {
-                firstError = e;
-            }
-            if (expectedDcApiAudience != null
-                    && !expectedDcApiAudience.isBlank()
-                    && !expectedDcApiAudience.equals(expectedClientId)) {
-                try {
-                    Map<String, Object> claims = mdocVerifier.verify(normalized, trustListId, expectedDcApiAudience, expectedNonce, expectedResponseUri, expectedJwkThumbprint, null);
-                    return new VerifiedPresentation(PresentationType.MDOC, claims);
-                } catch (RuntimeException e) {
-                    e.addSuppressed(firstError);
-                    throw e;
-                }
-            }
-            throw firstError;
-        }
-
-        throw new IllegalArgumentException("Unsupported credential format");
+        return verifyCredentialWithAudienceFallback(
+                normalized, trustListId, expectedClientId, expectedDcApiAudience,
+                expectedNonce, expectedResponseUri, expectedJwkThumbprint);
     }
 
     /**

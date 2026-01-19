@@ -60,6 +60,33 @@ import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 @Service
 public class MockIssuerService {
     private static final Logger LOG = LoggerFactory.getLogger(MockIssuerService.class);
+
+    // OAuth/OID4VCI constants
+    private static final String GRANT_TYPE_PRE_AUTHORIZED = "urn:ietf:params:oauth:grant-type:pre-authorized_code";
+    private static final String BEARER_PREFIX = "bearer ";
+    private static final String ALGORITHM_ES256 = "ES256";
+    private static final String BINDING_METHOD_JWK = "jwk";
+    private static final String PROOF_TYPE_JWT = "jwt";
+    private static final String LOCALE_EN = "en";
+
+    // Credential format identifiers
+    private static final String FORMAT_DC_SD_JWT = "dc+sd-jwt";
+    private static final String FORMAT_MSO_MDOC = "mso_mdoc";
+
+    // Token prefixes
+    private static final String ACCESS_TOKEN_PREFIX = "mock-at-";
+    private static final String PRE_AUTH_CODE_PREFIX = "mock-pre-";
+
+    // Endpoint paths
+    private static final String CREDENTIAL_ENDPOINT_PATH = "/credential";
+    private static final String TOKEN_ENDPOINT_PATH = "/token";
+    private static final String NONCE_ENDPOINT_PATH = "/nonce";
+    private static final String CREDENTIAL_OFFER_PATH = "/credential-offer/";
+
+    // Error messages
+    private static final String ERROR_INVALID_ACCESS_TOKEN = "Invalid or expired access token";
+    private static final String ERROR_UNKNOWN_PRE_AUTH_CODE = "Unknown or expired pre-authorized_code";
+
     private final MockIssuerProperties properties;
     private final ObjectMapper objectMapper;
     private final SdJwtCredentialBuilder sdJwtCredentialBuilder;
@@ -101,11 +128,11 @@ public class MockIssuerService {
         ensureEnabled();
         Map<String, Object> meta = new LinkedHashMap<>();
         meta.put("credential_issuer", issuer);
-        meta.put("credential_endpoint", issuer + "/credential");
-        meta.put("token_endpoint", issuer + "/token");
-        meta.put("nonce_endpoint", issuer + "/nonce");
+        meta.put("credential_endpoint", issuer + CREDENTIAL_ENDPOINT_PATH);
+        meta.put("token_endpoint", issuer + TOKEN_ENDPOINT_PATH);
+        meta.put("nonce_endpoint", issuer + NONCE_ENDPOINT_PATH);
         meta.put("grants", Map.of(
-                "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+                GRANT_TYPE_PRE_AUTHORIZED,
                 Map.of("tx_code_required", false)
         ));
         Map<String, Object> configs = new LinkedHashMap<>();
@@ -117,10 +144,10 @@ public class MockIssuerService {
             entry.put("format", cfg.format());
             entry.put("scope", cfg.scope());
             entry.put("vct", cfg.vct());
-            entry.put("cryptographic_binding_methods_supported", List.of("jwk"));
-            entry.put("credential_signing_alg_values_supported", List.of("ES256"));
-            entry.put("display", List.of(Map.of("name", cfg.name(), "locale", "en")));
-            entry.put("proof_types_supported", Map.of("jwt", Map.of("proof_signing_alg_values_supported", List.of("ES256"))));
+            entry.put("cryptographic_binding_methods_supported", List.of(BINDING_METHOD_JWK));
+            entry.put("credential_signing_alg_values_supported", List.of(ALGORITHM_ES256));
+            entry.put("display", List.of(Map.of("name", cfg.name(), "locale", LOCALE_EN)));
+            entry.put("proof_types_supported", Map.of(PROOF_TYPE_JWT, Map.of("proof_signing_alg_values_supported", List.of(ALGORITHM_ES256))));
             configs.put(cfg.id(), entry);
         }
         if (configs.isEmpty()) {
@@ -152,9 +179,9 @@ public class MockIssuerService {
         ensureEnabled();
         OfferState offer = offers.get(preAuthCode);
         if (offer == null || offer.expiresAt().isBefore(Instant.now())) {
-            throw new ResponseStatusException(BAD_REQUEST, "Unknown or expired pre-authorized_code");
+            throw new ResponseStatusException(BAD_REQUEST, ERROR_UNKNOWN_PRE_AUTH_CODE);
         }
-        String accessToken = "mock-at-" + UUID.randomUUID();
+        String accessToken = ACCESS_TOKEN_PREFIX + UUID.randomUUID();
         String cNonce = newNonceValue();
         AccessTokenState state = new AccessTokenState(accessToken, offer, cNonce,
                 Instant.now().plus(properties.credentialTtl()));
@@ -167,7 +194,7 @@ public class MockIssuerService {
         ensureEnabled();
         AccessTokenState state = accessTokens.get(stripBearer(accessToken));
         if (state == null || state.expiresAt().isBefore(Instant.now())) {
-            throw new ResponseStatusException(UNAUTHORIZED, "Invalid or expired access token");
+            throw new ResponseStatusException(UNAUTHORIZED, ERROR_INVALID_ACCESS_TOKEN);
         }
         String cNonce = newNonceValue();
         state = state.withNewNonce(cNonce, Instant.now().plus(properties.credentialTtl()));
@@ -179,7 +206,7 @@ public class MockIssuerService {
         String token = stripBearer(bearerToken);
         AccessTokenState state = accessTokens.get(token);
         if (state == null || state.expiresAt().isBefore(Instant.now())) {
-            throw new ResponseStatusException(UNAUTHORIZED, "Invalid or expired access token");
+            throw new ResponseStatusException(UNAUTHORIZED, ERROR_INVALID_ACCESS_TOKEN);
         }
         String format = Optional.ofNullable(request.get("format"))
                 .map(Object::toString)
@@ -243,7 +270,7 @@ public class MockIssuerService {
         Map<String, Object> claims = resolveClaims(cfg, request.claims());
         return new OfferState(
                 UUID.randomUUID().toString(),
-                "mock-pre-" + UUID.randomUUID(),
+                PRE_AUTH_CODE_PREFIX + UUID.randomUUID(),
                 cfg.id(),
                 cfg.name(),
                 format,
@@ -335,7 +362,7 @@ public class MockIssuerService {
     private BuiltCredential buildCredential(String format, OfferState offer, String issuer, JsonNode cnf) {
         LOG.debug("Building credential: format={}, configurationId={}, vct={}, issuer={}",
                 format, offer.configurationId(), offer.vct(), issuer);
-        if ("mso_mdoc".equalsIgnoreCase(format)) {
+        if (FORMAT_MSO_MDOC.equalsIgnoreCase(format)) {
             return buildMdoc(offer, issuer, cnf);
         }
         return buildSdJwt(offer, issuer, cnf);
@@ -427,27 +454,27 @@ public class MockIssuerService {
         if (!StringUtils.hasText(bearerToken)) {
             return bearerToken;
         }
-        if (bearerToken.toLowerCase().startsWith("bearer ")) {
-            return bearerToken.substring(7).trim();
+        if (bearerToken.toLowerCase().startsWith(BEARER_PREFIX)) {
+            return bearerToken.substring(BEARER_PREFIX.length()).trim();
         }
         return bearerToken.trim();
     }
 
     private Map<String, Object> buildCredentialOffer(OfferState state) {
         Map<String, Object> grants = Map.of(
-                "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+                GRANT_TYPE_PRE_AUTHORIZED,
                 Map.of("pre-authorized_code", state.preAuthorizedCode(), "tx_code_required", false)
         );
         Map<String, Object> offer = new LinkedHashMap<>();
         offer.put("credential_issuer", state.issuer());
         offer.put("credential_configuration_ids", List.of(state.configurationId()));
         offer.put("grants", grants);
-        offer.put("display", List.of(Map.of("name", state.displayName(), "locale", "en")));
+        offer.put("display", List.of(Map.of("name", state.displayName(), "locale", LOCALE_EN)));
         return offer;
     }
 
     private String credentialOfferUri(OfferState state) {
-        return state.issuer() + "/credential-offer/" + state.offerId();
+        return state.issuer() + CREDENTIAL_OFFER_PATH + state.offerId();
     }
 
     private String newNonceValue() {
@@ -455,7 +482,7 @@ public class MockIssuerService {
     }
 
     private boolean supportsFormat(String format) {
-        return "dc+sd-jwt".equalsIgnoreCase(format) || "mso_mdoc".equalsIgnoreCase(format);
+        return FORMAT_DC_SD_JWT.equalsIgnoreCase(format) || FORMAT_MSO_MDOC.equalsIgnoreCase(format);
     }
 
     public record BuilderRequest(String configurationId, String format, String vct, List<ClaimInput> claims) {

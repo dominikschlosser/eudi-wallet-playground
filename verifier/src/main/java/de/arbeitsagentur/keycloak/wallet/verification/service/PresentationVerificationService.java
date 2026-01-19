@@ -38,6 +38,9 @@ import java.text.ParseException;
 
 @Service
 public class PresentationVerificationService {
+    /** JWE tokens have exactly 5 parts (4 dots): header.encrypted_key.iv.ciphertext.tag */
+    private static final int JWE_DOT_COUNT = 4;
+
     private final TrustListService trustListService;
     private final VerifierProperties properties;
     private final ObjectMapper objectMapper;
@@ -57,6 +60,21 @@ public class PresentationVerificationService {
         this.mdocVerifier = new MdocVerifier(trustListService);
     }
 
+    public List<Map<String, Object>> verifyPresentations(List<String> vpTokens, VerificationContext ctx) throws Exception {
+        List<PublicKey> additionalTrustedIssuerKeys = parseTrustedIssuerKeys(ctx.trustedIssuerJwks());
+        SdJwtVerifier effectiveSdJwtVerifier = sdJwtVerifier(additionalTrustedIssuerKeys);
+        MdocVerifier effectiveMdocVerifier = mdocVerifier(additionalTrustedIssuerKeys);
+        List<Map<String, Object>> payloads = new ArrayList<>();
+        int index = 0;
+        for (String token : vpTokens) {
+            ctx.steps().add("Validating vp_token " + (++index),
+                    "Start processing the vp_token and verify trust, audience, nonce, and timing.",
+                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
+            payloads.add(verifySinglePresentation(token, ctx, effectiveSdJwtVerifier, effectiveMdocVerifier));
+        }
+        return payloads;
+    }
+
     public List<Map<String, Object>> verifyPresentations(List<String> vpTokens,
                                                          String expectedNonce,
                                                          String responseNonce,
@@ -66,18 +84,37 @@ public class PresentationVerificationService {
                                                          String expectedResponseMode,
                                                          VerificationSteps steps,
                                                          List<String> trustedIssuerJwks) throws Exception {
-        List<PublicKey> additionalTrustedIssuerKeys = parseTrustedIssuerKeys(trustedIssuerJwks);
-        SdJwtVerifier effectiveSdJwtVerifier = sdJwtVerifier(additionalTrustedIssuerKeys);
-        MdocVerifier effectiveMdocVerifier = mdocVerifier(additionalTrustedIssuerKeys);
-        List<Map<String, Object>> payloads = new ArrayList<>();
-        int index = 0;
-        for (String token : vpTokens) {
-            steps.add("Validating vp_token " + (++index),
-                    "Start processing the vp_token and verify trust, audience, nonce, and timing.",
-                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
-            payloads.add(verifySinglePresentation(token, expectedNonce, responseNonce, trustListId, expectedAudience, expectedResponseUri, expectedResponseMode, steps, effectiveSdJwtVerifier, effectiveMdocVerifier));
+        return verifyPresentations(vpTokens, new VerificationContext(expectedNonce, responseNonce, trustListId,
+                expectedAudience, expectedResponseUri, expectedResponseMode, steps, trustedIssuerJwks));
+    }
+
+    public Map<String, Object> verifySinglePresentation(String vpToken, VerificationContext ctx,
+                                                        SdJwtVerifier sdJwtVerifier,
+                                                        MdocVerifier mdocVerifier) throws Exception {
+        String audience = resolveAudience(ctx.expectedAudience());
+        String decryptedToken = decryptIfEncrypted(vpToken, ctx.steps());
+        Envelope envelope = unwrapEnvelope(decryptedToken);
+
+        String keyBindingJwt = null;
+        if (envelope != null) {
+            decryptedToken = envelope.innerToken();
+            keyBindingJwt = envelope.kbJwt();
+        } else {
+            validateResponseNonce(ctx.expectedNonce(), ctx.responseNonce());
         }
-        return payloads;
+
+        // Dispatch to format-specific verifier
+        if (sdJwtVerifier.isSdJwt(decryptedToken)) {
+            return sdJwtVerifier.verify(decryptedToken, ctx.trustListId(), audience, ctx.expectedNonce(), keyBindingJwt, ctx.steps());
+        }
+        if (mdocVerifier != null && mdocVerifier.isMdoc(decryptedToken)) {
+            return verifyMdocPresentation(decryptedToken, ctx.trustListId(), audience, ctx.expectedNonce(),
+                    ctx.expectedResponseUri(), ctx.expectedResponseMode(), mdocVerifier, ctx.steps());
+        }
+
+        // Plain JWT fallback
+        return verifyPlainJwtPresentation(decryptedToken, ctx.trustListId(), audience, ctx.expectedNonce(),
+                keyBindingJwt, sdJwtVerifier, ctx.steps());
     }
 
     public Map<String, Object> verifySinglePresentation(String vpToken,
@@ -90,94 +127,129 @@ public class PresentationVerificationService {
                                                         VerificationSteps steps,
                                                         SdJwtVerifier sdJwtVerifier,
                                                         MdocVerifier mdocVerifier) throws Exception {
-        String audience = expectedAudience != null && !expectedAudience.isBlank()
+        return verifySinglePresentation(vpToken,
+                new VerificationContext(expectedNonce, responseNonce, trustListId, expectedAudience,
+                        expectedResponseUri, expectedResponseMode, steps, List.of()),
+                sdJwtVerifier, mdocVerifier);
+    }
+
+    private String resolveAudience(String expectedAudience) {
+        return (expectedAudience != null && !expectedAudience.isBlank())
                 ? expectedAudience
                 : properties.clientId();
-        String decryptedToken = decryptIfEncrypted(vpToken, steps);
-        Envelope envelope = unwrapEnvelope(decryptedToken);
-        String keyBindingJwt = envelope != null ? envelope.kbJwt() : null;
-        if (envelope != null) {
-            decryptedToken = envelope.innerToken();
-        } else if (expectedNonce != null && responseNonce != null && !expectedNonce.equals(responseNonce)) {
+    }
+
+    private void validateResponseNonce(String expectedNonce, String responseNonce) {
+        if (expectedNonce != null && responseNonce != null && !expectedNonce.equals(responseNonce)) {
             throw new IllegalStateException("Nonce mismatch in presentation");
         }
+    }
 
-        if (sdJwtVerifier.isSdJwt(decryptedToken)) {
-            return sdJwtVerifier.verify(decryptedToken, trustListId, audience, expectedNonce, keyBindingJwt, steps);
-        }
-        if (mdocVerifier != null && mdocVerifier.isMdoc(decryptedToken)) {
-            byte[] thumbprint = null;
-            // Per OID4VP spec, encrypted responses use .jwt suffix (direct_post.jwt or dc_api.jwt)
-            boolean encryptedResponse = expectedResponseMode != null && expectedResponseMode.toLowerCase().endsWith(".jwt");
-            if (encryptedResponse) {
-                var encKey = verifierKeyService.loadOrCreateEncryptionKey().toPublicJWK();
-                thumbprint = encKey.computeThumbprint().decode();
-                org.slf4j.LoggerFactory.getLogger(PresentationVerificationService.class)
-                        .info("[mDoc-verify] Encrypted response mode, jwkThumbprint={}, keyId={}",
-                                java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(thumbprint),
-                                encKey.getKeyID());
-            }
-            org.slf4j.LoggerFactory.getLogger(PresentationVerificationService.class)
-                    .info("[mDoc-verify] Verifying mDoc: audience={}, nonce={}, responseUri={}, hasThumbprint={}",
-                            audience, expectedNonce, expectedResponseUri, thumbprint != null);
-            return mdocVerifier.verify(decryptedToken, trustListId, audience, expectedNonce, expectedResponseUri, thumbprint, steps);
-        }
+    private Map<String, Object> verifyMdocPresentation(String token, String trustListId, String audience,
+                                                       String expectedNonce, String expectedResponseUri,
+                                                       String expectedResponseMode, MdocVerifier mdocVerifier,
+                                                       VerificationSteps steps) throws Exception {
+        byte[] thumbprint = computeJwkThumbprintIfEncrypted(expectedResponseMode);
+        org.slf4j.LoggerFactory.getLogger(PresentationVerificationService.class)
+                .info("[mDoc-verify] Verifying mDoc: audience={}, nonce={}, responseUri={}, hasThumbprint={}",
+                        audience, expectedNonce, expectedResponseUri, thumbprint != null);
+        return mdocVerifier.verify(token, trustListId, audience, expectedNonce, expectedResponseUri, thumbprint, steps);
+    }
 
-        SignedJWT jwt = SignedJWT.parse(decryptedToken);
+    private byte[] computeJwkThumbprintIfEncrypted(String expectedResponseMode) throws Exception {
+        boolean encryptedResponse = expectedResponseMode != null
+                && expectedResponseMode.toLowerCase().endsWith(".jwt");
+        if (!encryptedResponse) {
+            return null;
+        }
+        var encKey = verifierKeyService.loadOrCreateEncryptionKey().toPublicJWK();
+        byte[] thumbprint = encKey.computeThumbprint().decode();
+        org.slf4j.LoggerFactory.getLogger(PresentationVerificationService.class)
+                .info("[mDoc-verify] Encrypted response mode, jwkThumbprint={}, keyId={}",
+                        java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(thumbprint),
+                        encKey.getKeyID());
+        return thumbprint;
+    }
+
+    private Map<String, Object> verifyPlainJwtPresentation(String token, String trustListId, String audience,
+                                                           String expectedNonce, String keyBindingJwt,
+                                                           SdJwtVerifier sdJwtVerifier,
+                                                           VerificationSteps steps) throws Exception {
+        SignedJWT jwt = SignedJWT.parse(token);
         steps.add("Parsed JWT presentation",
                 "Parsed JWT based presentation and prepared for trust and claim validation.",
                 "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
-        if (!trustListService.verify(jwt, trustListId)) {
-            throw new IllegalStateException("Credential signature not trusted");
-        }
-        steps.add("Signature verified against trust-list.json",
-                "Checked JWT/SD-JWT signature against trusted issuers in the trust list.",
-                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
-        if (jwt.getJWTClaimsSet().getExpirationTime() != null
-                && jwt.getJWTClaimsSet().getExpirationTime().toInstant().isBefore(Instant.now())) {
-            throw new IllegalStateException("Credential presentation expired");
-        }
-        if (jwt.getJWTClaimsSet().getNotBeforeTime() != null
-                && jwt.getJWTClaimsSet().getNotBeforeTime().toInstant().isAfter(Instant.now())) {
-            throw new IllegalStateException("Credential presentation not yet valid");
-        }
-        if (jwt.getJWTClaimsSet().getAudience() != null && !jwt.getJWTClaimsSet().getAudience().isEmpty()) {
-            String aud = jwt.getJWTClaimsSet().getAudience().get(0);
-            if (!audience.equals(aud)) {
-                throw new IllegalStateException("Audience mismatch in credential");
-            }
-        }
-        if (expectedNonce != null) {
-            String nonce = jwt.getJWTClaimsSet().getStringClaim("nonce");
-            if (nonce != null && !expectedNonce.equals(nonce)) {
-                throw new IllegalStateException("Nonce mismatch in presentation");
-            }
-        }
+
+        verifyJwtSignature(jwt, trustListId, steps);
+        validateJwtTimestamps(jwt);
+        validateJwtAudienceAndNonce(jwt, audience, expectedNonce);
+
         steps.add("Nonce and audience matched verifier session",
                 "Validated presentation audience and nonce against verifier session.",
                 "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-14.1.2");
         steps.add("Credential timing rules validated",
                 "Checked exp/nbf timestamps to ensure presentation is currently valid.",
                 "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-14.1.2");
+
         Map<String, Object> claims = new LinkedHashMap<>(jwt.getJWTClaimsSet().getClaims());
-        if (keyBindingJwt != null && !keyBindingJwt.isBlank()) {
-            sdJwtVerifier.verifyHolderBinding(keyBindingJwt, decryptedToken, audience, expectedNonce);
-            steps.add("Validated holder binding",
-                    "Validated KB-JWT holder binding: cnf key matches credential and signature verified.",
-                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.4");
-            claims.put("key_binding_jwt", keyBindingJwt);
-        }
+        verifyHolderBindingIfPresent(keyBindingJwt, token, audience, expectedNonce, sdJwtVerifier, claims, steps);
         return claims;
     }
 
-    private String decryptIfEncrypted(String vpToken, VerificationSteps steps) {
-        if (vpToken == null) {
-            return null;
+    private void verifyJwtSignature(SignedJWT jwt, String trustListId, VerificationSteps steps) {
+        if (!trustListService.verify(jwt, trustListId)) {
+            throw new IllegalStateException("Credential signature not trusted");
         }
-        if (vpToken.contains("~")) {
+        steps.add("Signature verified against trust-list.json",
+                "Checked JWT/SD-JWT signature against trusted issuers in the trust list.",
+                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
+    }
+
+    private void validateJwtTimestamps(SignedJWT jwt) throws ParseException {
+        Instant now = Instant.now();
+        var claims = jwt.getJWTClaimsSet();
+        if (claims.getExpirationTime() != null && claims.getExpirationTime().toInstant().isBefore(now)) {
+            throw new IllegalStateException("Credential presentation expired");
+        }
+        if (claims.getNotBeforeTime() != null && claims.getNotBeforeTime().toInstant().isAfter(now)) {
+            throw new IllegalStateException("Credential presentation not yet valid");
+        }
+    }
+
+    private void validateJwtAudienceAndNonce(SignedJWT jwt, String audience, String expectedNonce) throws ParseException {
+        var claims = jwt.getJWTClaimsSet();
+        if (claims.getAudience() != null && !claims.getAudience().isEmpty()) {
+            String aud = claims.getAudience().get(0);
+            if (!audience.equals(aud)) {
+                throw new IllegalStateException("Audience mismatch in credential");
+            }
+        }
+        if (expectedNonce != null) {
+            String nonce = claims.getStringClaim("nonce");
+            if (nonce != null && !expectedNonce.equals(nonce)) {
+                throw new IllegalStateException("Nonce mismatch in presentation");
+            }
+        }
+    }
+
+    private void verifyHolderBindingIfPresent(String keyBindingJwt, String token, String audience,
+                                              String expectedNonce, SdJwtVerifier sdJwtVerifier,
+                                              Map<String, Object> claims, VerificationSteps steps) throws Exception {
+        if (keyBindingJwt == null || keyBindingJwt.isBlank()) {
+            return;
+        }
+        sdJwtVerifier.verifyHolderBinding(keyBindingJwt, token, audience, expectedNonce);
+        steps.add("Validated holder binding",
+                "Validated KB-JWT holder binding: cnf key matches credential and signature verified.",
+                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.4");
+        claims.put("key_binding_jwt", keyBindingJwt);
+    }
+
+    private String decryptIfEncrypted(String vpToken, VerificationSteps steps) {
+        if (vpToken == null || vpToken.contains("~")) {
             return vpToken;
         }
-        if (vpToken.chars().filter(c -> c == '.').count() == 4 && looksLikeJwe(vpToken)) {
+        if (isJweFormat(vpToken)) {
             steps.add("Decrypting encrypted vp_token",
                     "vp_token was JWE-encrypted; decrypted with verifier private key.",
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3");
@@ -186,7 +258,10 @@ public class PresentationVerificationService {
         return vpToken;
     }
 
-    private boolean looksLikeJwe(String token) {
+    private boolean isJweFormat(String token) {
+        if (token.chars().filter(c -> c == '.').count() != JWE_DOT_COUNT) {
+            return false;
+        }
         try {
             JWEObject.parse(token);
             return true;
@@ -219,6 +294,27 @@ public class PresentationVerificationService {
     }
 
     public record Envelope(String innerToken, String nonce, String audience, String kbJwt) {
+    }
+
+    /**
+     * Parameters for credential verification - reduces method parameter count.
+     */
+    public record VerificationContext(
+            String expectedNonce,
+            String responseNonce,
+            String trustListId,
+            String expectedAudience,
+            String expectedResponseUri,
+            String expectedResponseMode,
+            VerificationSteps steps,
+            List<String> trustedIssuerJwks
+    ) {
+        public static VerificationContext of(String expectedNonce, String responseNonce, String trustListId,
+                                              String expectedAudience, String expectedResponseUri,
+                                              String expectedResponseMode, VerificationSteps steps) {
+            return new VerificationContext(expectedNonce, responseNonce, trustListId,
+                    expectedAudience, expectedResponseUri, expectedResponseMode, steps, List.of());
+        }
     }
 
     private SdJwtVerifier sdJwtVerifier(List<PublicKey> additionalTrustedIssuerKeys) {

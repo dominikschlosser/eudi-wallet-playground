@@ -16,14 +16,13 @@
 package de.arbeitsagentur.keycloak.wallet.common.mdoc;
 
 import tools.jackson.dataformat.cbor.CBORMapper;
-import de.arbeitsagentur.keycloak.wallet.mdoc.util.HexUtils;
+import de.arbeitsagentur.keycloak.wallet.common.util.TokenFormatUtils;
 import com.upokecenter.cbor.CBORObject;
 import com.upokecenter.cbor.CBORType;
 import COSE.Sign1Message;
 
 import tools.jackson.databind.ObjectMapper;
 
-import java.util.Base64;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -38,17 +37,11 @@ public class MdocParser {
     private final ObjectMapper jsonMapper = new ObjectMapper();
 
     public boolean isHex(String value) {
-        return value != null && value.matches("^[0-9a-fA-F]+$");
+        return TokenFormatUtils.isHex(value);
     }
 
     public boolean isBase64Url(String value) {
-        if (value == null || value.isBlank()) {
-            return false;
-        }
-        if (value.contains(".") || value.contains("~")) {
-            return false;
-        }
-        return value.matches("^[A-Za-z0-9_-]+=*$");
+        return TokenFormatUtils.isBase64Url(value);
     }
 
     public boolean isIssuerSigned(String token) {
@@ -170,24 +163,7 @@ public class MdocParser {
     }
 
     private byte[] decodeBytes(String token) {
-        if (token == null || token.isBlank()) {
-            return new byte[0];
-        }
-        if (isHex(token)) {
-            return HexUtils.decode(token);
-        }
-        if (!isBase64Url(token)) {
-            return new byte[0];
-        }
-        try {
-            return Base64.getUrlDecoder().decode(token);
-        } catch (IllegalArgumentException e) {
-            try {
-                return Base64.getDecoder().decode(token);
-            } catch (IllegalArgumentException ignored) {
-                return new byte[0];
-            }
-        }
+        return TokenFormatUtils.decodeBytes(token);
     }
 
     private CBORObject firstDocument(CBORObject root) {
@@ -257,58 +233,14 @@ public class MdocParser {
     }
 
     private Map<String, Object> asJavaMap(CBORObject obj) {
-        Object converted = convertToJava(obj);
-        if (converted instanceof Map<?, ?> map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> cast = (Map<String, Object>) map;
-            return cast;
-        }
-        return Collections.emptyMap();
+        return CborConversionUtils.toJavaMap(obj);
     }
 
     private Object convertToJava(CBORObject obj) {
-        if (obj == null) {
-            return null;
-        }
-        if (obj.HasMostOuterTag(24) && obj.getType() == CBORType.ByteString) {
-            return convertToJava(CBORObject.DecodeFromBytes(obj.GetByteString()));
-        }
-        if (obj.isNull()) {
-            return null;
-        }
-        return switch (obj.getType()) {
-            case Map -> {
-                Map<String, Object> map = new LinkedHashMap<>();
-                for (CBORObject key : obj.getKeys()) {
-                    map.put(mapKey(key), convertToJava(obj.get(key)));
-                }
-                yield map;
-            }
-            case Array -> {
-                List<Object> list = new ArrayList<>();
-                for (int i = 0; i < obj.size(); i++) {
-                    list.add(convertToJava(obj.get(i)));
-                }
-                yield list;
-            }
-            case ByteString -> obj.GetByteString();
-            case TextString -> obj.AsString();
-            case Integer -> obj.AsInt64Value();
-            case Boolean -> obj.AsBoolean();
-            case FloatingPoint -> obj.AsDouble();
-            case Number, SimpleValue -> obj.ToObject(Object.class);
-            default -> obj.ToObject(Object.class);
-        };
+        return CborConversionUtils.toJava(obj);
     }
 
     private String mapKey(CBORObject key) {
-        if (key == null) {
-            return "";
-        }
-        return switch (key.getType()) {
-            case TextString -> key.AsString();
-            case Integer -> String.valueOf(key.AsInt64Value());
-            default -> key.toString();
-        };
+        return CborConversionUtils.mapKey(key);
     }
 }

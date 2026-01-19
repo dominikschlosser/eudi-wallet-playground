@@ -20,6 +20,7 @@ import com.authlete.sd.SDJWT;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtSelectiveDiscloser.ClaimRequest;
+import de.arbeitsagentur.keycloak.wallet.common.util.TokenFormatUtils;
 
 import java.util.ArrayList;
 import java.util.Base64;
@@ -39,7 +40,7 @@ public class SdJwtParser {
     }
 
     public boolean isSdJwt(String raw) {
-        return raw != null && raw.contains("~");
+        return TokenFormatUtils.isSdJwt(raw);
     }
 
     public SdJwtUtils.SdJwtParts split(String sdJwt) {
@@ -160,27 +161,6 @@ public class SdJwtParser {
         if (request == null || claimName == null) {
             return false;
         }
-        if (claimName.equals(request.name())) {
-            return true;
-        }
-        if (request.jsonPath() != null && !request.jsonPath().isBlank()) {
-            String normalized = request.jsonPath();
-            if (normalized.startsWith("$.")) {
-                normalized = normalized.substring(2);
-            }
-            if (normalized.startsWith("credentialSubject.")) {
-                normalized = normalized.substring("credentialSubject.".length());
-            } else if (normalized.startsWith("vc.credentialSubject.")) {
-                normalized = normalized.substring("vc.credentialSubject.".length());
-            }
-            if (claimName.equals(normalized) || normalized.endsWith("." + claimName) || normalized.startsWith(claimName + ".")) {
-                return true;
-            }
-        }
-        return request.name() != null && (normalizedContains(claimName, request.name()) || (claimName.startsWith(request.name() + ".")));
-    }
-
-    private boolean normalizedContains(String full, String tail) {
-        return full.equals(tail) || full.endsWith("." + tail);
+        return ClaimPathNormalizer.matches(claimName, request.name(), request.jsonPath());
     }
 }

@@ -33,6 +33,16 @@ import java.util.Map;
  * - claim_sets for optional claims within a credential
  */
 public class DcqlQueryBuilder {
+    /**
+     * Path separator for namespace-qualified claim paths.
+     * Example: "eu.europa.ec.eudi.pid.1/family_name" splits to ["eu.europa.ec.eudi.pid.1", "family_name"]
+     */
+    public static final String PATH_SEPARATOR = "/";
+    /**
+     * Delimiter used in type keys to encode format and type together.
+     * Format: "format|type" (e.g., "dc+sd-jwt|eu.europa.ec.eudi.pid.1")
+     */
+    public static final String TYPE_KEY_DELIMITER = "|";
 
     private final ObjectMapper objectMapper;
     private final List<CredentialTypeSpec> credentialTypes = new ArrayList<>();
@@ -132,98 +142,84 @@ public class DcqlQueryBuilder {
             for (CredentialTypeSpec typeSpec : credentialTypes) {
                 String credId = "cred" + credIndex++;
                 credentialIds.add(credId);
-
-                Map<String, Object> credential = new LinkedHashMap<>();
-                credential.put("id", credId);
-                credential.put("format", typeSpec.format());
-
-                // Add type constraint in meta
-                Map<String, Object> meta = new LinkedHashMap<>();
-                if (Oid4vpIdentityProviderConfig.FORMAT_MSO_MDOC.equals(typeSpec.format())) {
-                    meta.put("doctype_value", typeSpec.type());
-                } else {
-                    meta.put("vct_values", List.of(typeSpec.type()));
-                }
-                credential.put("meta", meta);
-
-                // Add claims if specified
-                if (!typeSpec.claimSpecs().isEmpty()) {
-                    List<Map<String, Object>> claims = new ArrayList<>();
-                    List<String> requiredClaimIds = new ArrayList<>();
-                    List<String> allClaimIds = new ArrayList<>();
-                    boolean hasOptionalClaims = false;
-                    int claimIndex = 1;
-
-                    for (ClaimSpec claimSpec : typeSpec.claimSpecs()) {
-                        String claimId = "claim" + claimIndex++;
-                        Map<String, Object> claim = new LinkedHashMap<>();
-                        claim.put("id", claimId);
-
-                        // Use '/' as path separator to allow dotted namespaces
-                        // e.g., "eu.europa.ec.eudi.pid.1/family_name" -> ["eu.europa.ec.eudi.pid.1", "family_name"]
-                        String path = claimSpec.path();
-                        if (path.contains("/")) {
-                            claim.put("path", Arrays.asList(path.split("/")));
-                        } else {
-                            claim.put("path", List.of(path));
-                        }
-                        claims.add(claim);
-
-                        // Track claim IDs for claim_sets
-                        allClaimIds.add(claimId);
-                        if (!claimSpec.optional()) {
-                            requiredClaimIds.add(claimId);
-                        } else {
-                            hasOptionalClaims = true;
-                        }
-                    }
-                    credential.put("claims", claims);
-
-                    // Add claim_sets if there are optional claims
-                    // Option 1: All claims (required + optional) - preferred
-                    // Option 2: Only required claims - fallback
-                    if (hasOptionalClaims && !requiredClaimIds.isEmpty()) {
-                        List<List<String>> claimSetOptions = new ArrayList<>();
-                        claimSetOptions.add(allClaimIds);       // All claims (preferred)
-                        claimSetOptions.add(requiredClaimIds);  // Required only (fallback)
-                        credential.put("claim_sets", claimSetOptions);
-                    }
-                }
-
-                credentials.add(credential);
+                credentials.add(buildCredentialEntry(typeSpec, credId));
             }
 
             Map<String, Object> dcqlQuery = new LinkedHashMap<>();
             dcqlQuery.put("credentials", credentials);
 
-            // Add credential_sets if multiple credential types
             if (credentials.size() > 1) {
-                Map<String, Object> credentialSet = new LinkedHashMap<>();
-
-                // Add purpose if specified
-                if (purpose != null && !purpose.isBlank()) {
-                    credentialSet.put("purpose", purpose);
-                }
-
-                if (allCredentialsRequired) {
-                    // All credentials required: single option with all IDs
-                    credentialSet.put("options", List.of(credentialIds));
-                } else {
-                    // Any one credential satisfies: each ID as separate option
-                    List<List<String>> options = new ArrayList<>();
-                    for (String id : credentialIds) {
-                        options.add(List.of(id));
-                    }
-                    credentialSet.put("options", options);
-                }
-
-                dcqlQuery.put("credential_sets", List.of(credentialSet));
+                dcqlQuery.put("credential_sets", List.of(buildCredentialSet(credentialIds)));
             }
 
             return objectMapper.writeValueAsString(dcqlQuery);
         } catch (Exception e) {
             throw new RuntimeException("Failed to build DCQL query", e);
         }
+    }
+
+    private Map<String, Object> buildCredentialEntry(CredentialTypeSpec typeSpec, String credId) {
+        Map<String, Object> credential = new LinkedHashMap<>();
+        credential.put("id", credId);
+        credential.put("format", typeSpec.format());
+        credential.put("meta", buildMetaConstraint(typeSpec));
+
+        if (!typeSpec.claimSpecs().isEmpty()) {
+            addClaimsWithOptionalSets(credential, typeSpec.claimSpecs());
+        }
+        return credential;
+    }
+
+    private Map<String, Object> buildMetaConstraint(CredentialTypeSpec typeSpec) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        if (Oid4vpIdentityProviderConfig.FORMAT_MSO_MDOC.equals(typeSpec.format())) {
+            meta.put("doctype_value", typeSpec.type());
+        } else {
+            meta.put("vct_values", List.of(typeSpec.type()));
+        }
+        return meta;
+    }
+
+    private void addClaimsWithOptionalSets(Map<String, Object> credential, List<ClaimSpec> claimSpecs) {
+        List<Map<String, Object>> claims = new ArrayList<>();
+        List<String> requiredClaimIds = new ArrayList<>();
+        List<String> allClaimIds = new ArrayList<>();
+        boolean hasOptionalClaims = false;
+        int claimIndex = 1;
+
+        for (ClaimSpec claimSpec : claimSpecs) {
+            String claimId = "claim" + claimIndex++;
+            claims.add(Map.of("id", claimId, "path", splitClaimPath(claimSpec.path())));
+            allClaimIds.add(claimId);
+            if (claimSpec.optional()) {
+                hasOptionalClaims = true;
+            } else {
+                requiredClaimIds.add(claimId);
+            }
+        }
+        credential.put("claims", claims);
+
+        // Add claim_sets if there are optional claims with fallback to required-only
+        if (hasOptionalClaims && !requiredClaimIds.isEmpty()) {
+            credential.put("claim_sets", List.of(allClaimIds, requiredClaimIds));
+        }
+    }
+
+    private Map<String, Object> buildCredentialSet(List<String> credentialIds) {
+        Map<String, Object> credentialSet = new LinkedHashMap<>();
+        if (purpose != null && !purpose.isBlank()) {
+            credentialSet.put("purpose", purpose);
+        }
+
+        if (allCredentialsRequired) {
+            credentialSet.put("options", List.of(credentialIds));
+        } else {
+            List<List<String>> options = credentialIds.stream()
+                    .map(List::of)
+                    .toList();
+            credentialSet.put("options", options);
+        }
+        return credentialSet;
     }
 
     private String buildDefaultDcql() {
@@ -259,11 +255,45 @@ public class DcqlQueryBuilder {
         Map<String, CredentialTypeSpec> specs = new LinkedHashMap<>();
         for (Map.Entry<String, List<String>> entry : claimPathsByType.entrySet()) {
             String typeKey = entry.getKey();
-            String[] parts = typeKey.split("\\|", 2);
             String format = formatByType.get(typeKey);
-            String type = parts.length > 1 ? parts[1] : parts[0];
+            String type = extractTypeFromKey(typeKey);
             specs.put(typeKey, CredentialTypeSpec.fromPaths(format, type, entry.getValue()));
         }
         return fromMapperSpecs(objectMapper, specs, allCredentialsRequired, purpose);
+    }
+
+    /**
+     * Splits a claim path into segments using the PATH_SEPARATOR.
+     * Allows dotted namespaces while supporting explicit path separation.
+     *
+     * @param path the claim path (e.g., "eu.europa.ec.eudi.pid.1/family_name" or "given_name")
+     * @return list of path segments
+     */
+    private static List<String> splitClaimPath(String path) {
+        if (path == null || path.isBlank()) {
+            return List.of();
+        }
+        if (path.contains(PATH_SEPARATOR)) {
+            return Arrays.asList(path.split(PATH_SEPARATOR));
+        }
+        return List.of(path);
+    }
+
+    /**
+     * Extracts the credential type from a type key that may contain a format prefix.
+     * Type key format: "format|type" or just "type"
+     *
+     * @param typeKey the type key (e.g., "dc+sd-jwt|eu.europa.ec.eudi.pid.1" or "eu.europa.ec.eudi.pid.1")
+     * @return the credential type portion
+     */
+    private static String extractTypeFromKey(String typeKey) {
+        if (typeKey == null || typeKey.isBlank()) {
+            return typeKey;
+        }
+        int delimiterIndex = typeKey.indexOf(TYPE_KEY_DELIMITER);
+        if (delimiterIndex >= 0 && delimiterIndex < typeKey.length() - 1) {
+            return typeKey.substring(delimiterIndex + 1);
+        }
+        return typeKey;
     }
 }

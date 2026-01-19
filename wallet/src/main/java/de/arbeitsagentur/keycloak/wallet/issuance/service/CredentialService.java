@@ -18,17 +18,11 @@ package de.arbeitsagentur.keycloak.wallet.issuance.service;
 import de.arbeitsagentur.keycloak.wallet.common.crypto.WalletKeyService;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import de.arbeitsagentur.keycloak.wallet.common.debug.DebugLogService;
+import de.arbeitsagentur.keycloak.wallet.common.util.ProofJwtBuilder;
 import de.arbeitsagentur.keycloak.wallet.issuance.config.WalletProperties;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
-import com.nimbusds.jose.JOSEException;
-import com.nimbusds.jose.JOSEObjectType;
-import com.nimbusds.jose.JWSAlgorithm;
-import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.jwk.ECKey;
-import com.nimbusds.jwt.JWTClaimsSet;
-import com.nimbusds.jwt.SignedJWT;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -39,7 +33,6 @@ import org.springframework.web.client.RestTemplate;
 
 import java.time.Instant;
 import java.util.Base64;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +42,20 @@ import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocParser;
 
 @Service
 public class CredentialService {
+    // Issuer metadata JSON paths
+    private static final String METADATA_CREDENTIAL_ISSUER = "credential_issuer";
+    private static final String METADATA_CREDENTIAL_ENDPOINT = "credential_endpoint";
+    private static final String METADATA_CONFIGURATIONS_SUPPORTED = "credential_configurations_supported";
+    private static final String METADATA_NONCE_ENDPOINT = "nonce_endpoint";
+
+    // Credential response JSON paths
+    private static final String RESPONSE_CREDENTIALS = "credentials";
+    private static final String RESPONSE_CREDENTIAL = "credential";
+    private static final String RESPONSE_FORMAT = "format";
+    private static final String RESPONSE_DISCLOSURES = "disclosures";
+    private static final String RESPONSE_C_NONCE = "c_nonce";
+    private static final String RESPONSE_C_NONCE_EXPIRES_IN = "c_nonce_expires_in";
+
     private final RestTemplate restTemplate;
     private final WalletProperties properties;
     private final WalletKeyService walletKeyService;
@@ -85,15 +92,15 @@ public class CredentialService {
         if (metadata == null) {
             throw new IllegalStateException("Issuer metadata not available");
         }
-        String issuerIdentifier = metadata.path("credential_issuer").asText(properties.issuerMetadataUrl());
-        String credentialEndpoint = metadata.path("credential_endpoint").asText(null);
+        String issuerIdentifier = metadata.path(METADATA_CREDENTIAL_ISSUER).asText(properties.issuerMetadataUrl());
+        String credentialEndpoint = metadata.path(METADATA_CREDENTIAL_ENDPOINT).asText(null);
         if (credentialEndpoint == null || credentialEndpoint.isBlank()) {
             throw new IllegalStateException("Issuer metadata missing credential endpoint");
         }
         String configurationId = credentialConfigurationId != null && !credentialConfigurationId.isBlank()
                 ? credentialConfigurationId
                 : credentialMetadataService.defaultCredentialConfigurationId();
-        JsonNode supportedConfigurations = metadata.path("credential_configurations_supported");
+        JsonNode supportedConfigurations = metadata.path(METADATA_CONFIGURATIONS_SUPPORTED);
         if (!supportedConfigurations.has(configurationId)) {
             throw new IllegalArgumentException("Unsupported credential configuration id: " + configurationId);
         }
@@ -126,39 +133,50 @@ public class CredentialService {
                 prettyJson(body),
                 "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-7",
                 decodeJwt(body));
+        Map<String, Object> stored = parseCredentialResponse(body);
+        credentialStore.saveCredential(userId, stored);
+        stored.put("nonceSource", nonceInfo.source());
+        stored.put("cNonce", body.path(RESPONSE_C_NONCE).asText(null));
+        stored.put("cNonceExpiresIn", body.path(RESPONSE_C_NONCE_EXPIRES_IN).asInt(-1));
+        return stored;
+    }
+
+    private Map<String, Object> parseCredentialResponse(JsonNode body) {
         Map<String, Object> stored = new HashMap<>();
         stored.put("storedAt", Instant.now().toString());
         JsonNode responseNode = body.has("response") ? body.get("response") : body;
-        JsonNode credentialsNode = responseNode.path("credentials");
-        if (credentialsNode.isArray() && !credentialsNode.isEmpty()) {
-            JsonNode first = credentialsNode.get(0);
-            String rawCredential = first.path("credential").asText(null);
-            stored.put("format", first.path("format").asText(body.path("format").asText(null)));
-            if (rawCredential != null) {
-                stored.put("rawCredential", rawCredential);
-                if (sdJwtParser.isSdJwt(rawCredential)) {
-                    var parts = sdJwtParser.split(rawCredential);
-                    stored.put("sdJwt", Map.of(
-                            "signedJwt", parts.signedJwt(),
-                            "disclosures", parts.disclosures()
-                    ));
-                    stored.put("credentialSubject", decodeSdJwtSubject(parts));
-                } else if (mdocParser.isMdoc(rawCredential)) {
-                    stored.put("credentialSubject", mdocParser.extractClaims(rawCredential));
-                } else {
-                    stored.put("credentialSubject", decodeJwtSubject(rawCredential));
-                }
-            }
-            if (first.has("disclosures")) {
-                stored.put("disclosures", objectMapper.convertValue(first.get("disclosures"), Object.class));
-            }
-        }
         stored.put("response", responseNode);
-        credentialStore.saveCredential(userId, stored);
-        stored.put("nonceSource", nonceInfo.source());
-        stored.put("cNonce", body.path("c_nonce").asText(null));
-        stored.put("cNonceExpiresIn", body.path("c_nonce_expires_in").asInt(-1));
+
+        JsonNode credentialsNode = responseNode.path(RESPONSE_CREDENTIALS);
+        if (!credentialsNode.isArray() || credentialsNode.isEmpty()) {
+            return stored;
+        }
+
+        JsonNode first = credentialsNode.get(0);
+        stored.put(RESPONSE_FORMAT, first.path(RESPONSE_FORMAT).asText(body.path(RESPONSE_FORMAT).asText(null)));
+
+        String rawCredential = first.path(RESPONSE_CREDENTIAL).asText(null);
+        if (rawCredential != null) {
+            stored.put("rawCredential", rawCredential);
+            stored.put("credentialSubject", decodeCredentialSubject(rawCredential));
+            addSdJwtPartsIfApplicable(stored, rawCredential);
+        }
+
+        if (first.has(RESPONSE_DISCLOSURES)) {
+            stored.put(RESPONSE_DISCLOSURES, objectMapper.convertValue(first.get(RESPONSE_DISCLOSURES), Object.class));
+        }
         return stored;
+    }
+
+    private void addSdJwtPartsIfApplicable(Map<String, Object> stored, String rawCredential) {
+        if (!sdJwtParser.isSdJwt(rawCredential)) {
+            return;
+        }
+        var parts = sdJwtParser.split(rawCredential);
+        stored.put("sdJwt", Map.of(
+                "signedJwt", parts.signedJwt(),
+                "disclosures", parts.disclosures()
+        ));
     }
 
     private Map<String, Object> decodeCredentialSubject(String jwt) {
@@ -194,34 +212,19 @@ public class CredentialService {
     }
 
     private String buildProofJwt(String audience, String nonce) {
-        try {
-            ECKey key = walletKeyService.loadOrCreateKey();
-            JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.ES256)
-                    .jwk(key.toPublicJWK())
-                    .type(new JOSEObjectType("openid4vci-proof+jwt"))
-                    .build();
-            SignedJWT jwt = new SignedJWT(
-                    header,
-                    new JWTClaimsSet.Builder()
-                            .issuer(properties.walletDid())
-                            .audience(audience)
-                            .issueTime(new Date())
-                            .expirationTime(Date.from(Instant.now().plusSeconds(120)))
-                            .claim("nonce", nonce)
-                            .build()
-            );
-            jwt.sign(new ECDSASigner(key));
-            return jwt.serialize();
-        } catch (JOSEException e) {
-            throw new IllegalStateException("Failed to sign proof JWT", e);
-        }
+        ECKey key = walletKeyService.loadOrCreateKey();
+        return ProofJwtBuilder.withKey(key)
+                .audience(audience)
+                .nonce(nonce)
+                .issuer(properties.walletDid())
+                .build();
     }
 
     private NonceInfo resolveNonce(String accessToken, JsonNode metadata, String providedNonce) {
         if (providedNonce != null && !providedNonce.isBlank()) {
             return new NonceInfo(providedNonce, "session");
         }
-        JsonNode nonceEndpointNode = metadata.get("nonce_endpoint");
+        JsonNode nonceEndpointNode = metadata.get(METADATA_NONCE_ENDPOINT);
         if (nonceEndpointNode == null) {
             throw new IllegalStateException("Issuer metadata missing nonce endpoint");
         }
@@ -243,7 +246,7 @@ public class CredentialService {
                 prettyJson(body),
                 "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-7.2.1",
                 null);
-        String cNonce = body.path("c_nonce").asText(null);
+        String cNonce = body.path(RESPONSE_C_NONCE).asText(null);
         if (cNonce == null) {
             throw new IllegalStateException("Issuer response missing c_nonce");
         }
@@ -296,8 +299,9 @@ public class CredentialService {
             return "";
         }
         JsonNode response = body.has("response") ? body.get("response") : body;
-        if (response.path("credentials").isArray() && !response.path("credentials").isEmpty()) {
-            return response.path("credentials").get(0).path("credential_configuration_id").asText("");
+        JsonNode credentials = response.path(RESPONSE_CREDENTIALS);
+        if (credentials.isArray() && !credentials.isEmpty()) {
+            return credentials.get(0).path("credential_configuration_id").asText("");
         }
         return "";
     }

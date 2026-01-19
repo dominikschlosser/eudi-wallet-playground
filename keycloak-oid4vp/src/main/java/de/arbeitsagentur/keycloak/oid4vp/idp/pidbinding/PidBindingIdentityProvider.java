@@ -101,9 +101,11 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
      * <p>
      * This allows wallets to present whatever they have while we detect the flow type.
      */
+    private static final String CRED_ID_PID = "german_pid";
+    private static final String CRED_ID_LOGIN = "ba_login_credential";
+
     @Override
     protected String buildDcqlQueryFromConfig() {
-        // Check if explicit DCQL is configured
         String manualDcql = pidBindingConfig.getDcqlQuery();
         if (manualDcql != null && !manualDcql.isBlank()) {
             LOG.infof("[PID-BINDING] Using explicit DCQL query from config");
@@ -111,63 +113,55 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
         }
 
         try {
-            // Build DCQL with both credentials
-            List<String> pidClaims = pidBindingConfig.getPidRequestedClaimsList();
-            String pidType = pidBindingConfig.getPidCredentialType();
-            String loginType = pidBindingConfig.getLoginCredentialType();
-
-            // Build credentials array
-            List<Map<String, Object>> credentials = new java.util.ArrayList<>();
-
-            // PID credential
-            Map<String, Object> pidCred = new LinkedHashMap<>();
-            pidCred.put("id", "german_pid");
-            pidCred.put("format", Oid4vpIdentityProviderConfig.FORMAT_SD_JWT_VC);
-            pidCred.put("meta", Map.of("vct_values", List.of(pidType)));
-            List<Map<String, Object>> pidClaimsList = new java.util.ArrayList<>();
-            for (String claim : pidClaims) {
-                pidClaimsList.add(Map.of("path", List.of(claim)));
-            }
-            pidCred.put("claims", pidClaimsList);
-            credentials.add(pidCred);
-
-            // BA Login credential (optional)
-            Map<String, Object> loginCred = new LinkedHashMap<>();
-            loginCred.put("id", "ba_login_credential");
-            loginCred.put("format", Oid4vpIdentityProviderConfig.FORMAT_SD_JWT_VC);
-            loginCred.put("meta", Map.of("vct_values", List.of(loginType)));
-            loginCred.put("claims", List.of(
-                    Map.of("path", List.of("user_id")),
-                    Map.of("path", List.of("linked_at"))
-            ));
-            credentials.add(loginCred);
-
-            // Build credential_sets with options:
-            // Option 1: Both credentials (returning user)
-            // Option 2: Just PID (first-time user)
-            List<Map<String, Object>> credentialSets = new java.util.ArrayList<>();
-            Map<String, Object> credentialSet = new LinkedHashMap<>();
-            credentialSet.put("purpose", "Login with German eID");
-            credentialSet.put("options", List.of(
-                    List.of("german_pid", "ba_login_credential"),  // Preferred: both
-                    List.of("german_pid")                           // Fallback: PID only
-            ));
-            credentialSets.add(credentialSet);
-
-            // Build final DCQL
             Map<String, Object> dcqlQuery = new LinkedHashMap<>();
-            dcqlQuery.put("credentials", credentials);
-            dcqlQuery.put("credential_sets", credentialSets);
+            dcqlQuery.put("credentials", List.of(
+                    buildPidCredentialEntry(),
+                    buildLoginCredentialEntry()
+            ));
+            dcqlQuery.put("credential_sets", List.of(Map.of(
+                    "purpose", "Login with German eID",
+                    "options", List.of(
+                            List.of(CRED_ID_PID, CRED_ID_LOGIN),  // Preferred: both
+                            List.of(CRED_ID_PID)                   // Fallback: PID only
+                    )
+            )));
 
             String dcql = objectMapper.writeValueAsString(dcqlQuery);
             LOG.infof("[PID-BINDING] Built DCQL query: %s", dcql);
             return dcql;
         } catch (Exception e) {
             LOG.errorf(e, "[PID-BINDING] Failed to build DCQL query, using fallback");
-            // Fallback to simple PID-only query
-            return "{\"credentials\":[{\"id\":\"german_pid\",\"format\":\"dc+sd-jwt\",\"meta\":{\"vct_values\":[\"" +
-                    pidBindingConfig.getPidCredentialType() + "\"]},\"claims\":[{\"path\":[\"given_name\"]},{\"path\":[\"family_name\"]},{\"path\":[\"birthdate\"]}]}]}";
+            return buildFallbackDcql();
         }
+    }
+
+    private Map<String, Object> buildPidCredentialEntry() {
+        List<Map<String, Object>> claims = pidBindingConfig.getPidRequestedClaimsList().stream()
+                .map(claim -> Map.<String, Object>of("path", List.of(claim)))
+                .toList();
+        return Map.of(
+                "id", CRED_ID_PID,
+                "format", Oid4vpIdentityProviderConfig.FORMAT_SD_JWT_VC,
+                "meta", Map.of("vct_values", List.of(pidBindingConfig.getPidCredentialType())),
+                "claims", claims
+        );
+    }
+
+    private Map<String, Object> buildLoginCredentialEntry() {
+        return Map.of(
+                "id", CRED_ID_LOGIN,
+                "format", Oid4vpIdentityProviderConfig.FORMAT_SD_JWT_VC,
+                "meta", Map.of("vct_values", List.of(pidBindingConfig.getLoginCredentialType())),
+                "claims", List.of(
+                        Map.of("path", List.of("user_id")),
+                        Map.of("path", List.of("linked_at"))
+                )
+        );
+    }
+
+    private String buildFallbackDcql() {
+        return "{\"credentials\":[{\"id\":\"german_pid\",\"format\":\"dc+sd-jwt\",\"meta\":{\"vct_values\":[\"" +
+                pidBindingConfig.getPidCredentialType() + "\"]},\"claims\":[{\"path\":[\"given_name\"]},{\"path\":[\"family_name\"]},{\"path\":[\"birthdate\"]}]}]}";
     }
 
     /**
@@ -190,7 +184,23 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
                                                     String errorDescription) {
         LOG.infof("[PID-BINDING] ========== processCallback called ==========");
 
-        // Validate state
+        validateStateAndErrors(authSession, state, error, errorDescription);
+        String resolvedVpToken = resolveVpToken(vpToken, encryptedResponse, authSession);
+        VpTokenVerificationResult result = verifyVpToken(authSession, resolvedVpToken);
+
+        ExtractedCredentials extracted = extractCredentials(result);
+        clearSessionNotes(authSession);
+
+        if (extracted.hasLoginCredential()) {
+            return processReturningUser(authSession, extracted.allClaims(), extracted.userId(), extracted.pidClaims());
+        } else {
+            return processFirstLogin(authSession, extracted.allClaims(), extracted.pidClaims(),
+                    extracted.pidIssuer(), extracted.pidType());
+        }
+    }
+
+    private void validateStateAndErrors(AuthenticationSessionModel authSession, String state,
+                                         String error, String errorDescription) {
         String expectedState = authSession.getAuthNote(SESSION_STATE);
         LOG.infof("[PID-BINDING] Expected state: %s, Got: %s", expectedState, state);
         if (expectedState == null || !expectedState.equals(state)) {
@@ -198,46 +208,48 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
             throw new IdentityBrokerException("Invalid state parameter");
         }
 
-        // Check for errors from wallet
         if (error != null && !error.isBlank()) {
             String message = errorDescription != null && !errorDescription.isBlank()
-                    ? error + ": " + errorDescription
-                    : error;
+                    ? error + ": " + errorDescription : error;
             LOG.warnf("[PID-BINDING] Wallet returned error: %s", message);
             throw new IdentityBrokerException("Wallet returned error: " + message);
         }
+    }
 
-        // Decrypt response if encrypted
-        if ((vpToken == null || vpToken.isBlank()) && encryptedResponse != null && !encryptedResponse.isBlank()) {
-            LOG.infof("[PID-BINDING] Decrypting encrypted response...");
-            String encryptionKey = authSession.getAuthNote(SESSION_ENCRYPTION_KEY);
-            try {
-                JsonNode node = dcApiRequestObjectService.decryptEncryptedResponse(encryptedResponse, encryptionKey);
-                if (node.hasNonNull("error")) {
-                    String err = node.get("error").asText("");
-                    String desc = node.hasNonNull("error_description") ? node.get("error_description").asText("") : "";
-                    throw new IdentityBrokerException("Wallet error: " + err + (desc.isEmpty() ? "" : " - " + desc));
-                }
-                if (!node.hasNonNull("vp_token")) {
-                    throw new IdentityBrokerException("Missing vp_token in encrypted response");
-                }
-                vpToken = node.get("vp_token").isTextual()
-                        ? node.get("vp_token").asText()
-                        : node.get("vp_token").toString();
-                LOG.infof("[PID-BINDING] Extracted vp_token from encrypted response");
-            } catch (IdentityBrokerException e) {
-                throw e;
-            } catch (Exception e) {
-                LOG.errorf(e, "[PID-BINDING] Failed to decrypt response: %s", e.getMessage());
-                throw new IdentityBrokerException("Failed to decrypt response: " + e.getMessage(), e);
-            }
+    private String resolveVpToken(String vpToken, String encryptedResponse, AuthenticationSessionModel authSession) {
+        if (vpToken != null && !vpToken.isBlank()) {
+            return vpToken;
         }
-
-        if (vpToken == null || vpToken.isBlank()) {
+        if (encryptedResponse == null || encryptedResponse.isBlank()) {
             throw new IdentityBrokerException("Missing vp_token");
         }
 
-        // Get verification parameters from session
+        LOG.infof("[PID-BINDING] Decrypting encrypted response...");
+        String encryptionKey = authSession.getAuthNote(SESSION_ENCRYPTION_KEY);
+        try {
+            JsonNode node = dcApiRequestObjectService.decryptEncryptedResponse(encryptedResponse, encryptionKey);
+            if (node.hasNonNull("error")) {
+                String err = node.get("error").asText("");
+                String desc = node.hasNonNull("error_description") ? node.get("error_description").asText("") : "";
+                throw new IdentityBrokerException("Wallet error: " + err + (desc.isEmpty() ? "" : " - " + desc));
+            }
+            if (!node.hasNonNull("vp_token")) {
+                throw new IdentityBrokerException("Missing vp_token in encrypted response");
+            }
+            String resolved = node.get("vp_token").isTextual()
+                    ? node.get("vp_token").asText()
+                    : node.get("vp_token").toString();
+            LOG.infof("[PID-BINDING] Extracted vp_token from encrypted response");
+            return resolved;
+        } catch (IdentityBrokerException e) {
+            throw e;
+        } catch (Exception e) {
+            LOG.errorf(e, "[PID-BINDING] Failed to decrypt response: %s", e.getMessage());
+            throw new IdentityBrokerException("Failed to decrypt response: " + e.getMessage(), e);
+        }
+    }
+
+    private VpTokenVerificationResult verifyVpToken(AuthenticationSessionModel authSession, String vpToken) {
         String expectedNonce = authSession.getAuthNote(SESSION_NONCE);
         String responseUri = authSession.getAuthNote(SESSION_RESPONSE_URI);
         String effectiveClientId = authSession.getAuthNote(SESSION_EFFECTIVE_CLIENT_ID);
@@ -247,10 +259,6 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
         LOG.infof("[PID-BINDING] Verification params - nonce: %s, responseUri: %s, clientId: %s",
                 expectedNonce, responseUri, clientId);
 
-        // Verify the VP token using VpTokenProcessor (handles format detection and retry)
-        boolean trustX5c = getConfig().getEffectiveTrustX5cFromCredential();
-        String redirectFlowResponseUri = authSession.getAuthNote(SESSION_REDIRECT_FLOW_RESPONSE_URI);
-
         VpTokenVerificationResult result = vpTokenProcessor.process(
                 vpToken,
                 getConfig().getTrustListId(),
@@ -258,20 +266,33 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
                 expectedNonce,
                 responseUri,
                 jwkThumbprint,
-                trustX5c,
-                redirectFlowResponseUri
+                getConfig().getEffectiveTrustX5cFromCredential(),
+                authSession.getAuthNote(SESSION_REDIRECT_FLOW_RESPONSE_URI)
         );
         LOG.infof("[PID-BINDING] VP verified, format: %s, credentials: %d",
                 result.format(), result.credentials().size());
+        return result;
+    }
 
-        // Extract claims from verified credentials
+    private record ExtractedCredentials(
+            Map<String, Object> allClaims,
+            String userId,
+            Map<String, Object> pidClaims,
+            String pidIssuer,
+            String pidType
+    ) {
+        boolean hasLoginCredential() {
+            return userId != null && !userId.isBlank();
+        }
+    }
+
+    private ExtractedCredentials extractCredentials(VpTokenVerificationResult result) {
         Map<String, Object> allClaims = new LinkedHashMap<>(result.mergedClaims());
         String userId = null;
         Map<String, Object> pidClaims = null;
         String pidIssuer = null;
         String pidType = null;
 
-        // Find ba-login-credential and PID credential
         VpTokenVerificationResult.VerifiedCredential loginCred =
                 result.findCredentialByVct(pidBindingConfig.getLoginCredentialType());
         if (loginCred != null) {
@@ -279,7 +300,6 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
             LOG.infof("[PID-BINDING] Found ba-login-credential with user_id: %s", userId);
         }
 
-        // Find PID credential (any credential that's not the login credential)
         for (var cred : result.credentials().values()) {
             String vct = CredentialClaimsExtractor.extractClaim(cred.claims(), "vct");
             if (!pidBindingConfig.getLoginCredentialType().equals(vct)) {
@@ -291,7 +311,6 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
             }
         }
 
-        // If no distinct PID found, use primary credential
         if (pidClaims == null) {
             VpTokenVerificationResult.VerifiedCredential primary = result.getPrimaryCredential();
             if (primary != null) {
@@ -301,20 +320,8 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
             }
         }
 
-        // Clear session notes
-        clearSessionNotes(authSession);
-
-        // Determine flow type and process accordingly
-        boolean hasLoginCredential = userId != null && !userId.isBlank();
-        LOG.infof("[PID-BINDING] Has ba-login-credential: %b, user_id: %s", hasLoginCredential, userId);
-
-        if (hasLoginCredential) {
-            // Returning user flow - use user_id from ba-login-credential
-            return processReturningUser(authSession, allClaims, userId, pidClaims);
-        } else {
-            // First login flow - requires username/password authentication
-            return processFirstLogin(authSession, allClaims, pidClaims, pidIssuer, pidType);
-        }
+        LOG.infof("[PID-BINDING] Has ba-login-credential: %b, user_id: %s", userId != null && !userId.isBlank(), userId);
+        return new ExtractedCredentials(allClaims, userId, pidClaims, pidIssuer, pidType);
     }
 
     /**

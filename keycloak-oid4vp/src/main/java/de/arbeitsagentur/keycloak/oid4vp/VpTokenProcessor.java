@@ -29,6 +29,7 @@ import java.util.Map;
 public class VpTokenProcessor {
 
     private static final Logger LOG = Logger.getLogger(VpTokenProcessor.class);
+    private static final String SESSION_TRANSCRIPT_MISMATCH = "SessionTranscript mismatch";
 
     private final Oid4vpVerifierService verifierService;
     private final ObjectMapper objectMapper;
@@ -166,12 +167,7 @@ public class VpTokenProcessor {
             return verifierService.verify(
                     credential, trustListId, clientId, expectedNonce, responseUri, jwkThumbprint, trustX5c);
         } catch (Exception e) {
-            boolean isSessionTranscriptMismatch = e.getMessage() != null &&
-                    (e.getMessage().contains("SessionTranscript mismatch") ||
-                            (e.getCause() != null && e.getCause().getMessage() != null &&
-                                    e.getCause().getMessage().contains("SessionTranscript mismatch")));
-
-            if (isSessionTranscriptMismatch && alternateResponseUri != null && !alternateResponseUri.equals(responseUri)) {
+            if (isSessionTranscriptMismatch(e) && alternateResponseUri != null && !alternateResponseUri.equals(responseUri)) {
                 LOG.debugf("Retrying single-credential verification with alternate response URI");
                 try {
                     return verifierService.verify(
@@ -182,5 +178,13 @@ public class VpTokenProcessor {
             }
             throw new IdentityBrokerException("VP verification failed: " + e.getMessage(), e);
         }
+    }
+
+    private static boolean isSessionTranscriptMismatch(Exception e) {
+        if (e.getMessage() != null && e.getMessage().contains(SESSION_TRANSCRIPT_MISMATCH)) {
+            return true;
+        }
+        Throwable cause = e.getCause();
+        return cause != null && cause.getMessage() != null && cause.getMessage().contains(SESSION_TRANSCRIPT_MISMATCH);
     }
 }

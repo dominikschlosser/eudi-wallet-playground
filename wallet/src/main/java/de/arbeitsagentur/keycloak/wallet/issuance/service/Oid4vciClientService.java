@@ -15,14 +15,10 @@
  */
 package de.arbeitsagentur.keycloak.wallet.issuance.service;
 
-import com.nimbusds.jose.JOSEObjectType;
-import com.nimbusds.jose.JWSAlgorithm;
-import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.jwk.ECKey;
-import com.nimbusds.jwt.JWTClaimsSet;
-import com.nimbusds.jwt.SignedJWT;
 import de.arbeitsagentur.keycloak.wallet.common.crypto.WalletKeyService;
+import de.arbeitsagentur.keycloak.wallet.common.util.CredentialOfferUrlParser;
+import de.arbeitsagentur.keycloak.wallet.common.util.ProofJwtBuilder;
 import de.arbeitsagentur.keycloak.wallet.common.storage.CredentialStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,7 +36,6 @@ import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -117,46 +112,21 @@ public class Oid4vciClientService {
             throw new IllegalArgumentException("Empty credential offer");
         }
 
-        String trimmed = input.trim();
-        String offerJson = null;
-        String offerUri = null;
-
-        // Parse openid-credential-offer:// URL
-        if (trimmed.startsWith("openid-credential-offer://")) {
-            String query = trimmed.substring("openid-credential-offer://".length());
-            if (query.startsWith("?")) {
-                query = query.substring(1);
-            }
-            for (String param : query.split("&")) {
-                String[] parts = param.split("=", 2);
-                if (parts.length == 2) {
-                    String key = URLDecoder.decode(parts[0], StandardCharsets.UTF_8);
-                    String value = URLDecoder.decode(parts[1], StandardCharsets.UTF_8);
-                    if ("credential_offer".equals(key)) {
-                        offerJson = value;
-                    } else if ("credential_offer_uri".equals(key)) {
-                        offerUri = value;
-                    }
-                }
-            }
-        } else if (trimmed.startsWith("{")) {
-            offerJson = trimmed;
-        } else if (trimmed.startsWith("http")) {
-            offerUri = trimmed;
+        CredentialOfferUrlParser.ParseResult parsed = CredentialOfferUrlParser.parse(input);
+        if (parsed == null) {
+            throw new IllegalArgumentException("Could not parse credential offer from: " + input);
         }
 
-        // Fetch offer from URI if needed
-        if (offerJson == null && offerUri != null) {
-            offerJson = fetchCredentialOfferJson(offerUri);
+        String offerJson = parsed.offerJson();
+        if (offerJson == null && parsed.hasOfferUri()) {
+            offerJson = fetchCredentialOfferJson(parsed.offerUri());
         }
 
         if (offerJson == null) {
             throw new IllegalArgumentException("Could not parse credential offer from: " + input);
         }
 
-        // Parse the offer JSON
         JsonNode offer = objectMapper.readTree(offerJson);
-
         String issuerUrl = offer.get("credential_issuer").asText();
         String preAuthorizedCode = extractPreAuthorizedCode(offer);
         String configurationId = extractConfigurationId(offer);
@@ -165,101 +135,43 @@ public class Oid4vciClientService {
             throw new IllegalArgumentException("No pre-authorized code in credential offer");
         }
 
-        // Default client ID for OID4VCI - some issuers require this
-        String clientId = "pid-binding-wallet";
-
-        return new CredentialOffer(issuerUrl, preAuthorizedCode, configurationId, clientId);
+        return new CredentialOffer(issuerUrl, preAuthorizedCode, configurationId, "pid-binding-wallet");
     }
 
     private String fetchCredentialOfferJson(String offerUri) throws Exception {
         LOG.info("[OID4VCI] Fetching credential offer from: {}", offerUri);
-
-        HttpURLConnection conn = (HttpURLConnection) new URL(offerUri).openConnection();
-        conn.setRequestMethod("GET");
-        conn.setRequestProperty("Accept", "application/json");
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(10000);
-
-        int responseCode = conn.getResponseCode();
-        if (responseCode != 200) {
-            String error = readResponse(conn);
-            throw new RuntimeException("Failed to fetch credential offer: HTTP " + responseCode + " - " + error);
-        }
-
-        return readResponse(conn);
+        return httpGet(offerUri, null, "fetch credential offer");
     }
 
     private JsonNode fetchIssuerMetadata(String issuerUrl) throws Exception {
         String metadataUrl = issuerUrl + "/.well-known/openid-credential-issuer";
         LOG.info("[OID4VCI] Fetching issuer metadata from: {}", metadataUrl);
-
-        HttpURLConnection conn = (HttpURLConnection) new URL(metadataUrl).openConnection();
-        conn.setRequestMethod("GET");
-        conn.setRequestProperty("Accept", "application/json");
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(10000);
-
-        int responseCode = conn.getResponseCode();
-        if (responseCode != 200) {
-            String error = readResponse(conn);
-            throw new RuntimeException("Failed to fetch issuer metadata: HTTP " + responseCode + " - " + error);
-        }
-
-        return objectMapper.readTree(readResponse(conn));
+        return objectMapper.readTree(httpGet(metadataUrl, null, "fetch issuer metadata"));
     }
 
     private JsonNode exchangePreAuthorizedCode(String tokenEndpoint, String preAuthorizedCode, String clientId) throws Exception {
         LOG.info("[OID4VCI] Exchanging pre-authorized code at: {}", tokenEndpoint);
-
         String body = "grant_type=" + URLEncoder.encode("urn:ietf:params:oauth:grant-type:pre-authorized_code", StandardCharsets.UTF_8)
                 + "&pre-authorized_code=" + URLEncoder.encode(preAuthorizedCode, StandardCharsets.UTF_8)
                 + "&client_id=" + URLEncoder.encode(clientId, StandardCharsets.UTF_8);
-
-        HttpURLConnection conn = (HttpURLConnection) new URL(tokenEndpoint).openConnection();
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-        conn.setRequestProperty("Accept", "application/json");
-        conn.setDoOutput(true);
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(10000);
-
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(body.getBytes(StandardCharsets.UTF_8));
-        }
-
-        int responseCode = conn.getResponseCode();
-        if (responseCode != 200) {
-            String error = readResponse(conn);
-            throw new RuntimeException("Failed to exchange pre-authorized code: HTTP " + responseCode + " - " + error);
-        }
-
-        return objectMapper.readTree(readResponse(conn));
+        return objectMapper.readTree(httpPost(tokenEndpoint, body, "application/x-www-form-urlencoded", null, "exchange pre-authorized code"));
     }
 
     private String fetchNonce(String nonceEndpoint, String accessToken) throws Exception {
         LOG.info("[OID4VCI] Fetching nonce from: {}", nonceEndpoint);
-
-        HttpURLConnection conn = (HttpURLConnection) new URL(nonceEndpoint).openConnection();
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Accept", "application/json");
-        conn.setRequestProperty("Authorization", "Bearer " + accessToken);
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(10000);
-
-        int responseCode = conn.getResponseCode();
-        if (responseCode != 200) {
-            LOG.warn("[OID4VCI] Nonce endpoint returned: HTTP {}", responseCode);
+        try {
+            String response = httpPost(nonceEndpoint, null, null, accessToken, "fetch nonce");
+            JsonNode node = objectMapper.readTree(response);
+            return node.has("c_nonce") ? node.get("c_nonce").asText() : null;
+        } catch (Exception e) {
+            LOG.warn("[OID4VCI] Nonce endpoint failed: {}", e.getMessage());
             return null;
         }
-
-        JsonNode response = objectMapper.readTree(readResponse(conn));
-        return response.has("c_nonce") ? response.get("c_nonce").asText() : null;
     }
 
     private JsonNode requestCredential(String credentialEndpoint, String issuerUrl,
                                         String accessToken, String configurationId, String cNonce) throws Exception {
         LOG.info("[OID4VCI] Requesting credential from: {}", credentialEndpoint);
-
         ECKey holderKey = walletKeyService.loadOrCreateKey();
         String proofJwt = buildProofJwt(holderKey, issuerUrl, cNonce);
 
@@ -268,48 +180,64 @@ public class Oid4vciClientService {
         requestBody.put("proof", Map.of("proof_type", "jwt", "jwt", proofJwt));
 
         String body = objectMapper.writeValueAsString(requestBody);
-
-        HttpURLConnection conn = (HttpURLConnection) new URL(credentialEndpoint).openConnection();
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Accept", "application/json");
-        conn.setRequestProperty("Authorization", "Bearer " + accessToken);
-        conn.setDoOutput(true);
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(10000);
-
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(body.getBytes(StandardCharsets.UTF_8));
-        }
-
-        int responseCode = conn.getResponseCode();
-        String response = readResponse(conn);
-
-        if (responseCode != 200) {
-            throw new RuntimeException("Failed to request credential: HTTP " + responseCode + " - " + response);
-        }
-
-        return objectMapper.readTree(response);
+        return objectMapper.readTree(httpPost(credentialEndpoint, body, "application/json", accessToken, "request credential"));
     }
 
-    private String buildProofJwt(ECKey holderKey, String audience, String nonce) throws Exception {
-        JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.ES256)
-                .type(new JOSEObjectType("openid4vci-proof+jwt"))
-                .jwk(holderKey.toPublicJWK())
-                .build();
+    // --- HTTP helpers ---
 
-        JWTClaimsSet.Builder claimsBuilder = new JWTClaimsSet.Builder()
-                .audience(audience)
-                .issueTime(Date.from(Instant.now()));
+    private static final int HTTP_TIMEOUT_MS = 10000;
 
-        if (nonce != null && !nonce.isEmpty()) {
-            claimsBuilder.claim("nonce", nonce);
+    private String httpGet(String url, String bearerToken, String operation) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Accept", "application/json");
+        if (bearerToken != null) {
+            conn.setRequestProperty("Authorization", "Bearer " + bearerToken);
+        }
+        conn.setConnectTimeout(HTTP_TIMEOUT_MS);
+        conn.setReadTimeout(HTTP_TIMEOUT_MS);
+
+        return handleResponse(conn, operation);
+    }
+
+    private String httpPost(String url, String body, String contentType, String bearerToken, String operation) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Accept", "application/json");
+        if (contentType != null) {
+            conn.setRequestProperty("Content-Type", contentType);
+        }
+        if (bearerToken != null) {
+            conn.setRequestProperty("Authorization", "Bearer " + bearerToken);
+        }
+        conn.setConnectTimeout(HTTP_TIMEOUT_MS);
+        conn.setReadTimeout(HTTP_TIMEOUT_MS);
+
+        if (body != null) {
+            conn.setDoOutput(true);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body.getBytes(StandardCharsets.UTF_8));
+            }
         }
 
-        SignedJWT jwt = new SignedJWT(header, claimsBuilder.build());
-        jwt.sign(new ECDSASigner(holderKey));
+        return handleResponse(conn, operation);
+    }
 
-        return jwt.serialize();
+    private String handleResponse(HttpURLConnection conn, String operation) throws Exception {
+        int responseCode = conn.getResponseCode();
+        String response = readResponse(conn);
+        if (responseCode != 200) {
+            throw new RuntimeException("Failed to " + operation + ": HTTP " + responseCode + " - " + response);
+        }
+        return response;
+    }
+
+    private String buildProofJwt(ECKey holderKey, String audience, String nonce) {
+        return ProofJwtBuilder.withKey(holderKey)
+                .audience(audience)
+                .nonce(nonce)
+                .expiration(java.time.Duration.ZERO)  // No expiration for this use case
+                .build();
     }
 
     private String extractCredentialFromResponse(JsonNode response) {

@@ -22,6 +22,7 @@ import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitForSelectorState;
+import com.microsoft.playwright.options.WaitUntilState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.ObjectMapper;
@@ -216,7 +217,7 @@ class PidBindingE2eIT {
         callback.reset();
         clearBrowserSession();
 
-        page.navigate(buildAuthRequestUri().toString());
+        safeNavigate(buildAuthRequestUri().toString());
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         page.waitForSelector("#username, a[href*='german-pid']", new Page.WaitForSelectorOptions().setTimeout(30000));
@@ -238,7 +239,7 @@ class PidBindingE2eIT {
         clearBrowserSession();
         wallet.clearSimulatedCredentials();
 
-        page.navigate(buildAuthRequestUri().toString());
+        safeNavigate(buildAuthRequestUri().toString());
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
@@ -485,7 +486,7 @@ class PidBindingE2eIT {
         assertThat(wallet.hasIssuedCredential()).as("Wallet should have the issued credential").isTrue();
         LOG.info("[Test] Using real credential issued via OID4VCI for returning user flow");
 
-        page.navigate(buildAuthRequestUri().toString());
+        safeNavigate(buildAuthRequestUri().toString());
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
@@ -610,7 +611,7 @@ class PidBindingE2eIT {
         clearBrowserSession();
         wallet.clearSimulatedCredentials();
 
-        page.navigate(buildAuthRequestUri().toString());
+        safeNavigate(buildAuthRequestUri().toString());
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
@@ -653,7 +654,7 @@ class PidBindingE2eIT {
         // federated identity during the first-broker-login flow to prevent duplicate key errors.
         LOG.info("[Test] Re-issuance flow: User has federated identity but no credential - authenticator should handle removal");
 
-        page.navigate(buildAuthRequestUri().toString());
+        safeNavigate(buildAuthRequestUri().toString());
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
@@ -807,6 +808,24 @@ class PidBindingE2eIT {
     private void clearBrowserSession() throws InterruptedException {
         context.clearCookies();
         Thread.sleep(100);
+    }
+
+    /**
+     * Navigate to a URL, handling potential redirect interruptions gracefully.
+     * Uses COMMIT wait state to avoid "navigation interrupted by another navigation" errors
+     * that can occur when the page redirects before fully loading.
+     */
+    private void safeNavigate(String url) {
+        try {
+            page.navigate(url, new Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT));
+        } catch (Exception e) {
+            // If navigation was interrupted by a redirect, that's expected behavior
+            if (e.getMessage() != null && e.getMessage().contains("interrupted by another navigation")) {
+                LOG.debug("Navigation to {} was redirected (expected behavior)", url);
+            } else {
+                throw e;
+            }
+        }
     }
 
     private void waitForOid4vpStartButton() {
