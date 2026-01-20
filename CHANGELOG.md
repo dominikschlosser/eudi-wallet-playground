@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.4.0...v1.5.0) (2026-01-20)
+
+
+### Features
+
+* demo de pid+custom credential workflow ([ae26e00](https://github.com/ba-itsys/eudi-wallet-playground/commit/ae26e009f0f66b2bbad40e9dc319becc51d8d14f))
+
 ## [1.4.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.3.4...v1.4.0) (2026-01-15)
 
 
