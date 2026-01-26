@@ -2,7 +2,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>de.arbeitagentur.opdt</groupId>
     <artifactId>eudi-wallet-playground</artifactId>
-    <version>1.5.1</version>
+    <version>1.5.2-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>EUDI Wallet Playground</name>
     <description>Spring Boot demo wallet with reusable SD-JWT and mDoc libraries</description>
