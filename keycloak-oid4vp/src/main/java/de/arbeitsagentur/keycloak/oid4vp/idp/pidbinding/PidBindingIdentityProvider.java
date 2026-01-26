@@ -61,6 +61,7 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
     public static final String SESSION_CREDENTIAL_OFFER_URI = "pid_binding_credential_offer_uri";
     public static final String SESSION_PID_CLAIMS = "pid_binding_pid_claims";
     public static final String SESSION_CREDENTIAL_USER_ID = "pid_binding_credential_user_id";
+    public static final String SESSION_IDP_ALIAS = "pid_binding_idp_alias";
 
     // Session notes from parent class (package-private access)
     private static final String SESSION_STATE = "oid4vp_state";
@@ -389,6 +390,8 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
 
         // Mark the session for first-broker-login flow
         authSession.setAuthNote(SESSION_NEEDS_CREDENTIAL_ISSUANCE, "true");
+        // Store IDP alias for use in credential issuance authenticator
+        authSession.setAuthNote(SESSION_IDP_ALIAS, getConfig().getAlias());
 
         // Store PID claims for later use in credential issuance
         try {

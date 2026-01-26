@@ -613,7 +613,11 @@ public class Oid4vpIdentityProviderEndpoint {
             String sessionCode = authSession.getAuthNote("oid4vp_session_code");
 
             StringBuilder url = new StringBuilder();
-            url.append(session.getContext().getUri().getBaseUri().toString());
+            String baseUri = session.getContext().getUri().getBaseUri().toString();
+            url.append(baseUri);
+            if (!baseUri.endsWith("/")) {
+                url.append("/");
+            }
             url.append("realms/").append(realm.getName());
             url.append("/broker/").append(getIdpModel().getAlias()).append("/login");
 
@@ -664,7 +668,11 @@ public class Oid4vpIdentityProviderEndpoint {
             String nonce = authSession.getClientNote("nonce");
 
             StringBuilder url = new StringBuilder();
-            url.append(session.getContext().getUri().getBaseUri().toString());
+            String baseUri = session.getContext().getUri().getBaseUri().toString();
+            url.append(baseUri);
+            if (!baseUri.endsWith("/")) {
+                url.append("/");
+            }
             url.append("realms/").append(realm.getName());
             url.append("/protocol/openid-connect/auth");
             url.append("?client_id=").append(urlEncode(clientId));

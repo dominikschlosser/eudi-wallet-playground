@@ -55,9 +55,8 @@ public class PidBindingIdentityProviderConfig extends Oid4vpIdentityProviderConf
     // Wallet URL for same-device credential issuance (OID4VCI)
     // Options:
     //   - "native" or empty: Use openid-credential-offer:// URI directly (for mobile wallets)
-    //   - Web URL (e.g., http://localhost:3000/wallet): Wrap offer in web wallet URL
+    //   - Web URL (e.g., https://example.com/wallet): Wrap offer in web wallet URL
     public static final String CREDENTIAL_ISSUANCE_WALLET_URL = "credentialIssuanceWalletUrl";
-    public static final String DEFAULT_CREDENTIAL_ISSUANCE_WALLET_URL = "http://localhost:3000/wallet";
     public static final String NATIVE_WALLET_URL = "native";
 
     // Whether to always request both credentials (even for potential first-time users)
@@ -144,12 +143,11 @@ public class PidBindingIdentityProviderConfig extends Oid4vpIdentityProviderConf
     /**
      * Get the wallet URL for same-device credential issuance.
      * This URL should open the wallet app with credential offer handling.
-     * Default: http://localhost:3000/wallet
      * Set to "native" to use openid-credential-offer:// URI directly.
+     * Must be configured explicitly - no default value.
      */
     public String getCredentialIssuanceWalletUrl() {
-        String value = getConfig().get(CREDENTIAL_ISSUANCE_WALLET_URL);
-        return value != null && !value.isBlank() ? value : DEFAULT_CREDENTIAL_ISSUANCE_WALLET_URL;
+        return getConfig().get(CREDENTIAL_ISSUANCE_WALLET_URL);
     }
 
     /**

@@ -457,7 +457,9 @@
       "redirectUris": [
         "/realms/pid-binding-demo/account/*"
       ],
-      "webOrigins": [],
+      "webOrigins": [
+        "*"
+      ],
       "notBefore": 0,
       "bearerOnly": false,
       "consentRequired": false,
@@ -497,7 +499,9 @@
       "redirectUris": [
         "/realms/pid-binding-demo/account/*"
       ],
-      "webOrigins": [],
+      "webOrigins": [
+        "*"
+      ],
       "notBefore": 0,
       "bearerOnly": false,
       "consentRequired": false,
@@ -581,8 +585,7 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "redirectUris": [
-        "http://localhost:*/*",
-        "http://127.0.0.1:*/*"
+        "*"
       ],
       "webOrigins": [
         "*"

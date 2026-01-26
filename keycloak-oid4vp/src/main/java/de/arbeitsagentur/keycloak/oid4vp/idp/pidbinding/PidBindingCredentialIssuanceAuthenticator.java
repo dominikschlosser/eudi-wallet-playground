@@ -68,7 +68,7 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
             return;
         }
 
-        String idpAlias = context.getAuthenticationSession().getAuthNote("identity_provider");
+        String idpAlias = context.getAuthenticationSession().getAuthNote(PidBindingIdentityProvider.SESSION_IDP_ALIAS);
         LOG.infof("[PID-CREDENTIAL-ISSUANCE] User: %s, IdP: %s", user.getUsername(), idpAlias);
 
         // Show credential issuance page
@@ -134,10 +134,11 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
 
         // Get wallet URL for same-device flow
         String sameDeviceWalletUrl;
-        if (isNativeWalletMode(context)) {
+        String walletUrl = getWalletUrl(context);
+        if (isNativeWalletMode(context) || walletUrl == null || walletUrl.isBlank()) {
+            // Use native openid-credential-offer:// URI
             sameDeviceWalletUrl = openidCredentialOfferUri;
         } else {
-            String walletUrl = getWalletUrl(context);
             sameDeviceWalletUrl = walletUrl + "?credentialOffer=" +
                     java.net.URLEncoder.encode(openidCredentialOfferUri, StandardCharsets.UTF_8);
         }
@@ -167,8 +168,11 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
      */
     private String buildCredentialOfferUri(AuthenticationFlowContext context, String userId) {
         KeycloakSession session = context.getSession();
-        String issuer = session.getContext().getUri().getBaseUri().toString() +
-                "realms/" + context.getRealm().getName();
+        String baseUri = session.getContext().getUri().getBaseUri().toString();
+        if (!baseUri.endsWith("/")) {
+            baseUri += "/";
+        }
+        String issuer = baseUri + "realms/" + context.getRealm().getName();
 
         String configId = getCredentialConfigurationId(context);
         String preAuthorizedCode = "urn:oid4vci:code:" + SecretGenerator.getInstance().randomString(64);
@@ -195,7 +199,7 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
     }
 
     private String getCredentialConfigurationId(AuthenticationFlowContext context) {
-        String idpAlias = context.getAuthenticationSession().getAuthNote("identity_provider");
+        String idpAlias = context.getAuthenticationSession().getAuthNote(PidBindingIdentityProvider.SESSION_IDP_ALIAS);
         if (idpAlias != null) {
             var idp = context.getRealm().getIdentityProviderByAlias(idpAlias);
             if (idp != null) {
@@ -210,7 +214,7 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
     }
 
     private String getOid4vciClientId(AuthenticationFlowContext context) {
-        String idpAlias = context.getAuthenticationSession().getAuthNote("identity_provider");
+        String idpAlias = context.getAuthenticationSession().getAuthNote(PidBindingIdentityProvider.SESSION_IDP_ALIAS);
         if (idpAlias != null) {
             var idp = context.getRealm().getIdentityProviderByAlias(idpAlias);
             if (idp != null) {
@@ -224,28 +228,37 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
         return "pid-binding-wallet";
     }
 
-    private String getWalletUrl(AuthenticationFlowContext context) {
-        String idpAlias = context.getAuthenticationSession().getAuthNote("identity_provider");
+    private PidBindingIdentityProviderConfig getPidBindingIdpConfig(AuthenticationFlowContext context) {
+        // Try to get IDP alias from auth note first
+        String idpAlias = context.getAuthenticationSession().getAuthNote(PidBindingIdentityProvider.SESSION_IDP_ALIAS);
         if (idpAlias != null) {
             var idp = context.getRealm().getIdentityProviderByAlias(idpAlias);
             if (idp != null) {
-                PidBindingIdentityProviderConfig config = new PidBindingIdentityProviderConfig(idp);
-                return config.getCredentialIssuanceWalletUrl();
+                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Found IDP from auth note: %s", idpAlias);
+                return new PidBindingIdentityProviderConfig(idp);
             }
         }
-        return PidBindingIdentityProviderConfig.DEFAULT_CREDENTIAL_ISSUANCE_WALLET_URL;
+
+        // Fallback: find the first pid-binding IDP in the realm
+        for (var idp : context.getRealm().getIdentityProvidersStream().toList()) {
+            if (PidBindingIdentityProviderFactory.PROVIDER_ID.equals(idp.getProviderId())) {
+                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Found IDP by provider type: %s", idp.getAlias());
+                return new PidBindingIdentityProviderConfig(idp);
+            }
+        }
+
+        LOG.warnf("[PID-CREDENTIAL-ISSUANCE] No PID binding IDP found in realm");
+        return null;
+    }
+
+    private String getWalletUrl(AuthenticationFlowContext context) {
+        PidBindingIdentityProviderConfig config = getPidBindingIdpConfig(context);
+        return config != null ? config.getCredentialIssuanceWalletUrl() : null;
     }
 
     private boolean isNativeWalletMode(AuthenticationFlowContext context) {
-        String idpAlias = context.getAuthenticationSession().getAuthNote("identity_provider");
-        if (idpAlias != null) {
-            var idp = context.getRealm().getIdentityProviderByAlias(idpAlias);
-            if (idp != null) {
-                PidBindingIdentityProviderConfig config = new PidBindingIdentityProviderConfig(idp);
-                return config.isNativeWalletMode();
-            }
-        }
-        return false;
+        PidBindingIdentityProviderConfig config = getPidBindingIdpConfig(context);
+        return config != null && config.isNativeWalletMode();
     }
 
     /**
@@ -335,7 +348,7 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
     }
 
     private String getLoginCredentialType(AuthenticationFlowContext context) {
-        String idpAlias = context.getAuthenticationSession().getAuthNote("identity_provider");
+        String idpAlias = context.getAuthenticationSession().getAuthNote(PidBindingIdentityProvider.SESSION_IDP_ALIAS);
         if (idpAlias != null) {
             var idp = context.getRealm().getIdentityProviderByAlias(idpAlias);
             if (idp != null) {

@@ -618,7 +618,11 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         }
         RealmModel realm = authSession.getRealm();
         URI baseUri = session.getContext().getUri().getBaseUri();
-        String value = baseUri.toString() + "realms/" + realm.getName();
+        String baseUriStr = baseUri.toString();
+        if (!baseUriStr.endsWith("/")) {
+            baseUriStr += "/";
+        }
+        String value = baseUriStr + "realms/" + realm.getName();
         return value.endsWith("/") ? value : value + "/";
     }
 

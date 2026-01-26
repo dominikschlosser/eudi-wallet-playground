@@ -1029,6 +1029,7 @@
         "/realms/wallet-demo/account/*"
       ],
       "webOrigins": [
+        "*"
       ],
       "notBefore": 0,
       "bearerOnly": false,
@@ -1077,6 +1078,7 @@
         "/realms/wallet-demo/account/*"
       ],
       "webOrigins": [
+        "*"
       ],
       "notBefore": 0,
       "bearerOnly": false,
