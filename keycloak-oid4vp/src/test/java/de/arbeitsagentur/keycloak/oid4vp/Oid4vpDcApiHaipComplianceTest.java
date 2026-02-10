@@ -673,11 +673,11 @@ class Oid4vpDcApiHaipComplianceTest {
                     .as("HAIP requires trust anchor verification via trust list, not x5c alone")
                     .isFalse();
 
-            // Trust list can be configured via JSON for verifying issuer certificates
-            String trustListJson = "{\"trust_anchors\":[{\"certificate\":\"...\"}]}";
-            config.setTrustListJson(trustListJson);
-            assertThat(config.getTrustListJson())
-                    .as("Trust list JSON should be configurable for trust anchor verification")
+            // Trust list can be configured via ETSI JWT for verifying issuer certificates
+            String trustListJwt = "eyJhbGciOiJub25lIn0.eyJ0ZXN0IjoidHJ1ZSJ9.";
+            config.setTrustListJwt(trustListJwt);
+            assertThat(config.getTrustListJwt())
+                    .as("Trust list JWT should be configurable for trust anchor verification")
                     .isNotNull();
         }
 

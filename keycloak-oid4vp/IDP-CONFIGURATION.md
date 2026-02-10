@@ -123,9 +123,18 @@ mdoc-birth_date → birthdate  # Different claim name, same attribute
 
 ### Trust List
 
-The IdP verifies credential issuers against a trust list. Configure:
+The IdP verifies credential issuers against a trust list in [ETSI TS 119 602](https://www.etsi.org/deliver/etsi_ts/119600_119699/119602/01.01.01_60/ts_119602v010101p.pdf) JWT format. Two configuration options are available:
+
+- **Trust List URL** (`trustListUrl`): URL to fetch the trust list JWT from (e.g. `https://bmi.usercontent.opencode.de/eudi-wallet/test-trust-lists/pid-provider.jwt`). The JWT is fetched when the IdP is created.
+- **Trust List JWT** (`trustListJwt`): Inline ETSI trust list JWT string. Paste the full JWT content directly.
+
+If both URL and inline JWT are configured, the URL is tried first with the inline JWT as fallback.
+
+Additional configuration:
 - **Trust List ID**: Identifier for the trust list (default: `trust-list`)
 - **Additional Trusted Certificates**: PEM certificates to add dynamically
+
+See [docs/trust-lists.md](../docs/trust-lists.md) for full details on the ETSI trust list format and available trust lists.
 
 ### Allowed Issuers/Types
 

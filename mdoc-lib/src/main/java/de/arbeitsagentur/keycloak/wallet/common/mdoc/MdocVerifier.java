@@ -235,7 +235,7 @@ public class MdocVerifier {
             boolean valid = sign1.validate(coseKey);
             LOG.info("[OID4VP-MDOC] Trust list key[{}] validation result: {}", keyIndex, valid);
             if (valid && steps != null) {
-                steps.add("Signature verified against trust-list.json",
+                steps.add("Signature verified against trust list",
                         "Checked mDoc issuerAuth signature against trusted issuers in the trust list.",
                         "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
             }

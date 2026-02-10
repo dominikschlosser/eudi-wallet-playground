@@ -15,27 +15,32 @@
  */
 package de.arbeitsagentur.keycloak.wallet.verification.service;
 
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSVerifier;
 import com.nimbusds.jose.crypto.ECDSAVerifier;
 import com.nimbusds.jose.crypto.RSASSAVerifier;
 import com.nimbusds.jwt.SignedJWT;
+import de.arbeitsagentur.keycloak.wallet.common.credential.EtsiTrustListParser;
+import de.arbeitsagentur.keycloak.wallet.common.credential.EtsiTrustListParser.EtsiTrustList;
+import de.arbeitsagentur.keycloak.wallet.verification.config.VerifierProperties;
 import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.stereotype.Component;
 
-import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
-import java.security.cert.CertificateFactory;
-import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
+import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,79 +49,129 @@ import java.util.Objects;
 @Component
 public class TrustListService implements
         de.arbeitsagentur.keycloak.wallet.common.credential.TrustedIssuerResolver {
-    private final ObjectMapper objectMapper;
+
+    private static final Logger LOG = LoggerFactory.getLogger(TrustListService.class);
+
+    private static final String[] REMOTE_TRUST_LIST_FILES = {
+            "pid-provider.jwt", "registrar.jwt", "wallet-provider.jwt",
+            "wrpac-provider.jwt", "wrprc-provider.jwt"
+    };
+
+    private final VerifierProperties properties;
     private final Map<String, List<TrustedVerifier>> trustLists = new LinkedHashMap<>();
     private final Map<String, List<PublicKey>> trustListKeys = new LinkedHashMap<>();
     private String defaultTrustListId;
     private final Map<String, String> labels = new LinkedHashMap<>();
 
-    public TrustListService(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
+    public TrustListService(VerifierProperties properties) {
+        this.properties = properties;
     }
 
     @PostConstruct
     public void load() throws Exception {
+        // Load classpath trust lists (ETSI JWT format)
         PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
-        Resource[] resources = resolver.getResources("classpath*:trust-list*.json");
+        Resource[] resources = resolver.getResources("classpath*:trust-list*.jwt");
         for (Resource resource : resources) {
             String id = deriveId(resource);
-            JsonNode node;
             try (InputStream is = resource.getInputStream()) {
-                node = objectMapper.readTree(is);
-            }
-            List<TrustedVerifier> verifiers = new ArrayList<>();
-            List<PublicKey> keys = new ArrayList<>();
-            for (JsonNode issuer : node.path("issuers")) {
-                String certPem = issuer.path("certificate").asText(null);
-                if (certPem == null || certPem.isBlank()) {
-                    continue;
-                }
-                PublicKey publicKey = parsePublicKey(certPem);
-                if (publicKey instanceof RSAPublicKey rsaPublicKey) {
-                    // Add verifiers for common RSA algorithms (PKCS#1 v1.5 and PSS)
-                    verifiers.add(new TrustedVerifier(JWSAlgorithm.RS256, new RSASSAVerifier(rsaPublicKey)));
-                    verifiers.add(new TrustedVerifier(JWSAlgorithm.PS256, new RSASSAVerifier(rsaPublicKey)));
-                    verifiers.add(new TrustedVerifier(JWSAlgorithm.PS384, new RSASSAVerifier(rsaPublicKey)));
-                    verifiers.add(new TrustedVerifier(JWSAlgorithm.PS512, new RSASSAVerifier(rsaPublicKey)));
-                    keys.add(rsaPublicKey);
-                } else if (publicKey instanceof ECPublicKey ecPublicKey) {
-                    verifiers.add(new TrustedVerifier(JWSAlgorithm.ES256, new ECDSAVerifier(ecPublicKey)));
-                    keys.add(ecPublicKey);
-                }
-            }
-            trustLists.put(id, verifiers);
-            trustListKeys.put(id, List.copyOf(keys));
-            String label = node.path("label").asText(null);
-            labels.put(id, (label == null || label.isBlank()) ? id : label);
-            if (defaultTrustListId == null) {
-                defaultTrustListId = id;
+                String jwtContent = new String(is.readAllBytes(), StandardCharsets.UTF_8).trim();
+                loadTrustListJwt(id, jwtContent);
             }
         }
+
+        // Load remote ETSI trust lists if configured
+        String baseUrl = properties.etsiTrustListBaseUrl();
+        if (baseUrl != null && !baseUrl.isBlank()) {
+            loadRemoteTrustLists(baseUrl);
+        }
+
         if (defaultTrustListId == null) {
-            throw new IllegalStateException("No trust-list*.json files found on classpath");
+            throw new IllegalStateException("No trust-list*.jwt files found on classpath");
         }
         if (trustLists.containsKey("trust-list")) {
             defaultTrustListId = "trust-list";
         }
     }
 
+    private void loadTrustListJwt(String id, String jwtContent) {
+        EtsiTrustList parsed = EtsiTrustListParser.parse(jwtContent);
+
+        List<TrustedVerifier> verifiers = new ArrayList<>();
+        List<PublicKey> keys = new ArrayList<>();
+        for (var entity : parsed.entities()) {
+            for (PublicKey key : entity.publicKeys()) {
+                addVerifiersForKey(key, verifiers, keys);
+            }
+        }
+
+        trustLists.put(id, verifiers);
+        trustListKeys.put(id, List.copyOf(keys));
+
+        String label = parsed.label();
+        labels.put(id, (label == null || label.isBlank()) ? id : label);
+        LOG.info("Loaded trust list '{}' with {} keys (label: {})", id, keys.size(), labels.get(id));
+
+        if (defaultTrustListId == null) {
+            defaultTrustListId = id;
+        }
+    }
+
+    private void loadRemoteTrustLists(String baseUrl) {
+        String normalizedBase = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
+        LOG.info("Fetching remote ETSI trust lists from {}", normalizedBase);
+
+        for (String filename : REMOTE_TRUST_LIST_FILES) {
+            String url = normalizedBase + filename;
+            try {
+                String jwtContent = fetchUrl(url);
+                String id = filename.replace(".jwt", "");
+                loadTrustListJwt(id, jwtContent);
+            } catch (Exception e) {
+                LOG.warn("Failed to load remote ETSI trust list {}: {}", filename, e.getMessage());
+            }
+        }
+    }
+
+    private String fetchUrl(String url) throws Exception {
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(30))
+                .GET()
+                .build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("HTTP " + response.statusCode() + " for " + url);
+        }
+        return response.body().trim();
+    }
+
     private String deriveId(Resource resource) {
         String filename = Objects.requireNonNull(resource.getFilename());
-        if (filename.endsWith(".json")) {
-            filename = filename.substring(0, filename.length() - 5);
+        if (filename.endsWith(".jwt")) {
+            filename = filename.substring(0, filename.length() - 4);
         }
         return filename;
     }
 
-    private PublicKey parsePublicKey(String pem) throws Exception {
-        String sanitized = pem.replace("-----BEGIN CERTIFICATE-----", "")
-                .replace("-----END CERTIFICATE-----", "")
-                .replaceAll("\\s", "");
-        byte[] der = Base64.getDecoder().decode(sanitized);
-        CertificateFactory factory = CertificateFactory.getInstance("X.509");
-        X509Certificate certificate =
-                (X509Certificate) factory.generateCertificate(new ByteArrayInputStream(der));
-        return certificate.getPublicKey();
+    private void addVerifiersForKey(PublicKey publicKey, List<TrustedVerifier> verifiers, List<PublicKey> keys) {
+        try {
+            if (publicKey instanceof RSAPublicKey rsaPublicKey) {
+                verifiers.add(new TrustedVerifier(JWSAlgorithm.RS256, new RSASSAVerifier(rsaPublicKey)));
+                verifiers.add(new TrustedVerifier(JWSAlgorithm.PS256, new RSASSAVerifier(rsaPublicKey)));
+                verifiers.add(new TrustedVerifier(JWSAlgorithm.PS384, new RSASSAVerifier(rsaPublicKey)));
+                verifiers.add(new TrustedVerifier(JWSAlgorithm.PS512, new RSASSAVerifier(rsaPublicKey)));
+                keys.add(rsaPublicKey);
+            } else if (publicKey instanceof ECPublicKey ecPublicKey) {
+                verifiers.add(new TrustedVerifier(JWSAlgorithm.ES256, new ECDSAVerifier(ecPublicKey)));
+                keys.add(ecPublicKey);
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to create verifier for key: {}", e.getMessage());
+        }
     }
 
     public boolean verify(SignedJWT jwt) {
@@ -194,15 +249,10 @@ public class TrustListService implements
                 try {
                     if (jwk instanceof com.nimbusds.jose.jwk.RSAKey rsaKey) {
                         RSAPublicKey pubKey = rsaKey.toRSAPublicKey();
-                        verifiers.add(new TrustedVerifier(JWSAlgorithm.RS256, new RSASSAVerifier(pubKey)));
-                        verifiers.add(new TrustedVerifier(JWSAlgorithm.PS256, new RSASSAVerifier(pubKey)));
-                        verifiers.add(new TrustedVerifier(JWSAlgorithm.PS384, new RSASSAVerifier(pubKey)));
-                        verifiers.add(new TrustedVerifier(JWSAlgorithm.PS512, new RSASSAVerifier(pubKey)));
-                        keys.add(pubKey);
+                        addVerifiersForKey(pubKey, verifiers, keys);
                     } else if (jwk instanceof com.nimbusds.jose.jwk.ECKey ecKey) {
                         ECPublicKey pubKey = ecKey.toECPublicKey();
-                        verifiers.add(new TrustedVerifier(JWSAlgorithm.ES256, new ECDSAVerifier(pubKey)));
-                        keys.add(pubKey);
+                        addVerifiersForKey(pubKey, verifiers, keys);
                     }
                 } catch (Exception ignored) {
                 }

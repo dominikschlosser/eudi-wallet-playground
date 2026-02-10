@@ -30,6 +30,7 @@ verifier:
   client-id: ${VERIFIER_CLIENT_ID:wallet-verifier}
   keys-file: ${VERIFIER_KEYS_FILE:config/verifier-keys.json}
   max-request-object-inline-bytes: ${VERIFIER_MAX_REQUEST_OBJECT_INLINE_BYTES:12000}
+  etsi-trust-list-base-url: ${VERIFIER_ETSI_TRUST_LIST_BASE_URL:}
   conformance:
     base-url: ${VERIFIER_CONFORMANCE_BASE_URL:https://demo.certification.openid.net}
     api-key: ${VERIFIER_CONFORMANCE_API_KEY:}

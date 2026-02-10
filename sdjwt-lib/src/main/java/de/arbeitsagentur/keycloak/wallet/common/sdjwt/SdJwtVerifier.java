@@ -90,7 +90,7 @@ public class SdJwtVerifier {
         }
         LOG.debug("Signature verified successfully");
         if (steps != null) {
-            steps.add("Signature verified against trust-list.json",
+            steps.add("Signature verified against trust list",
                     "Checked JWT/SD-JWT signature against trusted issuers in the trust list.",
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
         }

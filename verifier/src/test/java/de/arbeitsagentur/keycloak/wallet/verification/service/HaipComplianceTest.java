@@ -72,7 +72,7 @@ class HaipComplianceTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         properties = new VerifierProperties(
-                null, null, null, "test-client-id", null, null
+                null, null, null, "test-client-id", null, null, null
         );
         verifierKeyService = new VerifierKeyService(properties, objectMapper);
         verifierCryptoService = new VerifierCryptoService(verifierKeyService);

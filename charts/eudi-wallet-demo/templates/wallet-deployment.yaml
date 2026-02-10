@@ -99,6 +99,10 @@ spec:
               value: {{ .Values.wallet.env.maxHttpResponseHeaderSize }}
             - name: VERIFIER_MAX_REQUEST_OBJECT_INLINE_BYTES
               value: {{ .Values.wallet.env.verifierMaxRequestObjectInlineBytes | quote }}
+            {{- if .Values.wallet.env.verifierEtsiTrustListBaseUrl }}
+            - name: VERIFIER_ETSI_TRUST_LIST_BASE_URL
+              value: {{ .Values.wallet.env.verifierEtsiTrustListBaseUrl | quote }}
+            {{- end }}
             {{- if and .Values.wallet.conformance .Values.wallet.conformance.baseUrl }}
             - name: VERIFIER_CONFORMANCE_BASE_URL
               value: {{ .Values.wallet.conformance.baseUrl | quote }}

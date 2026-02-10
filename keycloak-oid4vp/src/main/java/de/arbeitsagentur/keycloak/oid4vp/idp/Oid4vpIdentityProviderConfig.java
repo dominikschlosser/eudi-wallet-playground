@@ -28,7 +28,8 @@ import java.util.List;
 public class Oid4vpIdentityProviderConfig extends IdentityProviderModel {
 
     public static final String TRUST_LIST_ID = "trustListId";
-    public static final String TRUST_LIST_JSON = "trustListJson";
+    public static final String TRUST_LIST_JWT = "trustListJwt";
+    public static final String TRUST_LIST_URL = "trustListUrl";
     public static final String DCQL_QUERY = "dcqlQuery";
     public static final String USER_MAPPING_CLAIM = "userMappingClaim";
     public static final String USER_MAPPING_CLAIM_MDOC = "userMappingClaimMdoc"; // Separate claim name for mDoc format
@@ -113,15 +114,26 @@ public class Oid4vpIdentityProviderConfig extends IdentityProviderModel {
     }
 
     /**
-     * Get the trust list JSON containing issuer certificates.
-     * This JSON defines which credential issuers are trusted for verification.
+     * Get the trust list JWT (ETSI TS 119 602 format).
+     * This JWT defines which credential issuers are trusted for verification.
      */
-    public String getTrustListJson() {
-        return getConfig().get(TRUST_LIST_JSON);
+    public String getTrustListJwt() {
+        return getConfig().get(TRUST_LIST_JWT);
     }
 
-    public void setTrustListJson(String trustListJson) {
-        getConfig().put(TRUST_LIST_JSON, trustListJson);
+    public void setTrustListJwt(String trustListJwt) {
+        getConfig().put(TRUST_LIST_JWT, trustListJwt);
+    }
+
+    /**
+     * Get the trust list URL for fetching an ETSI trust list JWT remotely.
+     */
+    public String getTrustListUrl() {
+        return getConfig().get(TRUST_LIST_URL);
+    }
+
+    public void setTrustListUrl(String url) {
+        getConfig().put(TRUST_LIST_URL, url);
     }
 
     public String getDcqlQuery() {

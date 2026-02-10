@@ -16,6 +16,7 @@
 package de.arbeitsagentur.keycloak.oid4vp.idp.pidbinding;
 
 import de.arbeitsagentur.keycloak.oid4vp.Oid4vpTrustListService;
+import de.arbeitsagentur.keycloak.oid4vp.idp.Oid4vpIdentityProviderFactory;
 import org.jboss.logging.Logger;
 import org.keycloak.broker.provider.AbstractIdentityProviderFactory;
 import org.keycloak.models.IdentityProviderModel;
@@ -108,10 +109,15 @@ public class PidBindingIdentityProviderFactory extends AbstractIdentityProviderF
                     .defaultValue("true")
                     .add()
                 .property()
-                    .name(PidBindingIdentityProviderConfig.TRUST_LIST_JSON)
-                    .label("Trust List (JSON)")
-                    .helpText("JSON configuration defining trusted PID issuers. " +
-                              "Format: {\"issuers\": [{\"name\": \"...\", \"certificate\": \"-----BEGIN CERTIFICATE-----...-----END CERTIFICATE-----\"}]}")
+                    .name(PidBindingIdentityProviderConfig.TRUST_LIST_URL)
+                    .label("ETSI Trust List URL")
+                    .helpText("URL to fetch ETSI TS 119 602 trust list JWT (e.g., https://bmi.usercontent.opencode.de/eudi-wallet/test-trust-lists/pid-provider.jwt). Takes precedence over inline JWT.")
+                    .type(ProviderConfigProperty.STRING_TYPE)
+                    .add()
+                .property()
+                    .name(PidBindingIdentityProviderConfig.TRUST_LIST_JWT)
+                    .label("Trust List (ETSI JWT)")
+                    .helpText("ETSI TS 119 602 trust list in JWT format. Used if Trust List URL is not set.")
                     .type(ProviderConfigProperty.TEXT_TYPE)
                     .add()
                 .property()
@@ -205,9 +211,9 @@ public class PidBindingIdentityProviderFactory extends AbstractIdentityProviderF
         PidBindingIdentityProviderConfig config = new PidBindingIdentityProviderConfig(model);
         ObjectMapper objectMapper = new ObjectMapper();
 
-        // Create trust list service with the configured JSON
-        String trustListJson = config.getTrustListJson();
-        Oid4vpTrustListService trustListService = new Oid4vpTrustListService(objectMapper, trustListJson);
+        // Create trust list service: URL takes precedence over inline JWT
+        String trustListJwt = Oid4vpIdentityProviderFactory.resolveTrustListJwt(session, config);
+        Oid4vpTrustListService trustListService = new Oid4vpTrustListService(trustListJwt);
 
         // Register additional trusted certificates from config
         String additionalCerts = config.getAdditionalTrustedCertificates();

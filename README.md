@@ -149,7 +149,7 @@ sequenceDiagram
    - `direct_post`: `vp_token` as a JSON object (`{ "<credential-id>": ["<dc+sd-jwt>", ...] }`) alongside `state`/`nonce`
    - `direct_post.jwt`: `response` as a JWE carrying the same response parameters
    DCQL already binds credentials to request IDs.
-4. **Verification** – `/verifier/callback` verifies `state`/`nonce`, validates the SD-JWT signature against the configured trust list (`verifier/src/main/resources/trust-list.json`), and recomputes the disclosure digests. Only issuers listed in the trust list (Keycloak by default) are accepted.
+4. **Verification** – `/verifier/callback` verifies `state`/`nonce`, validates the SD-JWT signature against the configured trust list (`verifier/src/main/resources/trust-list.jwt`), and recomputes the disclosure digests. Only issuers listed in the trust list (Keycloak by default) are accepted.
 
 ### Pointing the verifier at an external wallet
 
@@ -215,7 +215,7 @@ Optional DCQL helpers:
 - `credential_set` lets you narrow acceptable credentials by id/vct/format (array of objects such as `{ "id": "pid" }` or `{ "vct": "https://credentials.example.com/identity_credential" }`).
 - `claim_set` lets you express claim groups that must be satisfied together (array of objects like `{ "claims": [ { "path": ["given_name"] }, { "path": ["family_name"] } ] }`).
 
-The trust list anchors verification to the Keycloak realm certificate stored under `demo-app/config/keycloak/keys/wallet-demo-ec-cert.pem` (ES256). Add further certificates to `verifier/src/main/resources/trust-list.json` when integrating additional issuers (for example, a sandbox or a production EUDI wallet).
+The trust list anchors verification to the Keycloak realm certificate stored under `demo-app/config/keycloak/keys/wallet-demo-ec-cert.pem` (ES256). Add further certificates to `verifier/src/main/resources/trust-list.jwt` when integrating additional issuers, or set `VERIFIER_ETSI_TRUST_LIST_BASE_URL` to fetch remote ETSI trust lists (e.g. from the BMI test sandbox). See `docs/trust-lists.md` for details.
 
 ### Using an external wallet
 
@@ -234,7 +234,7 @@ The suite API base URL and (optional) API key can also be entered directly in th
 - Open `/mock-issuer` (or click “Issue with Mock Issuer” in the wallet) to build SD-JWT credentials without authenticating. Pick a credential configuration, fill the pre-configured claim fields, and preview the SD-JWT in encoded/decoded form.
 - Credential types and claims come from `mock-issuer.configurations` (`demo-app/config/mock-issuer-configurations.json` by default; see `MockIssuerProperties`). You can create new credential types ad-hoc in the builder UI—they are persisted to that config file and instantly available.
 - Generate a credential offer to receive a `pre-authorized_code`, `credential_offer_uri`, and `openid-credential-offer://` deep link. The mock issuer advertises metadata at `/mock-issuer/.well-known/openid-credential-issuer` and exposes `/mock-issuer/token`, `/mock-issuer/credential`, and `/mock-issuer/nonce`.
-- The mock issuer signs with `demo-app/config/mock-issuer-keys.json`; the verifier can trust it by selecting the “Mock Issuer (local)” trust list from `verifier/src/main/resources/trust-list-mock.json`.
+- The mock issuer signs with `demo-app/config/mock-issuer-keys.json`; the verifier can trust it by selecting the "Mock Issuer (local)" trust list from `verifier/src/main/resources/trust-list-mock.jwt`.
 
  ### Configuration
 

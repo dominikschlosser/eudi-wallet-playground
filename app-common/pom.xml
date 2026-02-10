@@ -31,6 +31,11 @@
             <artifactId>nimbus-jose-jwt</artifactId>
             <version>9.40</version>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

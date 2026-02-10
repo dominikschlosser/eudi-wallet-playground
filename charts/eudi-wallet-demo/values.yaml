@@ -27,6 +27,7 @@ wallet:
     verifierClientIdScheme: pre-registered
     verifierMaxRequestObjectInlineBytes: 12000
     verifierWalletAuthEndpoint: ""
+    verifierEtsiTrustListBaseUrl: ""
   mockIssuer:
     issuerId: ""
 

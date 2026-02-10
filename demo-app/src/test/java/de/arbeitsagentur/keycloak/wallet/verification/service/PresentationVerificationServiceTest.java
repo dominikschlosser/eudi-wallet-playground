@@ -67,7 +67,7 @@ class PresentationVerificationServiceTest {
     @BeforeEach
     void setUp() {
         properties = new VerifierProperties(null, "{}", null, "wallet-verifier",
-                tempDir.resolve("verifier-keys.json"), null);
+                tempDir.resolve("verifier-keys.json"), null, null);
         verifierKeyService = new VerifierKeyService(properties, new ObjectMapper());
         verificationService = new PresentationVerificationService(trustListService, properties, new ObjectMapper(), verifierKeyService);
         sdJwtVerifier = new SdJwtVerifier(new ObjectMapper(), trustListService);

@@ -47,7 +47,8 @@ class VerifierInfoTest {
                 "http://localhost:3000/oid4vp/auth",
                 "test-client-id",
                 null, // keysFile
-                null  // maxRequestObjectInlineBytes
+                null, // maxRequestObjectInlineBytes
+                null  // etsiTrustListBaseUrl
         );
         VerifierKeyService verifierKeyService = new VerifierKeyService(properties, objectMapper);
         VerifierCryptoService verifierCryptoService = new VerifierCryptoService(verifierKeyService);

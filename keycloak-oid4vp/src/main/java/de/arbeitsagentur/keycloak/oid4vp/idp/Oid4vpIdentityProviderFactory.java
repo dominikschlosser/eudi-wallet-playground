@@ -19,6 +19,7 @@ import de.arbeitsagentur.keycloak.oid4vp.DefaultOid4vpValues;
 import de.arbeitsagentur.keycloak.oid4vp.Oid4vpTrustListService;
 import org.jboss.logging.Logger;
 import org.keycloak.broker.provider.AbstractIdentityProviderFactory;
+import org.keycloak.broker.provider.util.SimpleHttp;
 import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.provider.ProviderConfigProperty;
@@ -81,9 +82,15 @@ public class Oid4vpIdentityProviderFactory extends AbstractIdentityProviderFacto
                     .type(ProviderConfigProperty.TEXT_TYPE)
                     .add()
                 .property()
-                    .name(Oid4vpIdentityProviderConfig.TRUST_LIST_JSON)
-                    .label("Trust List (JSON)")
-                    .helpText("JSON configuration defining trusted credential issuers. Format: {\"issuers\": [{\"name\": \"...\", \"certificate\": \"-----BEGIN CERTIFICATE-----...-----END CERTIFICATE-----\"}]}")
+                    .name(Oid4vpIdentityProviderConfig.TRUST_LIST_URL)
+                    .label("ETSI Trust List URL")
+                    .helpText("URL to fetch ETSI TS 119 602 trust list JWT (e.g., https://bmi.usercontent.opencode.de/eudi-wallet/test-trust-lists/pid-provider.jwt). Takes precedence over inline JWT.")
+                    .type(ProviderConfigProperty.STRING_TYPE)
+                    .add()
+                .property()
+                    .name(Oid4vpIdentityProviderConfig.TRUST_LIST_JWT)
+                    .label("Trust List (ETSI JWT)")
+                    .helpText("ETSI TS 119 602 trust list in JWT format (compact serialization). Used if Trust List URL is not set.")
                     .type(ProviderConfigProperty.TEXT_TYPE)
                     .add()
                 .property()
@@ -209,9 +216,9 @@ public class Oid4vpIdentityProviderFactory extends AbstractIdentityProviderFacto
         Oid4vpIdentityProviderConfig config = new Oid4vpIdentityProviderConfig(model);
         ObjectMapper objectMapper = new ObjectMapper();
 
-        // Create trust list service with the configured JSON
-        String trustListJson = config.getTrustListJson();
-        Oid4vpTrustListService trustListService = new Oid4vpTrustListService(objectMapper, trustListJson);
+        // Create trust list service: URL takes precedence over inline JWT
+        String trustListJwt = resolveTrustListJwt(session, config);
+        Oid4vpTrustListService trustListService = new Oid4vpTrustListService(trustListJwt);
 
         // Register additional trusted certificates from config
         String additionalCerts = config.getAdditionalTrustedCertificates();
@@ -221,6 +228,20 @@ public class Oid4vpIdentityProviderFactory extends AbstractIdentityProviderFacto
         }
 
         return new Oid4vpIdentityProvider(session, config, objectMapper, trustListService);
+    }
+
+    public static String resolveTrustListJwt(KeycloakSession session, Oid4vpIdentityProviderConfig config) {
+        String trustListUrl = config.getTrustListUrl();
+        if (trustListUrl != null && !trustListUrl.isBlank()) {
+            try {
+                String jwtContent = SimpleHttp.doGet(trustListUrl, session).asString();
+                LOG.infof("Fetched ETSI trust list from %s (%d chars)", trustListUrl, jwtContent.length());
+                return jwtContent.trim();
+            } catch (Exception e) {
+                LOG.warnf("Failed to fetch ETSI trust list from %s: %s, falling back to inline JWT", trustListUrl, e.getMessage());
+            }
+        }
+        return config.getTrustListJwt();
     }
 
     private void registerAdditionalCertificates(Oid4vpTrustListService trustListService,

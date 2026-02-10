@@ -15,9 +15,9 @@
  */
 package de.arbeitsagentur.keycloak.oid4vp;
 
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 import com.nimbusds.jwt.SignedJWT;
+import de.arbeitsagentur.keycloak.wallet.common.credential.EtsiTrustListParser;
+import de.arbeitsagentur.keycloak.wallet.common.credential.EtsiTrustListParser.EtsiTrustList;
 import de.arbeitsagentur.keycloak.wallet.common.credential.TrustedIssuerResolver;
 import org.jboss.logging.Logger;
 
@@ -25,7 +25,6 @@ import java.io.ByteArrayInputStream;
 import java.security.PublicKey;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.security.interfaces.ECPublicKey;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -36,17 +35,15 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class Oid4vpTrustListService implements TrustedIssuerResolver {
 
     private static final Logger LOG = Logger.getLogger(Oid4vpTrustListService.class);
-    private final ObjectMapper objectMapper;
     private final Map<String, TrustListKeys> trustListKeys = new ConcurrentHashMap<>();
-    private final String configuredTrustListJson;
+    private final String configuredTrustListJwt;
 
-    public Oid4vpTrustListService(ObjectMapper objectMapper) {
-        this(objectMapper, null);
+    public Oid4vpTrustListService() {
+        this(null);
     }
 
-    public Oid4vpTrustListService(ObjectMapper objectMapper, String trustListJson) {
-        this.objectMapper = Objects.requireNonNull(objectMapper);
-        this.configuredTrustListJson = trustListJson;
+    public Oid4vpTrustListService(String trustListJwt) {
+        this.configuredTrustListJwt = trustListJwt;
     }
 
     @Override
@@ -68,34 +65,21 @@ public final class Oid4vpTrustListService implements TrustedIssuerResolver {
             throw new IllegalStateException("Trust list not found or empty: " + id);
         }
         LOG.infof("[OID4VP-TRUSTLIST] Returning %d keys from trust list %s", resolved.keys().size(), id);
-        for (int i = 0; i < resolved.keys().size(); i++) {
-            PublicKey key = resolved.keys().get(i);
-            if (key instanceof java.security.interfaces.ECPublicKey ecKey) {
-                LOG.infof("[OID4VP-TRUSTLIST] Key[%d]: EC P-256 x=%s", i,
-                        java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
-                                ecKey.getW().getAffineX().toByteArray()));
-            } else {
-                LOG.infof("[OID4VP-TRUSTLIST] Key[%d]: %s", i, key.getAlgorithm());
-            }
-        }
         return resolved.keys();
     }
 
     private TrustListKeys loadKeys(String trustListId) {
-        if (configuredTrustListJson == null || configuredTrustListJson.isBlank()) {
-            LOG.warnf("[OID4VP-TRUSTLIST] No trust list JSON configured");
+        if (configuredTrustListJwt == null || configuredTrustListJwt.isBlank()) {
+            LOG.warnf("[OID4VP-TRUSTLIST] No trust list JWT configured");
             return TrustListKeys.missing();
         }
-        LOG.infof("[OID4VP-TRUSTLIST] Loading trust list from configured JSON");
-        return loadKeysFromJson(configuredTrustListJson);
+        LOG.infof("[OID4VP-TRUSTLIST] Loading trust list from configured JWT");
+        return loadKeysFromJwt(configuredTrustListJwt);
     }
 
     /**
      * Dynamically register a public key to a trust list.
      * This is useful for testing where the issuer key isn't pre-configured.
-     *
-     * @param trustListId The trust list ID to add the key to
-     * @param publicKey The public key to add
      */
     public void registerKey(String trustListId, PublicKey publicKey) {
         String id = normalizeTrustListId(trustListId);
@@ -113,47 +97,24 @@ public final class Oid4vpTrustListService implements TrustedIssuerResolver {
 
     /**
      * Dynamically register a public key from a certificate PEM to a trust list.
-     *
-     * @param trustListId The trust list ID to add the key to
-     * @param certificatePem The certificate PEM string
      */
     public void registerCertificate(String trustListId, String certificatePem) {
         try {
-            PublicKey publicKey = parsePublicKey(certificatePem);
+            PublicKey publicKey = parsePemCertificate(certificatePem);
             registerKey(trustListId, publicKey);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to parse certificate for trust list registration", e);
         }
     }
 
-    private TrustListKeys loadKeysFromJson(String json) {
+    private TrustListKeys loadKeysFromJwt(String jwtString) {
         try {
-            JsonNode node = objectMapper.readTree(json);
-            List<PublicKey> keys = new ArrayList<>();
-            for (JsonNode issuer : node.path("issuers")) {
-                String name = issuer.path("name").asText("unknown");
-                String certPem = issuer.path("certificate").asText(null);
-                if (certPem == null || certPem.isBlank()) {
-                    LOG.warnf("Issuer %s has no certificate", name);
-                    continue;
-                }
-                PublicKey publicKey = parsePublicKey(certPem);
-                if (publicKey != null) {
-                    keys.add(publicKey);
-                    if (publicKey instanceof ECPublicKey ecKey) {
-                        LOG.infof("Loaded EC key for issuer %s: x=%s, y=%s",
-                                name,
-                                Base64.getUrlEncoder().withoutPadding().encodeToString(ecKey.getW().getAffineX().toByteArray()),
-                                Base64.getUrlEncoder().withoutPadding().encodeToString(ecKey.getW().getAffineY().toByteArray()));
-                    } else {
-                        LOG.infof("Loaded key for issuer %s: %s", name, publicKey.getAlgorithm());
-                    }
-                }
-            }
-            LOG.infof("Loaded %d keys from trust list JSON", keys.size());
+            EtsiTrustList parsed = EtsiTrustListParser.parse(jwtString);
+            List<PublicKey> keys = parsed.allPublicKeys();
+            LOG.infof("Loaded %d keys from ETSI trust list JWT (label: %s)", keys.size(), parsed.label());
             return new TrustListKeys(true, List.copyOf(keys));
         } catch (Exception e) {
-            throw new IllegalStateException("Failed to parse trust list JSON", e);
+            throw new IllegalStateException("Failed to parse ETSI trust list JWT", e);
         }
     }
 
@@ -162,13 +123,16 @@ public final class Oid4vpTrustListService implements TrustedIssuerResolver {
             return DefaultOid4vpValues.DEFAULT_TRUST_LIST_ID;
         }
         String trimmed = trustListId.trim();
+        if (trimmed.endsWith(".jwt")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 4);
+        }
         if (trimmed.endsWith(".json")) {
             trimmed = trimmed.substring(0, trimmed.length() - 5);
         }
         return trimmed.isBlank() ? DefaultOid4vpValues.DEFAULT_TRUST_LIST_ID : trimmed;
     }
 
-    private PublicKey parsePublicKey(String pem) throws Exception {
+    private PublicKey parsePemCertificate(String pem) throws Exception {
         String sanitized = pem.replace("-----BEGIN CERTIFICATE-----", "")
                 .replace("-----END CERTIFICATE-----", "")
                 .replaceAll("\\s", "");

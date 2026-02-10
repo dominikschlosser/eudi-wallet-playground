@@ -33,14 +33,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class Oid4vpTrustListServiceTest {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    // Trust list JSON containing the mock issuer certificate
-    private static final String TEST_TRUST_LIST_JSON = """
-            {"issuers":[{"name":"mock-issuer-es256","certificate":"-----BEGIN CERTIFICATE-----\\nMIIBgTCCASegAwIBAgIUBjEaIhGcW5pPX7vCtXbqMyql7ewwCgYIKoZIzj0EAwIw\\nFjEUMBIGA1UEAwwLbW9jay1pc3N1ZXIwHhcNMjUxMjAxMDkzOTI2WhcNMzUxMTI5\\nMDkzOTI2WjAWMRQwEgYDVQQDDAttb2NrLWlzc3VlcjBZMBMGByqGSM49AgEGCCqG\\nSM49AwEHA0IABCSGo02fNJ4ilyIJVsnR90UMvBEhbDxpvIN/X+Rq4y9qjCA35Inb\\nwm5jF0toypoov4aagJGaRkwzmvOy1JMlamKjUzBRMB0GA1UdDgQWBBR2mOx26507\\n8nBXsRCf07e99RBlDDAfBgNVHSMEGDAWgBR2mOx265078nBXsRCf07e99RBlDDAP\\nBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQDc1Evb58VWAGTNgiad\\nstQmCL6YL3ChASt/VLhgA/ogbAIgK5DjLQuY0dVDTaDccEC9s/uaKu+z5u28ZtQj\\nVK65zFU=\\n-----END CERTIFICATE-----"}]}
-            """.trim();
+    // Trust list JWT (ETSI TS 119 602 format) containing the mock issuer certificate
+    private static final String TEST_TRUST_LIST_JWT =
+            "eyJhbGciOiAibm9uZSJ9.eyJMaXN0QW5kU2NoZW1lSW5mb3JtYXRpb24iOnsiU2NoZW1lT3BlcmF0b3JOYW1lIjpbeyJsYW5nIjoiZW4iLCJ2YWx1ZSI6IlRlc3QgVHJ1c3QgTGlzdCJ9XSwiTG9URVR5cGUiOiJodHRwOi8vdXJpLmV0c2kub3JnLzE5NjAyL0xvVEVUeXBlL2xvY2FsIn0sIlRydXN0ZWRFbnRpdGllc0xpc3QiOlt7IlRydXN0ZWRFbnRpdHlJbmZvcm1hdGlvbiI6eyJURU5hbWUiOlt7ImxhbmciOiJlbiIsInZhbHVlIjoibW9jay1pc3N1ZXItZXMyNTYifV19LCJUcnVzdGVkRW50aXR5U2VydmljZXMiOlt7IlNlcnZpY2VJbmZvcm1hdGlvbiI6eyJTZXJ2aWNlVHlwZUlkZW50aWZpZXIiOiJodHRwOi8vdXJpLmV0c2kub3JnLzE5NjAyL1N2Y1R5cGUvSXNzdWFuY2UiLCJTZXJ2aWNlRGlnaXRhbElkZW50aXR5Ijp7Ilg1MDlDZXJ0aWZpY2F0ZXMiOlt7InZhbCI6Ik1JSUJnVENDQVNlZ0F3SUJBZ0lVQmpFYUloR2NXNXBQWDd2Q3RYYnFNeXFsN2V3d0NnWUlLb1pJemowRUF3SXdGakVVTUJJR0ExVUVBd3dMYlc5amF5MXBjM04xWlhJd0hoY05NalV4TWpBeE1Ea3pPVEkyV2hjTk16VXhNVEk1TURrek9USTJXakFXTVJRd0VnWURWUVFEREF0dGIyTnJMV2x6YzNWbGNqQlpNQk1HQnlxR1NNNDlBZ0VHQ0NxR1NNNDlBd0VIQTBJQUJDU0dvMDJmTko0aWx5SUpWc25SOTBVTXZCRWhiRHhwdklOL1grUnE0eTlxakNBMzVJbmJ3bTVqRjB0b3lwb292NGFhZ0pHYVJrd3ptdk95MUpNbGFtS2pVekJSTUIwR0ExVWREZ1FXQkJSMm1PeDI2NTA3OG5CWHNTQ2YwN2U5OVJCbEREQWZCZ05WSFNNRUdEQVdnQlIybU94MjY1MDc4bkJYc1JDZjA3ZTk5UkJsRERBUEJnTlZIUk1CQWY4RUJUQURBUUgvTUFvR0NDcUdTTTQ5QkFNQ0EwZ0FNRVVDSVFEYzFFdmI1OFZXQUdUTmdpYWRzdFFtQ0w2WUwzQ2hBU3QvVkxoZ0Evb2diQUlnSzVEakxRdVkwZFZEVGFEY2NFQzlzL3VhS3UrejV1MjhadFFqVks2NXpGVT0ifV19fX1dfV19.";
 
     @Test
-    void usesConfiguredTrustListJsonForSignatureVerification() throws Exception {
-        Oid4vpTrustListService trustListService = new Oid4vpTrustListService(OBJECT_MAPPER, TEST_TRUST_LIST_JSON);
+    void usesConfiguredTrustListJwtForSignatureVerification() throws Exception {
+        Oid4vpTrustListService trustListService = new Oid4vpTrustListService(TEST_TRUST_LIST_JWT);
 
         ECKey issuerKey = loadMockIssuerKey();
         SignedJWT jwt = signJwt(issuerKey);
@@ -50,7 +49,7 @@ class Oid4vpTrustListServiceTest {
 
     @Test
     void failsVerificationWithEmptyTrustList() throws Exception {
-        Oid4vpTrustListService trustListService = new Oid4vpTrustListService(OBJECT_MAPPER, null);
+        Oid4vpTrustListService trustListService = new Oid4vpTrustListService(null);
 
         ECKey issuerKey = loadMockIssuerKey();
         SignedJWT jwt = signJwt(issuerKey);
@@ -83,4 +82,3 @@ class Oid4vpTrustListServiceTest {
         return jwt;
     }
 }
-

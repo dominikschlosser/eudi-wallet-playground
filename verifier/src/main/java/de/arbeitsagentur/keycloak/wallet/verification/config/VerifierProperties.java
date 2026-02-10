@@ -28,7 +28,8 @@ public record VerifierProperties(
         String walletAuthEndpoint,
         String clientId,
         Path keysFile,
-        Integer maxRequestObjectInlineBytes
+        Integer maxRequestObjectInlineBytes,
+        String etsiTrustListBaseUrl
 ) {
     public String clientId() {
         return clientId != null ? clientId : "wallet-verifier";
