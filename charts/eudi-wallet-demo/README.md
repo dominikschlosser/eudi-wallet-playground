@@ -97,3 +97,5 @@ The chart supports importing multiple Keycloak realm files:
 - `keycloak.realmPidBindingJson` (optional) - Additional realm for PID binding (e.g., `realm-pid-binding-export.json`)
 
 Both files are mounted to `/opt/keycloak/data/import/` and imported on Keycloak startup via `--import-realm`.
+
+When `wallet.publicBaseUrl` is set, the chart automatically replaces hardcoded `http://localhost:3000` wallet URLs in the realm JSON with the actual public wallet URL. This means the source realm files can keep `localhost:3000` defaults for local development and tests while Helm deployments get the correct external URLs.
