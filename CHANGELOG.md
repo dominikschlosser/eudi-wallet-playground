@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.7.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.6.0...v1.7.0) (2026-02-19)
+
+
+### Features
+
+* add sandbox mode for testing ([c845b48](https://github.com/ba-itsys/eudi-wallet-playground/commit/c845b48dc9e20e7f90d6828a98393e69fe103835))
+
+
+### Bug Fixes
+
+* use external hostnames when deploying to AWS ([f8a7d65](https://github.com/ba-itsys/eudi-wallet-playground/commit/f8a7d65558a566b468542719c1541057ef32f511))
+
 ## [1.6.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.5.3...v1.6.0) (2026-02-11)
 
 
