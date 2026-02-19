@@ -21,7 +21,10 @@ import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.RSAKey;
 import org.springframework.stereotype.Service;
 
+import de.arbeitsagentur.keycloak.wallet.verification.config.VerifierProperties;
+
 import java.io.ByteArrayInputStream;
+import java.nio.file.Files;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
@@ -41,26 +44,16 @@ import java.util.List;
 @Service
 public class VerifierCryptoService {
     private final VerifierKeyService verifierKeyService;
+    private final VerifierProperties properties;
 
-    public VerifierCryptoService(VerifierKeyService verifierKeyService) {
+    public VerifierCryptoService(VerifierKeyService verifierKeyService, VerifierProperties properties) {
         this.verifierKeyService = verifierKeyService;
+        this.properties = properties;
     }
 
     public X509Material resolveX509Material(String providedPem) {
         if (providedPem != null && !providedPem.isBlank()) {
-            String certBlock = extractPemBlock(providedPem, "CERTIFICATE");
-            if (certBlock == null || certBlock.isBlank()) {
-                throw new IllegalStateException("No certificate found in client_cert");
-            }
-            JWK jwk = parsePrivateKeyWithCertificate(providedPem);
-            try {
-                String normalizedCert = toPem(Base64.getMimeDecoder().decode(certBlock), "CERTIFICATE");
-                String keyPem = toPem(privateKeyBytes(jwk), "PRIVATE KEY");
-                String combined = normalizedCert + "\n" + keyPem;
-                return new X509Material(normalizedCert, keyPem, combined, "client_cert", jwk);
-            } catch (Exception e) {
-                throw new IllegalStateException("Failed to prepare client_cert material", e);
-            }
+            return parsePemMaterial(providedPem, "client_cert");
         }
         JWK signingJwk = verifierKeyService.loadOrCreateSigningKey();
         try {
@@ -70,6 +63,42 @@ public class VerifierCryptoService {
             return new X509Material(certPem, keyPem, combined, "verifier_self_signed", signingJwk);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to prepare verifier x509 material", e);
+        }
+    }
+
+    public X509Material loadSandboxMaterial() {
+        java.nio.file.Path certFile = properties.clientCertFilePath();
+        if (certFile != null && Files.exists(certFile)) {
+            try {
+                String filePem = Files.readString(certFile);
+                return parsePemMaterial(filePem, "client_cert_file");
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to read client cert file: " + certFile, e);
+            }
+        }
+        return null;
+    }
+
+    private X509Material parsePemMaterial(String pem, String source) {
+        String certBlock = extractPemBlock(pem, "CERTIFICATE");
+        if (certBlock == null || certBlock.isBlank()) {
+            throw new IllegalStateException("No certificate found in " + source);
+        }
+        JWK jwk = parsePrivateKeyWithCertificate(pem);
+        try {
+            String leafCertPem = toPem(Base64.getMimeDecoder().decode(certBlock), "CERTIFICATE");
+            String keyPem = toPem(privateKeyBytes(jwk), "PRIVATE KEY");
+            // combinedPem includes the full certificate chain (not just leaf) so that
+            // extractCertChain() can build the complete x5c header later.
+            List<String> chainDer = extractCertChain(pem);
+            StringBuilder combined = new StringBuilder();
+            for (String der : chainDer) {
+                combined.append(toPem(Base64.getDecoder().decode(der), "CERTIFICATE")).append("\n");
+            }
+            combined.append(keyPem);
+            return new X509Material(leafCertPem, keyPem, combined.toString(), source, jwk);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to prepare " + source + " material", e);
         }
     }
 

@@ -27,9 +27,9 @@ class X509SanDnsIntegrationTest {
 
     @Test
     void defaultCertificateSupportsLocalSan() {
-        var props = new VerifierProperties(null, null, null, null, null, null, null);
+        var props = new VerifierProperties(null, null, null, null, null, null, null, null, null, null, null);
         var keyService = new VerifierKeyService(props, new ObjectMapper());
-        var cryptoService = new VerifierCryptoService(keyService);
+        var cryptoService = new VerifierCryptoService(keyService, props);
 
         var material = cryptoService.resolveX509Material(null);
         String certPem = material.certificatePem();

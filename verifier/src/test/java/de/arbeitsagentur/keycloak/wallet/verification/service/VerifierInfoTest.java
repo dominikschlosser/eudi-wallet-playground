@@ -48,10 +48,14 @@ class VerifierInfoTest {
                 "test-client-id",
                 null, // keysFile
                 null, // maxRequestObjectInlineBytes
-                null  // etsiTrustListBaseUrl
+                null, // etsiTrustListBaseUrl
+                null, // clientCertFile
+                null, // sandboxVerifierInfoFile
+                null, // sandboxDcqlQuery
+                null  // sandboxWalletAuthEndpoint
         );
         VerifierKeyService verifierKeyService = new VerifierKeyService(properties, objectMapper);
-        VerifierCryptoService verifierCryptoService = new VerifierCryptoService(verifierKeyService);
+        VerifierCryptoService verifierCryptoService = new VerifierCryptoService(verifierKeyService, properties);
         requestObjectService = new RequestObjectService();
 
         verifierAuthService = new VerifierAuthService(

@@ -16,6 +16,10 @@ wallet:
     verifierKeys: ""
     mockIssuerKeys: ""
     mockIssuerConfigurations: ""
+    # Optional: sandbox client cert+key PEM via --set-file wallet.files.sandboxCert=...
+    sandboxCert: ""
+    # Optional: sandbox verifier_info JSON via --set-file wallet.files.sandboxVerifierInfo=...
+    sandboxVerifierInfo: ""
   env:
     walletDid: did:example:mock-wallet
     credentialStorageDir: /data/credentials
@@ -27,7 +31,7 @@ wallet:
     verifierClientIdScheme: pre-registered
     verifierMaxRequestObjectInlineBytes: 12000
     verifierWalletAuthEndpoint: ""
-    verifierEtsiTrustListBaseUrl: ""
+    verifierEtsiTrustListBaseUrl: "https://bmi.usercontent.opencode.de/eudi-wallet/test-trust-lists/"
   mockIssuer:
     issuerId: ""
 

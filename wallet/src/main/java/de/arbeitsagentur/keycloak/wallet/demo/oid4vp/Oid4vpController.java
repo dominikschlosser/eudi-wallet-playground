@@ -171,7 +171,7 @@ public class Oid4vpController {
                 pending = parseRequestObject(resolvedRequestObject, state, targetResponseUri,
                         requestResolution != null ? requestResolution.walletNonce() : null);
             } catch (Exception e) {
-                return errorView("Invalid request object: " + e.getMessage());
+                return requestObjectErrorView(resolvedRequestObject, e);
             }
 	        } else {
 	            String effectiveState = state;
@@ -204,7 +204,8 @@ public class Oid4vpController {
 	                    clientMetadata,
 	                    responseMode,
 	                    null,
-	                    null
+	                    null,
+	                    List.of()
 	            );
 	        }
         if (requestResolution != null) {
@@ -380,6 +381,9 @@ public class Oid4vpController {
             }
         }
         mv.addObject("candidateVcts", candidateVcts);
+        if (pending.warnings() != null && !pending.warnings().isEmpty()) {
+            mv.addObject("warnings", pending.warnings());
+        }
         if (walletSession != null && walletSession.getUserProfile() != null) {
             mv.addObject("userName", walletSession.getUserProfile().displayName());
             mv.addObject("userEmail", walletSession.getUserProfile().email());
@@ -391,6 +395,18 @@ public class Oid4vpController {
         ModelAndView mv = new ModelAndView("verifier-result");
         mv.addObject("title", "OID4VP Error");
         mv.addObject("message", message);
+        return mv;
+    }
+
+    private ModelAndView requestObjectErrorView(String requestObject, Exception error) {
+        ModelAndView mv = new ModelAndView("oid4vp-request-error");
+        mv.addObject("error", error.getMessage());
+        mv.addObject("requestObjectRaw", requestObject);
+        try {
+            mv.addObject("requestObjectDecoded", decodeJwtLike(requestObject));
+        } catch (Exception e) {
+            mv.addObject("requestObjectDecoded", "(failed to decode)");
+        }
         return mv;
     }
 
@@ -734,17 +750,18 @@ public class Oid4vpController {
             }
             verifyAttestationRequest(clientId, attestationJwt, requestJwt, responseUri);
         }
+        List<String> warnings = new ArrayList<>();
         if (clientId != null && clientId.startsWith("x509_hash:")) {
             if (requestJwt == null) {
                 throw new IllegalStateException("Request object must be signed for x509_hash client_id");
             }
-            verifyX509HashRequest(clientId, requestJwt);
+            warnings.addAll(verifyX509HashRequest(clientId, requestJwt));
         }
 	        if (clientId != null && clientId.startsWith("x509_san_dns:")) {
 	            if (requestJwt == null) {
 	                throw new IllegalStateException("Request object must be signed for x509_san_dns client_id");
 	            }
-	            verifyX509SanDnsRequest(clientId, requestJwt, responseUri);
+	            warnings.addAll(verifyX509SanDnsRequest(clientId, requestJwt, responseUri));
 	        }
 		        return new PendingRequest(
 		                state,
@@ -755,7 +772,8 @@ public class Oid4vpController {
 		                clientMetadata,
 		                responseMode,
 		                null,
-		                null
+		                null,
+		                warnings
 	        );
 	    }
 
@@ -816,9 +834,14 @@ public class Oid4vpController {
         }
     }
 
-    private void verifyX509HashRequest(String clientId, SignedJWT requestJwt) throws Exception {
+    private List<String> verifyX509HashRequest(String clientId, SignedJWT requestJwt) throws Exception {
+        List<String> warnings = new ArrayList<>();
         List<Base64> chain = requestJwt.getHeader().getX509CertChain();
-        X509Certificate leaf = validateCertificateChain(chain);
+        CertChainResult chainResult = validateCertificateChainResult(chain);
+        X509Certificate leaf = chainResult.leaf();
+        if (!chainResult.trusted() && chainResult.warning() != null) {
+            warnings.add(chainResult.warning());
+        }
         String expected = clientId.substring("x509_hash:".length());
         String actual = hashCertificate(leaf);
         if (!expected.equals(actual)) {
@@ -827,11 +850,17 @@ public class Oid4vpController {
         if (!verifySignatureWithCertificate(requestJwt, leaf)) {
             throw new IllegalStateException("Request object signature invalid (x509_hash)");
         }
+        return warnings;
     }
 
-    private void verifyX509SanDnsRequest(String clientId, SignedJWT requestJwt, String responseUri) throws Exception {
+    private List<String> verifyX509SanDnsRequest(String clientId, SignedJWT requestJwt, String responseUri) throws Exception {
+        List<String> warnings = new ArrayList<>();
         List<Base64> chain = requestJwt.getHeader().getX509CertChain();
-        X509Certificate leaf = validateCertificateChain(chain);
+        CertChainResult chainResult = validateCertificateChainResult(chain);
+        X509Certificate leaf = chainResult.leaf();
+        if (!chainResult.trusted() && chainResult.warning() != null) {
+            warnings.add(chainResult.warning());
+        }
         String expectedDns = clientId.substring("x509_san_dns:".length());
         if (expectedDns.isBlank()) {
             throw new IllegalStateException("x509_san_dns client_id is missing DNS value");
@@ -847,12 +876,14 @@ public class Oid4vpController {
             URI parsed = URI.create(responseUri);
             String host = parsed.getHost();
             if (host == null || host.isBlank() || !expectedDns.equalsIgnoreCase(host)) {
-                throw new IllegalStateException("response_uri host does not match x509_san_dns client_id");
+                warnings.add("response_uri host (%s) does not match x509_san_dns client_id (%s) - relaxed for mock wallet debugging."
+                        .formatted(host, expectedDns));
             }
         }
         if (!verifySignatureWithCertificate(requestJwt, leaf)) {
             throw new IllegalStateException("Request object signature invalid (x509_san_dns)");
         }
+        return warnings;
     }
 
     private boolean verifySignatureWithCertificate(SignedJWT jwt, X509Certificate certificate) throws Exception {
@@ -1158,7 +1189,9 @@ public class Oid4vpController {
         throw new IllegalStateException("No certificate found in client_cert");
     }
 
-    private X509Certificate validateCertificateChain(List<Base64> chain) throws Exception {
+    private record CertChainResult(X509Certificate leaf, boolean trusted, String warning) {}
+
+    private CertChainResult validateCertificateChainResult(List<Base64> chain) throws Exception {
         if (chain == null || chain.isEmpty()) {
             throw new IllegalStateException("Signed request object missing x5c header");
         }
@@ -1170,8 +1203,22 @@ public class Oid4vpController {
             cert.checkValidity();
             certs.add(cert);
         }
-        validateX509TrustChain(cf, certs);
-        return certs.get(0);
+        try {
+            validateX509TrustChain(cf, certs);
+            return new CertChainResult(certs.get(0), true, null);
+        } catch (IllegalStateException e) {
+            LOG.warn("X.509 trust chain validation failed (mock wallet will proceed with signature-only validation): {}", e.getMessage());
+            return new CertChainResult(certs.get(0), false,
+                    "Certificate chain is NOT trusted (issuer not in trust store). Signature was verified using the embedded public key only.");
+        }
+    }
+
+    private X509Certificate validateCertificateChain(List<Base64> chain) throws Exception {
+        CertChainResult result = validateCertificateChainResult(chain);
+        if (!result.trusted()) {
+            throw new IllegalStateException("Untrusted X.509 certificate chain in x5c header");
+        }
+        return result.leaf();
     }
 
     private void validateX509TrustChain(CertificateFactory cf, List<X509Certificate> chain) throws Exception {
@@ -1368,15 +1415,16 @@ public class Oid4vpController {
                                   String clientMetadata,
                                   String responseMode,
                                   PresentationService.PresentationOptions options,
-                                  Map<String, String> selections) {
+                                  Map<String, String> selections,
+                                  List<String> warnings) {
         PendingRequest withOptions(PresentationService.PresentationOptions o) {
             return new PendingRequest(state, nonce, responseUri, clientId, dcqlQuery, clientMetadata, responseMode,
-                    o, selections);
+                    o, selections, warnings);
         }
 
         PendingRequest withSelections(Map<String, String> newSelections) {
             return new PendingRequest(state, nonce, responseUri, clientId, dcqlQuery, clientMetadata, responseMode,
-                    options, newSelections);
+                    options, newSelections, warnings);
         }
     }
 }

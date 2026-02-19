@@ -29,10 +29,22 @@ public record VerifierProperties(
         String clientId,
         Path keysFile,
         Integer maxRequestObjectInlineBytes,
-        String etsiTrustListBaseUrl
+        String etsiTrustListBaseUrl,
+        String clientCertFile,
+        String sandboxVerifierInfoFile,
+        String sandboxDcqlQuery,
+        String sandboxWalletAuthEndpoint
 ) {
     public String clientId() {
         return clientId != null ? clientId : "wallet-verifier";
+    }
+
+    public Path clientCertFilePath() {
+        return clientCertFile != null && !clientCertFile.isBlank() ? Path.of(clientCertFile) : null;
+    }
+
+    public Path sandboxVerifierInfoFilePath() {
+        return sandboxVerifierInfoFile != null && !sandboxVerifierInfoFile.isBlank() ? Path.of(sandboxVerifierInfoFile) : null;
     }
 
     public int resolvedMaxRequestObjectInlineBytes() {

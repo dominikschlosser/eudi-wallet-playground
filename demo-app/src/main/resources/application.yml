@@ -31,6 +31,11 @@ verifier:
   keys-file: ${VERIFIER_KEYS_FILE:config/verifier-keys.json}
   max-request-object-inline-bytes: ${VERIFIER_MAX_REQUEST_OBJECT_INLINE_BYTES:12000}
   etsi-trust-list-base-url: ${VERIFIER_ETSI_TRUST_LIST_BASE_URL:}
+  client-cert-file: ${VERIFIER_CLIENT_CERT_FILE:../sandbox/sandbox-combined.pem}
+  sandbox-verifier-info-file: ${VERIFIER_SANDBOX_VERIFIER_INFO_FILE:../sandbox/sandbox-verifier-info.json}
+  sandbox-wallet-auth-endpoint: ${VERIFIER_SANDBOX_WALLET_AUTH_ENDPOINT:openid4vp://}
+  sandbox-dcql-query: >-
+    ${VERIFIER_SANDBOX_DCQL_QUERY:{"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["birth_date"]},{"path":["address","street_address"]},{"path":["address","locality"]}]},{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","address","street_address"]},{"path":["eu.europa.ec.eudi.pid.1","address","locality"]}]}],"credential_sets":[{"options":[["pid_sd_jwt"],["pid_mdoc"]]}]}}
   conformance:
     base-url: ${VERIFIER_CONFORMANCE_BASE_URL:https://demo.certification.openid.net}
     api-key: ${VERIFIER_CONFORMANCE_API_KEY:}

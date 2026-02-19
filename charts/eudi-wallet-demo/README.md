@@ -61,6 +61,35 @@ helm upgrade --install wallet-demo charts/eudi-wallet-demo \
   --set-file wallet.files.mockIssuerConfigurations=demo-app/config/mock-issuer-configurations.json
 ```
 
+## SPRIND Sandbox deployment
+
+The `sandbox/` directory (gitignored) contains the sandbox certificate, private key, and verifier_info files. When running locally, these are picked up automatically.
+
+To create or update the sandbox files, place your SPRIND-provided materials in `sandbox/`:
+
+```bash
+# Copy certificate and key into sandbox/:
+cp sandbox.crt sandbox/sandbox.crt
+cp rp.key sandbox/rp.key
+
+# Create combined PEM (cert chain + private key):
+cat sandbox/sandbox.crt sandbox/rp.key > sandbox/sandbox-combined.pem
+
+# Create verifier_info JSON (registration certificate from SPRIND):
+echo '[{"format":"registration_cert","data":"<registration cert JWT>"}]' > sandbox/sandbox-verifier-info.json
+```
+
+For Helm deployment, pass these files as secrets:
+
+```bash
+helm upgrade --install wallet-demo charts/eudi-wallet-demo \
+  ... (existing flags) ...
+  --set-file wallet.files.sandboxCert=sandbox/sandbox-combined.pem \
+  --set-file wallet.files.sandboxVerifierInfo=sandbox/sandbox-verifier-info.json
+```
+
+The verifier UI will show a **"Use Sandbox Defaults"** button that fills in all sandbox-specific settings (x509_san_dns auth type, DCQL query for PID, verifier_info with registration certificate, request_uri mode). The BMI trust lists are loaded by default.
+
 ## Keycloak realm files
 
 The chart supports importing multiple Keycloak realm files:

@@ -8,3 +8,4 @@ demo-app/data/*
 !demo-app/data/.gitkeep
 .run/
 demo-app/demo-app/
+sandbox/

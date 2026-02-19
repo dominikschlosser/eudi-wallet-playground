@@ -16,6 +16,7 @@
         </div>
 	        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
 	          <button type="button" class="btn secondary" id="open-dcql-request">Open DCQL request</button>
+	          <button type="button" class="btn" id="use-sandbox-defaults" th:if="${sandboxAvailable}" th:attr="data-url=@{/verifier/sandbox-defaults}">Use Sandbox Defaults</button>
 	          <a class="btn secondary" th:href="@{/verifier/conformance}" aria-label="Open OIDF conformance UI">Conformance Suite</a>
 	          <a class="btn secondary" th:href="@{/}" aria-label="Go to wallet issuance UI">Go to Wallet</a>
 	        </div>
@@ -943,6 +944,60 @@
         setEncryption(encryptionEnabled);
         setMode("builder");
         refreshQueryPanels();
+
+        const sandboxBtn = document.getElementById("use-sandbox-defaults");
+        if (sandboxBtn) {
+          sandboxBtn.addEventListener("click", async () => {
+            try {
+              const res = await fetch(sandboxBtn.dataset.url);
+              const data = await res.json();
+              if (!data.available) { alert("Sandbox not configured."); return; }
+              if (authTypeSelect && data.authType) authTypeSelect.value = data.authType;
+              if (requestObjectMode && data.requestObjectMode) requestObjectMode.value = data.requestObjectMode;
+              const requestUriMethodEl = document.getElementById("requestUriMethod");
+              if (requestUriMethodEl && data.requestUriMethod) requestUriMethodEl.value = data.requestUriMethod;
+              const responseTypeEl = document.getElementById("responseType");
+              if (responseTypeEl && data.responseType) responseTypeEl.value = data.responseType;
+              const responseModeEl = document.getElementById("responseMode");
+              if (responseModeEl && data.responseMode) responseModeEl.value = data.responseMode;
+              const walletAuthEl = document.getElementById("walletAuthEndpoint");
+              if (walletAuthEl && data.walletAuthEndpoint) walletAuthEl.value = data.walletAuthEndpoint;
+              const walletAudienceEl = document.getElementById("walletAudience");
+              if (walletAudienceEl && data.walletAudience) walletAudienceEl.value = data.walletAudience;
+              if (clientIdInput && data.clientId) clientIdInput.value = data.clientId;
+              if (clientCertInput && data.walletClientCert) clientCertInput.value = data.walletClientCert;
+              const verifierInfoEl = document.getElementById("verifierInfo");
+              if (verifierInfoEl && data.verifierInfo) verifierInfoEl.value = data.verifierInfo;
+              const trustListEl = document.getElementById("trustList");
+              if (trustListEl && data.trustListId) trustListEl.value = data.trustListId;
+              if (data.dcqlQuery) {
+                dcqlRaw.value = data.dcqlQuery;
+                rawInitialized = true;
+                try {
+                  const parsed = JSON.parse(data.dcqlQuery);
+                  const creds = Array.isArray(parsed.credentials) ? parsed.credentials : [];
+                  if (creds.length) {
+                    builderState = { credentials: creds.map((c, idx) => {
+                      const claims = (Array.isArray(c.claims) ? c.claims : []).map(cl => {
+                        const path = Array.isArray(cl.path) ? cl.path : [];
+                        return { name: path.join("."), constValue: typeof cl.value !== "undefined" ? String(cl.value) : "" };
+                      });
+                      return { id: c.id || "credential-" + (idx + 1), format: c.format || "all", claims: claims.length ? claims : defaultClaims(), credentialSets: [], claimSets: [] };
+                    })};
+                    descriptorCounter = builderState.credentials.length + 1;
+                    renderBuilder();
+                  }
+                } catch (e) { /* keep raw mode */ }
+                updatePreview();
+              }
+              refreshAuthSections();
+              sandboxBtn.textContent = "Sandbox Defaults Applied";
+              setTimeout(() => sandboxBtn.textContent = "Use Sandbox Defaults", 2000);
+            } catch (e) {
+              alert("Failed to load sandbox defaults: " + e.message);
+            }
+          });
+        }
       })();
 
       const verificationToggle = document.getElementById("verification-debug-toggle");

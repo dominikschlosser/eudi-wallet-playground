@@ -75,6 +75,7 @@ import org.springframework.web.util.UriUtils;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -171,6 +172,7 @@ public class VerifierController {
         model.addAttribute("trustLists", trustListService.options());
         model.addAttribute("defaultTrustList", trustListService.defaultTrustListId());
         model.addAttribute("verificationDebugGrouped", groupBy(debugLogService.verification()));
+        model.addAttribute("sandboxAvailable", isSandboxAvailable());
         return "verifier";
     }
 
@@ -179,6 +181,68 @@ public class VerifierController {
     public Map<String, String> defaultDcqlQuery() {
         String dcql = dcqlService.defaultDcqlQuery();
         return Map.of("dcql_query", dcql);
+    }
+
+    @GetMapping("/sandbox-defaults")
+    @ResponseBody
+    public Map<String, Object> sandboxDefaults() {
+        if (!isSandboxAvailable()) {
+            return Map.of("available", false);
+        }
+        VerifierCryptoService.X509Material material = verifierCryptoService.loadSandboxMaterial();
+        if (material == null) {
+            return Map.of("available", false);
+        }
+        String clientId;
+        try {
+            clientId = verifierCryptoService.deriveX509SanClientId(null, material.certificatePem());
+        } catch (Exception e) {
+            clientId = "";
+        }
+        String verifierInfo = readFileIfExists(properties.sandboxVerifierInfoFilePath());
+        String dcqlQuery = properties.sandboxDcqlQuery() != null ? pretty(properties.sandboxDcqlQuery()) : "";
+        String walletAuthEndpoint = properties.sandboxWalletAuthEndpoint() != null
+                && !properties.sandboxWalletAuthEndpoint().isBlank()
+                ? properties.sandboxWalletAuthEndpoint() : "openid4vp://";
+        Map<String, Object> defaults = new LinkedHashMap<>();
+        defaults.put("available", true);
+        defaults.put("authType", "x509_san_dns");
+        defaults.put("requestObjectMode", "request_uri");
+        defaults.put("requestUriMethod", "get");
+        defaults.put("responseType", "vp_token");
+        defaults.put("responseMode", "direct_post");
+        defaults.put("walletAuthEndpoint", walletAuthEndpoint);
+        defaults.put("walletAudience", "https://self-issued.me/v2");
+        defaults.put("clientId", clientId);
+        defaults.put("walletClientCert", material.combinedPem());
+        defaults.put("verifierInfo", verifierInfo);
+        defaults.put("dcqlQuery", dcqlQuery);
+        // Prefer wrpac-provider trust list (RP access certificates) for sandbox,
+        // fall back to default if BMI trust lists are not loaded.
+        String sandboxTrustList = trustListService.options().stream()
+                .map(TrustListService.TrustListOption::id)
+                .filter(id -> id.equals("wrpac-provider"))
+                .findFirst()
+                .orElse(trustListService.defaultTrustListId());
+        defaults.put("trustListId", sandboxTrustList);
+        return defaults;
+    }
+
+    private boolean isSandboxAvailable() {
+        java.nio.file.Path certFile = properties.clientCertFilePath();
+        return certFile != null && Files.exists(certFile);
+    }
+
+    private String readFileIfExists(java.nio.file.Path path) {
+        if (path == null || !Files.exists(path)) {
+            return "";
+        }
+        try {
+            return Files.readString(path).strip();
+        } catch (Exception e) {
+            LOG.warn("Failed to read file {}: {}", path, e.getMessage());
+            return "";
+        }
     }
 
     @GetMapping(value = "/request-object/{id}", produces = "application/oauth-authz-req+jwt")
