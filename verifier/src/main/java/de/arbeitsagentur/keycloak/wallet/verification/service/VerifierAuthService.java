@@ -178,13 +178,16 @@ public class VerifierAuthService {
         try {
             JWSAlgorithm alg = resolveAlg(signerKey);
             JWSHeader.Builder headerBuilder = new JWSHeader.Builder(alg)
-                    .type(new JOSEObjectType("oauth-authz-req+jwt"))
-                    .jwk(signerKey.toPublicJWK());
+                    .type(new JOSEObjectType("oauth-authz-req+jwt"));
             if (attestationJwt != null && !attestationJwt.isBlank()) {
                 headerBuilder.customParam("jwt", attestationJwt);
             }
             if (x5c != null && !x5c.isEmpty()) {
+                // x509_hash / x509_san_dns: the spec requires x5c for trust establishment.
+                // Omit jwk to avoid ambiguity — the wallet should verify via the x5c chain.
                 headerBuilder.x509CertChain(x5c);
+            } else {
+                headerBuilder.jwk(signerKey.toPublicJWK());
             }
             JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder()
                     .issuer(clientId)

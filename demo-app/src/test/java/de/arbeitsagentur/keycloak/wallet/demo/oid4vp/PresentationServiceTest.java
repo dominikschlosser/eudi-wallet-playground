@@ -1240,6 +1240,282 @@ class PresentationServiceTest {
         assertThat(bundle).isEmpty();
     }
 
+    // ============================================================================
+    // meta (vct_values / doctype_value) tests
+    // ============================================================================
+
+    @Test
+    void metaVctValuesMatchesSdJwtCredential() throws Exception {
+        saveCredential("user", Map.of(
+                "vct", "urn:eudi:pid:de:1",
+                "credentialSubject", Map.of("given_name", "Alice"),
+                "rawCredential", "sdjwt.pid~disc"
+        ));
+        String dcql = """
+                {
+                  "credentials": [{
+                    "id": "pid",
+                    "format": "dc+sd-jwt",
+                    "meta": { "vct_values": ["urn:eudi:pid:de:1"] },
+                    "claims": [{ "path": ["given_name"] }]
+                  }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isPresent();
+        assertThat(bundle.get().matches()).hasSize(1);
+        assertThat(bundle.get().matches().get(0).disclosedClaims()).containsEntry("given_name", "Alice");
+    }
+
+    @Test
+    void metaVctValuesMismatchRejectsCredential() throws Exception {
+        saveCredential("user", Map.of(
+                "vct", "urn:other:credential",
+                "credentialSubject", Map.of("given_name", "Alice"),
+                "rawCredential", "sdjwt.other~disc"
+        ));
+        String dcql = """
+                {
+                  "credentials": [{
+                    "id": "pid",
+                    "format": "dc+sd-jwt",
+                    "meta": { "vct_values": ["urn:eudi:pid:de:1"] },
+                    "claims": [{ "path": ["given_name"] }]
+                  }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isEmpty();
+    }
+
+    @Test
+    void metaDoctypeValueMatchesMdocCredential() throws Exception {
+        saveCredential("user", Map.of(
+                "vct", "eu.europa.ec.eudi.pid.1",
+                "format", "mso_mdoc",
+                "credentialSubject", Map.of("given_name", "Bob"),
+                "rawCredential", "mdoc-pid"
+        ));
+        String dcql = """
+                {
+                  "credentials": [{
+                    "id": "pid_mdoc",
+                    "format": "mso_mdoc",
+                    "meta": { "doctype_value": "eu.europa.ec.eudi.pid.1" },
+                    "claims": [{ "path": ["eu.europa.ec.eudi.pid.1", "given_name"] }]
+                  }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isPresent();
+        assertThat(bundle.get().matches()).hasSize(1);
+        assertThat(bundle.get().matches().get(0).disclosedClaims()).containsEntry("given_name", "Bob");
+    }
+
+    @Test
+    void metaDoctypeValueMismatchRejectsMdocCredential() throws Exception {
+        saveCredential("user", Map.of(
+                "vct", "eu.europa.ec.eudi.pid.1",
+                "format", "mso_mdoc",
+                "credentialSubject", Map.of("given_name", "Bob"),
+                "rawCredential", "mdoc-pid"
+        ));
+        String dcql = """
+                {
+                  "credentials": [{
+                    "id": "mdl",
+                    "format": "mso_mdoc",
+                    "meta": { "doctype_value": "org.iso.18013.5.1.mDL" },
+                    "claims": [{ "path": ["given_name"] }]
+                  }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isEmpty();
+    }
+
+    @Test
+    void metaVctValuesAcceptsAnyListedValue() throws Exception {
+        saveCredential("user", Map.of(
+                "vct", "urn:eudi:pid:de:2",
+                "credentialSubject", Map.of("given_name", "Charlie"),
+                "rawCredential", "sdjwt.pid.v2~disc"
+        ));
+        String dcql = """
+                {
+                  "credentials": [{
+                    "id": "pid",
+                    "format": "dc+sd-jwt",
+                    "meta": { "vct_values": ["urn:eudi:pid:de:1", "urn:eudi:pid:de:2"] },
+                    "claims": [{ "path": ["given_name"] }]
+                  }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isPresent();
+        assertThat(bundle.get().matches().get(0).disclosedClaims()).containsEntry("given_name", "Charlie");
+    }
+
+    // ============================================================================
+    // mDoc 2-element claims paths
+    // ============================================================================
+
+    @Test
+    void mdocTwoElementPathMatchesFlatClaim() throws Exception {
+        saveCredential("user", Map.of(
+                "vct", "eu.europa.ec.eudi.pid.1",
+                "format", "mso_mdoc",
+                "credentialSubject", Map.of("resident_street", "Main St 1", "resident_city", "Berlin"),
+                "rawCredential", "mdoc-pid"
+        ));
+        String dcql = """
+                {
+                  "credentials": [{
+                    "id": "pid_mdoc",
+                    "format": "mso_mdoc",
+                    "meta": { "doctype_value": "eu.europa.ec.eudi.pid.1" },
+                    "claims": [
+                      { "path": ["eu.europa.ec.eudi.pid.1", "resident_street"] },
+                      { "path": ["eu.europa.ec.eudi.pid.1", "resident_city"] }
+                    ]
+                  }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isPresent();
+        assertThat(bundle.get().matches()).hasSize(1);
+        assertThat(bundle.get().matches().get(0).disclosedClaims())
+                .containsEntry("resident_street", "Main St 1")
+                .containsEntry("resident_city", "Berlin");
+    }
+
+    // ============================================================================
+    // Sandbox DCQL query end-to-end
+    // ============================================================================
+
+    @Test
+    void sandboxDcqlQueryMatchesSdJwtPid() throws Exception {
+        saveCredential("user", Map.of(
+                "vct", "urn:eudi:pid:de:1",
+                "format", "dc+sd-jwt",
+                "credentialSubject", Map.of(
+                        "given_name", "Alice",
+                        "family_name", "Doe",
+                        "birth_date", "1990-01-01",
+                        "address", Map.of("street_address", "Main St 1", "locality", "Berlin")
+                ),
+                "rawCredential", "sdjwt.pid~disc"
+        ));
+
+        // Exact sandbox DCQL query — must match the registration certificate
+        String dcql = """
+                {
+                  "credentials": [
+                    {
+                      "id": "pid_sd_jwt",
+                      "format": "dc+sd-jwt",
+                      "meta": { "vct_values": ["urn:eudi:pid:de:1"] },
+                      "claims": [
+                        { "path": ["given_name"] },
+                        { "path": ["family_name"] },
+                        { "path": ["birth_date"] },
+                        { "path": ["address", "street_address"] },
+                        { "path": ["address", "locality"] }
+                      ]
+                    },
+                    {
+                      "id": "pid_mdoc",
+                      "format": "mso_mdoc",
+                      "meta": { "doctype_value": "eu.europa.ec.eudi.pid.1" },
+                      "claims": [
+                        { "path": ["eu.europa.ec.eudi.pid.1", "given_name"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "family_name"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "birth_date"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "address", "street_address"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "address", "locality"] }
+                      ]
+                    }
+                  ],
+                  "credential_sets": [{ "options": [["pid_sd_jwt"], ["pid_mdoc"]] }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isPresent();
+        assertThat(bundle.get().matches()).hasSize(1);
+        assertThat(bundle.get().matches().get(0).descriptorId()).isEqualTo("pid_sd_jwt");
+        assertThat(bundle.get().matches().get(0).disclosedClaims())
+                .containsEntry("given_name", "Alice")
+                .containsEntry("family_name", "Doe");
+    }
+
+    @Test
+    void sandboxDcqlQueryMatchesMdocPid() throws Exception {
+        // mDoc claims are stored flat (namespace elements) — the mock wallet resolves
+        // 3-element DCQL paths ["ns", "address", "street_address"] by claim name (last segment)
+        saveCredential("user", Map.of(
+                "vct", "eu.europa.ec.eudi.pid.1",
+                "format", "mso_mdoc",
+                "credentialSubject", Map.of(
+                        "given_name", "Bob",
+                        "family_name", "Smith",
+                        "birth_date", "1985-06-15",
+                        "street_address", "Elm Ave 42",
+                        "locality", "Munich"
+                ),
+                "rawCredential", "mdoc-pid-token"
+        ));
+
+        // Same sandbox DCQL query — should fall through to mDoc option
+        String dcql = """
+                {
+                  "credentials": [
+                    {
+                      "id": "pid_sd_jwt",
+                      "format": "dc+sd-jwt",
+                      "meta": { "vct_values": ["urn:eudi:pid:de:1"] },
+                      "claims": [
+                        { "path": ["given_name"] },
+                        { "path": ["family_name"] },
+                        { "path": ["birth_date"] },
+                        { "path": ["address", "street_address"] },
+                        { "path": ["address", "locality"] }
+                      ]
+                    },
+                    {
+                      "id": "pid_mdoc",
+                      "format": "mso_mdoc",
+                      "meta": { "doctype_value": "eu.europa.ec.eudi.pid.1" },
+                      "claims": [
+                        { "path": ["eu.europa.ec.eudi.pid.1", "given_name"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "family_name"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "birth_date"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "address", "street_address"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "address", "locality"] }
+                      ]
+                    }
+                  ],
+                  "credential_sets": [{ "options": [["pid_sd_jwt"], ["pid_mdoc"]] }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isPresent();
+        assertThat(bundle.get().matches()).hasSize(1);
+        assertThat(bundle.get().matches().get(0).descriptorId()).isEqualTo("pid_mdoc");
+        assertThat(bundle.get().matches().get(0).disclosedClaims())
+                .containsEntry("given_name", "Bob")
+                .containsEntry("family_name", "Smith")
+                .containsEntry("street_address", "Elm Ave 42")
+                .containsEntry("locality", "Munich");
+    }
+
     private void saveCredential(String userId, Map<String, Object> credential) throws Exception {
         Map<String, Object> toStore = new HashMap<>(credential);
         toStore.putIfAbsent("format", "dc+sd-jwt");

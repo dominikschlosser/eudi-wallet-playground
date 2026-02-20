@@ -228,6 +228,76 @@ class SandboxConfigTest {
         assertThat(tree.get(0).has("data")).isTrue();
     }
 
+    @Test
+    void sandboxMaterialContainsPrivateKeyForSigning() {
+        var props = new VerifierProperties(null, null, null, null, null, null, null,
+                certFile.toString(), null, null, null);
+        var keyService = new VerifierKeyService(props, new ObjectMapper());
+        var cryptoService = new VerifierCryptoService(keyService, props);
+
+        var material = cryptoService.loadSandboxMaterial();
+
+        // The server-side material must contain the private key for request object signing
+        assertThat(material.keyPem()).contains("BEGIN PRIVATE KEY");
+        assertThat(material.combinedPem()).contains("BEGIN PRIVATE KEY");
+        // The JWK must have a private key for signing
+        assertThat(material.jwk()).isNotNull();
+        assertThat(material.jwk().isPrivate()).isTrue();
+    }
+
+    @Test
+    void stripPrivateKeyRemovesAllKeyBlocks() {
+        // Simulate what VerifierController.stripPrivateKey does
+        String combinedPem = toPem(new byte[]{1, 2, 3}, "CERTIFICATE")
+                + "\n" + toPem(new byte[]{4, 5, 6}, "PRIVATE KEY");
+        String stripped = combinedPem.replaceAll(
+                "-----BEGIN (?:RSA |EC )?PRIVATE KEY-----[\\s\\S]*?-----END (?:RSA |EC )?PRIVATE KEY-----", "").strip();
+
+        assertThat(stripped).contains("BEGIN CERTIFICATE");
+        assertThat(stripped).doesNotContain("PRIVATE KEY");
+    }
+
+    @Test
+    void stripPrivateKeyHandlesRsaAndEcVariants() {
+        String rsaPem = "-----BEGIN RSA PRIVATE KEY-----\nMIIdata\n-----END RSA PRIVATE KEY-----";
+        String ecPem = "-----BEGIN EC PRIVATE KEY-----\nMIIdata\n-----END EC PRIVATE KEY-----";
+        String pkcs8Pem = "-----BEGIN PRIVATE KEY-----\nMIIdata\n-----END PRIVATE KEY-----";
+        String certPem = toPem(new byte[]{1, 2, 3}, "CERTIFICATE");
+
+        String combined = certPem + "\n" + rsaPem + "\n" + ecPem + "\n" + pkcs8Pem;
+        String stripped = combined.replaceAll(
+                "-----BEGIN (?:RSA |EC )?PRIVATE KEY-----[\\s\\S]*?-----END (?:RSA |EC )?PRIVATE KEY-----", "").strip();
+
+        assertThat(stripped).contains("BEGIN CERTIFICATE");
+        assertThat(stripped).doesNotContain("PRIVATE KEY");
+        assertThat(stripped).doesNotContain("RSA PRIVATE KEY");
+        assertThat(stripped).doesNotContain("EC PRIVATE KEY");
+    }
+
+    @Test
+    void sandboxCombinedPemWithKeyStrippedOnlyHasCerts() {
+        var props = new VerifierProperties(null, null, null, null, null, null, null,
+                certFile.toString(), null, null, null);
+        var keyService = new VerifierKeyService(props, new ObjectMapper());
+        var cryptoService = new VerifierCryptoService(keyService, props);
+
+        var material = cryptoService.loadSandboxMaterial();
+
+        // Verify the real sandbox material combinedPem has private key
+        assertThat(material.combinedPem()).contains("PRIVATE KEY");
+
+        // After stripping (as the controller does before sending to browser),
+        // no private key should remain but certificates must be preserved
+        String stripped = material.combinedPem().replaceAll(
+                "-----BEGIN (?:RSA |EC )?PRIVATE KEY-----[\\s\\S]*?-----END (?:RSA |EC )?PRIVATE KEY-----", "").strip();
+        assertThat(stripped).doesNotContain("PRIVATE KEY");
+        assertThat(stripped).contains("BEGIN CERTIFICATE");
+
+        // The stripped version should still have both certs in the chain
+        var chain = cryptoService.extractCertChain(stripped);
+        assertThat(chain).hasSize(2);
+    }
+
     private static String toPem(byte[] der, String type) {
         String base64 = Base64.getEncoder().encodeToString(der);
         StringBuilder sb = new StringBuilder();

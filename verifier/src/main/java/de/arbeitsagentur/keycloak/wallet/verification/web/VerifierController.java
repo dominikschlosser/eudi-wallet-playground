@@ -42,13 +42,10 @@ import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.Payload;
 import com.nimbusds.jose.crypto.ECDHEncrypter;
 import com.nimbusds.jose.crypto.RSAEncrypter;
-import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
-import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.RSAKey;
-import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import jakarta.servlet.http.HttpServletRequest;
@@ -183,6 +180,33 @@ public class VerifierController {
         return Map.of("dcql_query", dcql);
     }
 
+    @GetMapping("/mock-defaults")
+    @ResponseBody
+    public Map<String, Object> mockDefaults(HttpServletRequest request) {
+        String defaultWalletAuth = properties.walletAuthEndpoint();
+        if (defaultWalletAuth == null || defaultWalletAuth.isBlank()) {
+            defaultWalletAuth = ServletUriComponentsBuilder.fromCurrentRequest()
+                    .replacePath("/oid4vp/auth")
+                    .build()
+                    .toUriString();
+        }
+        Map<String, Object> defaults = new LinkedHashMap<>();
+        defaults.put("authType", "plain");
+        defaults.put("requestObjectMode", "request");
+        defaults.put("requestUriMethod", "post");
+        defaults.put("responseType", "vp_token");
+        defaults.put("responseMode", "direct_post");
+        defaults.put("walletAuthEndpoint", defaultWalletAuth);
+        defaults.put("walletAudience", "https://self-issued.me/v2");
+        defaults.put("clientId", properties.clientId());
+        defaults.put("walletClientCert", "");
+        defaults.put("clientMetadata", "");
+        defaults.put("verifierInfo", "");
+        defaults.put("dcqlQuery", pretty(dcqlService.defaultDcqlQuery()));
+        defaults.put("trustListId", trustListService.defaultTrustListId());
+        return defaults;
+    }
+
     @GetMapping("/sandbox-defaults")
     @ResponseBody
     public Map<String, Object> sandboxDefaults() {
@@ -210,11 +234,13 @@ public class VerifierController {
         defaults.put("requestObjectMode", "request_uri");
         defaults.put("requestUriMethod", "get");
         defaults.put("responseType", "vp_token");
-        defaults.put("responseMode", "direct_post");
+        defaults.put("responseMode", "direct_post.jwt");
         defaults.put("walletAuthEndpoint", walletAuthEndpoint);
         defaults.put("walletAudience", "https://self-issued.me/v2");
         defaults.put("clientId", clientId);
-        defaults.put("walletClientCert", material.combinedPem());
+        // Send only the certificate chain to the browser — never the private key
+        defaults.put("walletClientCert", stripPrivateKey(material.combinedPem()));
+        defaults.put("clientMetadata", defaultClientMetadata());
         defaults.put("verifierInfo", verifierInfo);
         defaults.put("dcqlQuery", dcqlQuery);
         // Prefer wrpac-provider trust list (RP access certificates) for sandbox,
@@ -231,6 +257,11 @@ public class VerifierController {
     private boolean isSandboxAvailable() {
         java.nio.file.Path certFile = properties.clientCertFilePath();
         return certFile != null && Files.exists(certFile);
+    }
+
+    private static String stripPrivateKey(String pem) {
+        if (pem == null) return "";
+        return pem.replaceAll("-----BEGIN (?:RSA |EC )?PRIVATE KEY-----[\\s\\S]*?-----END (?:RSA |EC )?PRIVATE KEY-----", "").strip();
     }
 
     private String readFileIfExists(java.nio.file.Path path) {
@@ -340,6 +371,8 @@ public class VerifierController {
                                                   String verifierInfo,
                                                   @RequestParam(name = "trustList", required = false)
                                                   String trustList,
+                                                  @RequestParam(name = "useSandboxKey", required = false, defaultValue = "false")
+                                                  boolean useSandboxKey,
                                                   HttpServletRequest request) {
         String providedDcql = dcqlQuery != null && !dcqlQuery.isBlank()
                 ? dcqlQuery
@@ -356,7 +389,11 @@ public class VerifierController {
         String effectiveRequestUriMethod = requestUriMethod != null && !requestUriMethod.isBlank() ? requestUriMethod : "post";
         VerifierCryptoService.X509Material x509Material = null;
         if ("x509_hash".equalsIgnoreCase(authType) || "x509_san_dns".equalsIgnoreCase(authType)) {
-            x509Material = verifierCryptoService.resolveX509Material(walletClientCert);
+            if (useSandboxKey && isSandboxAvailable()) {
+                x509Material = verifierCryptoService.loadSandboxMaterial();
+            } else {
+                x509Material = verifierCryptoService.resolveX509Material(walletClientCert);
+            }
             walletClientCert = x509Material.combinedPem();
             if ("x509_hash".equalsIgnoreCase(authType)) {
                 effectiveClientId = verifierCryptoService.deriveX509ClientId(effectiveClientId, x509Material.certificatePem());
@@ -1168,6 +1205,12 @@ public class VerifierController {
         }
     }
 
+    /**
+     * Determines the signing algorithm from the wallet's metadata.
+     * The actual signing key is resolved later in {@link RequestObjectService#resolve}
+     * which prefers the stored key (matching the original x5c/JWK headers) and adapts the
+     * algorithm to the key type if needed.
+     */
     private RequestObjectService.SigningRequest determineSigningRequest(JsonNode walletMeta) {
         if (walletMeta == null || walletMeta.isMissingNode()) {
             return null;
@@ -1178,17 +1221,10 @@ public class VerifierController {
         }
         try {
             JWSAlgorithm jwsAlg = JWSAlgorithm.parse(alg);
-            JWK jwk = null;
-            if (alg.toUpperCase().startsWith("RS")) {
-                jwk = verifierKeyService.loadOrCreateSigningKey();
-            } else if (alg.toUpperCase().startsWith("ES")) {
-                jwk = new ECKeyGenerator(Curve.P_256)
-                        .keyUse(KeyUse.SIGNATURE)
-                        .algorithm(jwsAlg)
-                        .keyIDFromThumbprint(true)
-                        .generate();
-            }
-            return new RequestObjectService.SigningRequest(jwsAlg, jwk);
+            // Pass only the wallet's preferred algorithm — the stored key (from x509 material
+            // or verifier_attestation cnf) will be used for signing. If no stored key exists,
+            // resolve() will fall back to the verifier's default signing key.
+            return new RequestObjectService.SigningRequest(jwsAlg, null);
         } catch (Exception e) {
             return null;
         }

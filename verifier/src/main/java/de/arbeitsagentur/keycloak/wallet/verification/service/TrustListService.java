@@ -201,9 +201,14 @@ public class TrustListService implements
     public List<TrustListOption> options() {
         List<TrustListOption> opts = new ArrayList<>();
         for (String id : trustLists.keySet()) {
-            String label = labels.getOrDefault(id, id);
+            String rawLabel = labels.getOrDefault(id, id);
+            String label;
             if ("trust-list".equals(id)) {
                 label = "Default (Keycloak realm)";
+            } else if (rawLabel.equals(id)) {
+                label = id;
+            } else {
+                label = id + " (" + rawLabel + ")";
             }
             opts.add(new TrustListOption(id, label));
         }

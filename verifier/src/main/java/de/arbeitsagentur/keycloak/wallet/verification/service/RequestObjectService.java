@@ -25,6 +25,8 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -35,6 +37,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class RequestObjectService {
+
+    private static final Logger LOG = LoggerFactory.getLogger(RequestObjectService.class);
     private static final Duration DEFAULT_TTL = Duration.ofMinutes(10);
     private final Map<String, StoredRequestObject> store = new ConcurrentHashMap<>();
 
@@ -66,7 +70,7 @@ public class RequestObjectService {
                         || source.getHeader().getJWK() != null;
             }
             SigningRequest effectiveSigning = null;
-            if (needsSignature && stored.signerKey() != null) {
+            if (needsSignature) {
                 JWSAlgorithm alg = signingRequest != null ? signingRequest.alg() : null;
                 if (alg == null && source.getHeader() != null) {
                     alg = source.getHeader().getAlgorithm();
@@ -74,7 +78,18 @@ public class RequestObjectService {
                 if (alg == null) {
                     alg = JWSAlgorithm.RS256;
                 }
-                effectiveSigning = new SigningRequest(alg, stored.signerKey());
+                // Prefer the stored key (it matches the original x5c/JWK headers).
+                // Adapt the algorithm to the stored key type if needed.
+                JWK key = stored.signerKey();
+                if (key == null && signingRequest != null) {
+                    key = signingRequest.jwk();
+                }
+                if (key == null) {
+                    LOG.error("No signing key available for request object {}", id);
+                } else {
+                    alg = algorithmForKey(key, alg);
+                    effectiveSigning = new SigningRequest(alg, key);
+                }
             }
             if (walletNonceApplied) {
                 JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder(claims);
@@ -89,12 +104,17 @@ public class RequestObjectService {
             JWSHeader.Builder header = new JWSHeader.Builder(requestedAlg)
                     .type(source.getHeader() != null ? source.getHeader().getType() : null);
             if (effectiveSigning != null && effectiveSigning.jwk() != null) {
-                header.jwk(effectiveSigning.jwk().toPublicJWK());
+                boolean hasX5c = source.getHeader() != null && source.getHeader().getX509CertChain() != null
+                        && !source.getHeader().getX509CertChain().isEmpty();
+                if (hasX5c) {
+                    // x509_hash / x509_san_dns: the spec requires x5c for trust establishment.
+                    // Omit jwk to avoid ambiguity — the wallet should verify via the x5c chain.
+                    header.x509CertChain(source.getHeader().getX509CertChain());
+                } else {
+                    header.jwk(effectiveSigning.jwk().toPublicJWK());
+                }
                 if (effectiveSigning.jwk().getKeyID() != null) {
                     header.keyID(effectiveSigning.jwk().getKeyID());
-                }
-                if (effectiveSigning.jwk() instanceof RSAKey && source.getHeader() != null && source.getHeader().getX509CertChain() != null) {
-                    header.x509CertChain(source.getHeader().getX509CertChain());
                 }
             }
             if (source.getHeader() != null && source.getHeader().getCustomParams() != null) {
@@ -104,6 +124,13 @@ public class RequestObjectService {
             boolean signed = applySignature(reSigned, effectiveSigning);
             return new ResolvedRequestObject(reSigned.serialize(), walletNonceApplied, claims, signed);
         } catch (Exception e) {
+            LOG.warn("Failed to re-sign request object with wallet_nonce: {}", e.getMessage(), e);
+            if (walletNonceApplied) {
+                // OID4VP 1.0 Section 5.10: "When received, the Verifier MUST use it as the
+                // wallet_nonce value in the signed authorization request object."
+                // Returning the original without wallet_nonce would cause the wallet to reject it.
+                throw new IllegalStateException("Failed to re-sign request object with wallet_nonce", e);
+            }
             return new ResolvedRequestObject(source.serialize(), false, claims, source != null);
         }
     }
@@ -153,6 +180,21 @@ public class RequestObjectService {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Returns the given algorithm if it is compatible with the key type,
+     * otherwise returns a default algorithm matching the key.
+     */
+    private JWSAlgorithm algorithmForKey(JWK key, JWSAlgorithm requested) {
+        String name = requested.getName().toUpperCase();
+        if (key instanceof ECKey && !name.startsWith("ES")) {
+            return JWSAlgorithm.ES256;
+        }
+        if (key instanceof RSAKey && !(name.startsWith("RS") || name.startsWith("PS"))) {
+            return JWSAlgorithm.RS256;
+        }
+        return requested;
     }
 
     private record StoredRequestObject(SignedJWT payload, JWK signerKey, Instant expiresAt) {

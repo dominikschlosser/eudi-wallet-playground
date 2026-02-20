@@ -20,8 +20,12 @@ import org.jsoup.nodes.Document;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,6 +48,58 @@ class VerifierTemplateTest {
         Document document = Jsoup.parse(html);
         assertThat(document.select(".token-hint")).isEmpty();
         assertThat(html).contains("Decoded mDoc");
+    }
+
+    /**
+     * Verifies that every standalone function call statement in the verifier script
+     * references a function that is actually defined. This catches stale references
+     * like "refreshQueryPanels()" that cause ReferenceErrors at runtime.
+     */
+    @Test
+    void allCalledJsFunctionsAreDefined() throws Exception {
+        String html = resource("templates/verifier.html");
+        Document document = Jsoup.parse(html);
+        String scriptContent = document.select("script").stream()
+                .map(el -> el.data())
+                .reduce("", (a, b) -> a + "\n" + b);
+
+        // Collect function definitions: "function name(" and "const/let/var name = ..."
+        Set<String> defined = new LinkedHashSet<>();
+        Matcher defMatcher = Pattern.compile(
+                "(?:(?:async\\s+)?function\\s+(\\w+)\\s*\\()" +
+                "|(?:(?:const|let|var)\\s+(\\w+)\\s*=)"
+        ).matcher(scriptContent);
+        while (defMatcher.find()) {
+            for (int g = 1; g <= defMatcher.groupCount(); g++) {
+                if (defMatcher.group(g) != null) {
+                    defined.add(defMatcher.group(g));
+                }
+            }
+        }
+
+        // Match standalone function call statements: lines like "  functionName(...);"
+        // These are the calls most likely to cause ReferenceErrors — a bare call at statement level.
+        Matcher callMatcher = Pattern.compile("^\\s+([a-zA-Z_]\\w*)\\s*\\(", Pattern.MULTILINE)
+                .matcher(scriptContent);
+        Set<String> called = new LinkedHashSet<>();
+        Set<String> ignore = Set.of(
+                "if", "for", "while", "switch", "catch", "return", "throw", "new", "typeof", "delete",
+                "function", "async", "const", "let", "var", "class", "import", "export",
+                "alert", "fetch", "setTimeout", "setInterval", "clearTimeout", "clearInterval",
+                "console", "requestAnimationFrame", "queueMicrotask"
+        );
+        while (callMatcher.find()) {
+            String name = callMatcher.group(1);
+            if (!ignore.contains(name)) {
+                called.add(name);
+            }
+        }
+
+        Set<String> undefined = new LinkedHashSet<>(called);
+        undefined.removeAll(defined);
+        assertThat(undefined)
+                .as("Functions called but not defined in verifier.html script")
+                .isEmpty();
     }
 
     private String resource(String path) throws Exception {
