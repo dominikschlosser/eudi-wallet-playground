@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.2](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.1...v1.7.2) (2026-02-20)
+
+
+### Bug Fixes
+
+* show whole request + request_object in mock wallet for debugging ([5c444a5](https://github.com/ba-itsys/eudi-wallet-playground/commit/5c444a5fdb6bc88d435d95debfdf301f36a89547))
+
 ## [1.7.1](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.0...v1.7.1) (2026-02-20)
 
 
