@@ -482,10 +482,10 @@ class KeycloakOid4vpE2eIT {
                       "format": "mso_mdoc",
                       "meta": { "doctype_value": "eu.europa.ec.eudi.pid.1" },
                       "claims": [
-                        { "path": ["document_number"] },
-                        { "path": ["family_name"] },
-                        { "path": ["given_name"] },
-                        { "path": ["birth_date"] }
+                        { "path": ["eu.europa.ec.eudi.pid.1", "document_number"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "family_name"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "given_name"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "birth_date"] }
                       ]
                     }
                   ]

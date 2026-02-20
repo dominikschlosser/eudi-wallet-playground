@@ -151,13 +151,13 @@ class VerifierUiIT {
             page.navigate("http://localhost:" + port + "/verifier");
             page.waitForLoadState();
 
-            // Sandbox button should be visible since we configured the cert file
-            var sandboxBtn = page.locator("#use-sandbox-defaults");
-            assertThat(sandboxBtn.isVisible())
-                    .as("Sandbox defaults button should be visible")
+            // Sandbox buttons should be visible since we configured the cert file
+            var sandboxBothBtn = page.locator("#sandbox-both");
+            assertThat(sandboxBothBtn.isVisible())
+                    .as("Sandbox Both button should be visible")
                     .isTrue();
 
-            sandboxBtn.click();
+            sandboxBothBtn.click();
 
             // Wait for the async fetch to complete and form to update
             page.waitForTimeout(1000);
@@ -274,10 +274,16 @@ class VerifierUiIT {
                     .as("Binding preview should show the sandbox certificate, not the default self-signed one")
                     .contains("BEGIN CERTIFICATE");
 
-            // --- Toggle back: button should now say "Use Mock Defaults" ---
-            assertThat(sandboxBtn.textContent()).isEqualTo("Use Mock Defaults");
+            // --- Toggle back: sandbox buttons hidden, mock button visible ---
+            var sandboxMockBtn = page.locator("#sandbox-mock");
+            assertThat(sandboxMockBtn.isVisible())
+                    .as("Mock defaults button should be visible after activating sandbox")
+                    .isTrue();
+            assertThat(sandboxBothBtn.isVisible())
+                    .as("Sandbox Both button should be hidden in sandbox mode")
+                    .isFalse();
 
-            sandboxBtn.click();
+            sandboxMockBtn.click();
             page.waitForTimeout(1000);
 
             // Auth type should be back to plain
@@ -296,8 +302,13 @@ class VerifierUiIT {
             // Encryption should be disabled
             assertThat(page.locator("#encryption-state").textContent()).isEqualTo("Off");
 
-            // Button should be back to "Use Sandbox Defaults"
-            assertThat(sandboxBtn.textContent()).isEqualTo("Use Sandbox Defaults");
+            // Sandbox buttons should be visible again
+            assertThat(sandboxBothBtn.isVisible())
+                    .as("Sandbox Both button should be visible after mock reset")
+                    .isTrue();
+            assertThat(sandboxMockBtn.isVisible())
+                    .as("Mock button should be hidden after mock reset")
+                    .isFalse();
 
             assertThat(errors)
                     .as("JavaScript console errors after toggling sandbox defaults")

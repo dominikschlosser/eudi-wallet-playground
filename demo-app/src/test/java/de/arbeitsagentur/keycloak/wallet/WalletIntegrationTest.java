@@ -267,26 +267,19 @@ class WalletIntegrationTest {
             PresentationForm validForm = initiatePresentationFlow(client, context, base, dcql, "accept",
                     List.of("given_name", "family_name", "birthdate", "country", "nationalities"),
                     List.of("personal_id"), null, false, null, null, null, null, null);
-            HttpPost callbackPost = new HttpPost(validForm.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(validForm.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                assertThat(verifierResult.getCode()).isEqualTo(200);
-                assertThat(new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8))
-                        .contains("Verified credential");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, validForm);
+            assertThat(result.statusCode()).isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
 
             PresentationForm tamperedForm = initiatePresentationFlow(client, context, base, dcql, "accept",
                     List.of("given_name", "family_name", "birthdate", "country", "nationalities"),
                     List.of("personal_id"), null, false, null, null, null, null, null);
             tamperedForm.fields().put("state", "invalid-state");
             tamperedForm.fields().remove("vp_token");
-            HttpPost tamperedPost = new HttpPost(tamperedForm.action());
-            tamperedPost.setEntity(new UrlEncodedFormEntity(toParams(tamperedForm.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse tamperedResponse = client.execute(tamperedPost, context)) {
-                assertThat(tamperedResponse.getCode()).isEqualTo(400);
-                String body = new String(tamperedResponse.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(body).contains("Invalid verifier session");
-            }
+            // Tampered state: callback returns empty JSON (no redirect_uri) per OID4VP spec
+            CallbackResult tamperedResult = submitCallbackRaw(client, context, tamperedForm.action(), tamperedForm.fields());
+            assertThat(tamperedResult.statusCode()).isEqualTo(200);
+            assertThat(tamperedResult.body()).isEqualTo("{}");
         }
     }
 
@@ -361,16 +354,12 @@ class WalletIntegrationTest {
                     .doesNotContainKey("family_name");
             assertThat(parser.extractDocType(deviceResponse)).isEqualTo("eu.europa.ec.eudi.pid.1");
 
-            HttpPost callbackPost = new HttpPost(presentationForm.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(presentationForm.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Status %s Body:%n%s", verifierResult.getCode(), body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-                assertThat(body).contains("presentation_1");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, presentationForm);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Status %s Body:%n%s", result.statusCode(), result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
+            assertThat(result.body()).contains("presentation_1");
         }
     }
 
@@ -444,16 +433,12 @@ class WalletIntegrationTest {
                     .doesNotContainKey("family_name");
             assertThat(parser.extractDocType(deviceResponse)).isEqualTo("eu.europa.ec.eudi.pid.1");
 
-            HttpPost callbackPost = new HttpPost(presentationForm.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(presentationForm.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Status %s Body:%n%s", verifierResult.getCode(), body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-                assertThat(body).contains("presentation_1");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, presentationForm);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Status %s Body:%n%s", result.statusCode(), result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
+            assertThat(result.body()).contains("presentation_1");
         }
     }
 
@@ -651,15 +636,11 @@ class WalletIntegrationTest {
             assertThat(trustListService.verify(presentedJwt, trustListService.defaultTrustListId())).isTrue();
             assertThat(SdJwtUtils.verifyDisclosures(presentedJwt, presentedParts, objectMapper)).isTrue();
 
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Status %s Body:%n%s", verifierResult.getCode(), body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Status %s Body:%n%s", result.statusCode(), result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
         }
     }
 
@@ -748,13 +729,9 @@ class WalletIntegrationTest {
             PresentationForm denyForm = initiatePresentationFlow(client, context, base, dcql, "deny",
                     List.of("given_name", "family_name", "birthdate", "country"), List.of("personal_id"), null, false,
                     null, null, null, null, null);
-            HttpPost callbackPost = new HttpPost(denyForm.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(denyForm.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                assertThat(verifierResult.getCode()).isEqualTo(400);
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(body).contains("access_denied").contains("User denied presentation");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, denyForm);
+            assertThat(result.statusCode()).isEqualTo(400);
+            assertThat(result.body()).contains("access_denied").contains("User denied presentation");
         }
     }
 
@@ -822,14 +799,11 @@ class WalletIntegrationTest {
             assertThat(formFields).containsKey("error");
             assertThat(formFields.get("error")).isEqualTo("access_denied");
 
-            // Submit the form to the verifier callback
-            HttpPost callbackPost = new HttpPost(formAction);
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(formFields), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                assertThat(verifierResult.getCode()).isEqualTo(400);
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(body).contains("access_denied");
-            }
+            // Submit the form to the verifier callback and follow redirect
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context,
+                    new PresentationForm(URI.create(formAction), formFields));
+            assertThat(result.statusCode()).isEqualTo(400);
+            assertThat(result.body()).contains("access_denied");
         }
     }
 
@@ -943,17 +917,13 @@ class WalletIntegrationTest {
             PresentationForm presentationForm = initiatePresentationFlow(client, context, base, dcql, "accept",
                     List.of("given_name"), List.of("family_name", "document_number"), null, false,
                     null, null, null, null, null);
-            HttpPost callbackPost = new HttpPost(presentationForm.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(presentationForm.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Status %s Body:%n%s", verifierResult.getCode(), body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-                assertThat(body).contains("presentation_1");
-                assertThat(body).contains("presentation_2");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, presentationForm);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Status %s Body:%n%s", result.statusCode(), result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
+            assertThat(result.body()).contains("presentation_1");
+            assertThat(result.body()).contains("presentation_2");
         }
     }
 
@@ -1336,13 +1306,10 @@ class WalletIntegrationTest {
                 assertThat(submitFields.get("error_description")).containsAnyOf("No matching credential", "Could not select matching credentials");
 
                 URI callback = resolveRedirect(base, submitForm.attr("action"));
-                HttpPost callbackPost = new HttpPost(callback);
-                callbackPost.setEntity(new UrlEncodedFormEntity(toParams(submitFields), StandardCharsets.UTF_8));
-                try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                    assertThat(verifierResult.getCode()).isEqualTo(400);
-                    String verifierBody = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                    assertThat(verifierBody).contains("access_denied");
-                }
+                CallbackResult result = submitCallbackAndFollowRedirect(client, context,
+                        new PresentationForm(callback, submitFields));
+                assertThat(result.statusCode()).isEqualTo(400);
+                assertThat(result.body()).contains("access_denied");
             }
         }
     }
@@ -1377,13 +1344,9 @@ class WalletIntegrationTest {
             PresentationForm encryptedForm = initiatePresentationFlow(client, context, base, dcql, "accept",
                     List.of("given_name", "birthdate"), List.of("personal_id"), clientMetadata, true,
                     null, null, null, null, null);
-            HttpPost callbackPost = new HttpPost(encryptedForm.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(encryptedForm.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                assertThat(verifierResult.getCode()).isEqualTo(200);
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(body).contains("Verified credential");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, encryptedForm);
+            assertThat(result.statusCode()).isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
         }
     }
 
@@ -1415,15 +1378,11 @@ class WalletIntegrationTest {
             assertThat(paramNames).doesNotContain("dcql_query", "nonce", "response_mode", "response_uri", "state", "client_metadata", "request_uri");
             PresentationForm form = continuePresentationFlow(client, context, base, walletAuth, "accept",
                     List.of("given_name"), null, false, Map.of(), null);
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Body:%n%s", body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Body:%n%s", result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
         }
     }
 
@@ -1459,15 +1418,11 @@ class WalletIntegrationTest {
             assertThat(clientId).startsWith("x509_san_dns:");
             PresentationForm form = continuePresentationFlow(client, context, base, walletAuth, "accept",
                     List.of("given_name"), null, false, Map.of(), null);
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Body:%n%s", body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Body:%n%s", result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
         }
     }
 
@@ -1501,15 +1456,11 @@ class WalletIntegrationTest {
             assertThat(clientId).startsWith("x509_hash:");
             PresentationForm form = continuePresentationFlow(client, context, base, walletAuth, "accept",
                     List.of("given_name"), null, false, Map.of(), null);
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Body:%n%s", body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Body:%n%s", result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
         }
     }
 
@@ -1542,15 +1493,11 @@ class WalletIntegrationTest {
             assertThat(params).doesNotContain("request", "dcql_query", "nonce", "response_mode", "response_uri", "state", "client_metadata");
             PresentationForm form = continuePresentationFlow(client, context, base, walletAuth, "accept",
                     List.of("given_name"), null, false, Map.of(), null);
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Body:%n%s", body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Body:%n%s", result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
         }
     }
 
@@ -1587,15 +1534,11 @@ class WalletIntegrationTest {
             assertThat(params).contains("client_id").contains("request_uri");
             PresentationForm form = continuePresentationFlow(client, context, base, walletAuth, "accept",
                     List.of("given_name"), null, false, Map.of(), null);
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Body:%n%s", body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Body:%n%s", result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
         }
     }
 
@@ -1667,18 +1610,14 @@ class WalletIntegrationTest {
             PresentationForm form = initiatePresentationFlow(client, context, base, dcql, "accept",
                     List.of("given_name"), null, null, false,
                     null, "plain", null, null, null);
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Body:%n%s", body)
-                        .isEqualTo(200);
-                Document doc = Jsoup.parse(body);
-                Element kb = doc.selectFirst("#key-binding-jwt");
-                assertThat(kb).withFailMessage("key_binding_jwt not shown. Body:%n%s", body).isNotNull();
-                assertThat(kb.text()).contains(".");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Body:%n%s", result.body())
+                    .isEqualTo(200);
+            Document doc = Jsoup.parse(result.body());
+            Element kb = doc.selectFirst("#key-binding-jwt");
+            assertThat(kb).withFailMessage("key_binding_jwt not shown. Body:%n%s", result.body()).isNotNull();
+            assertThat(kb.text()).contains(".");
         }
     }
 
@@ -1710,15 +1649,11 @@ class WalletIntegrationTest {
             assertThat(names).doesNotContain("dcql_query", "nonce", "response_mode", "response_uri", "state", "client_metadata", "request");
             PresentationForm form = continuePresentationFlow(client, context, base, walletAuth, "accept",
                     List.of("given_name"), null, false, Map.of(), null);
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Body:%n%s", body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Body:%n%s", result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
         }
     }
 
@@ -1752,15 +1687,11 @@ class WalletIntegrationTest {
             assertThat(params).doesNotContain("request", "dcql_query", "nonce", "response_mode", "response_uri", "state", "client_metadata");
             PresentationForm form = continuePresentationFlow(client, context, base, walletAuth, "accept",
                     List.of("given_name"), null, false, Map.of(), null);
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Body:%n%s", body)
-                        .isEqualTo(200);
-                assertThat(body).contains("Verified credential");
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Body:%n%s", result.body())
+                    .isEqualTo(200);
+            assertThat(result.body()).contains("Verified credential");
         }
     }
 
@@ -1787,14 +1718,10 @@ class WalletIntegrationTest {
             PresentationForm form = initiatePresentationFlow(client, context, base, dcql, "accept",
                     List.of("given_name"), null, null, false,
                     null, "plain", null, null, null, Map.of(), "urn:eudi:pid:1");
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
-                assertThat(verifierResult.getCode())
-                        .withFailMessage("Verifier callback failed. Body:%n%s", body)
-                        .isEqualTo(200);
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode())
+                    .withFailMessage("Verifier callback failed. Body:%n%s", result.body())
+                    .isEqualTo(200);
         }
     }
 
@@ -1852,11 +1779,8 @@ class WalletIntegrationTest {
             // Complete the flow to keep the test environment consistent.
             PresentationForm form = continuePresentationFlow(client, context, base, walletAuth, "accept",
                     List.of("given_name"), null, false, Map.of(), null);
-            HttpPost callbackPost = new HttpPost(form.action());
-            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
-            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
-                assertThat(verifierResult.getCode()).isEqualTo(200);
-            }
+            CallbackResult result = submitCallbackAndFollowRedirect(client, context, form);
+            assertThat(result.statusCode()).isEqualTo(200);
         }
     }
 
@@ -2427,6 +2351,43 @@ class WalletIntegrationTest {
         @Override
         public void close() throws IOException {
             response.close();
+        }
+    }
+
+    private record CallbackResult(int statusCode, String body) {
+    }
+
+    /**
+     * Submits the direct_post callback and follows the redirect_uri from the JSON response
+     * to fetch the actual result page.
+     */
+    private CallbackResult submitCallbackAndFollowRedirect(CloseableHttpClient client, HttpClientContext context,
+                                                            PresentationForm form) throws Exception {
+        HttpPost callbackPost = new HttpPost(form.action());
+        callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
+        try (CloseableHttpResponse callbackResponse = client.execute(callbackPost, context)) {
+            String callbackBody = new String(callbackResponse.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
+            assertThat(callbackResponse.getCode()).isEqualTo(200);
+            JsonNode json = objectMapper.readTree(callbackBody);
+            String redirectUri = json.path("redirect_uri").asText(null);
+            assertThat(redirectUri).as("redirect_uri in callback response").isNotBlank();
+            try (CloseableHttpResponse resultResponse = client.execute(new HttpGet(redirectUri), context)) {
+                String resultBody = new String(resultResponse.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
+                return new CallbackResult(resultResponse.getCode(), resultBody);
+            }
+        }
+    }
+
+    /**
+     * Submits the direct_post callback with custom fields (e.g. tampered) and returns the raw JSON response.
+     */
+    private CallbackResult submitCallbackRaw(CloseableHttpClient client, HttpClientContext context,
+                                              URI action, Map<String, String> fields) throws Exception {
+        HttpPost callbackPost = new HttpPost(action);
+        callbackPost.setEntity(new UrlEncodedFormEntity(toParams(fields), StandardCharsets.UTF_8));
+        try (CloseableHttpResponse callbackResponse = client.execute(callbackPost, context)) {
+            String body = new String(callbackResponse.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
+            return new CallbackResult(callbackResponse.getCode(), body);
         }
     }
 

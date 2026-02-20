@@ -25,6 +25,7 @@ import de.arbeitsagentur.keycloak.wallet.verification.service.VerifierCryptoServ
 import de.arbeitsagentur.keycloak.wallet.verification.service.RequestObjectService;
 import de.arbeitsagentur.keycloak.wallet.verification.service.VerifierKeyService;
 import de.arbeitsagentur.keycloak.wallet.verification.service.VerificationSteps;
+import de.arbeitsagentur.keycloak.wallet.verification.session.VerificationResultStore;
 import de.arbeitsagentur.keycloak.wallet.verification.session.VerifierSession;
 import de.arbeitsagentur.keycloak.wallet.verification.session.VerifierSessionService;
 import de.arbeitsagentur.keycloak.wallet.verification.session.VerifierSessionStateStore;
@@ -53,7 +54,6 @@ import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -101,6 +101,7 @@ public class VerifierController {
     private final DebugLogService debugLogService;
     private final URI publicBaseUri;
     private final VerifierSessionStateStore verifierSessionStateStore;
+    private final VerificationResultStore verificationResultStore;
 
     public VerifierController(DcqlService dcqlService,
                               VerifierSessionService verifierSessionService,
@@ -115,6 +116,7 @@ public class VerifierController {
                               ObjectMapper objectMapper,
                               VerifierProperties properties,
                               DebugLogService debugLogService,
+                              VerificationResultStore verificationResultStore,
                               @Value("${wallet.public-base-url:}") String publicBaseUrl) {
         this.dcqlService = dcqlService;
         this.verifierSessionService = verifierSessionService;
@@ -129,6 +131,7 @@ public class VerifierController {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.debugLogService = debugLogService;
+        this.verificationResultStore = verificationResultStore;
         this.publicBaseUri = parsePublicBase(publicBaseUrl);
     }
 
@@ -224,7 +227,6 @@ public class VerifierController {
             clientId = "";
         }
         String verifierInfo = readFileIfExists(properties.sandboxVerifierInfoFilePath());
-        String dcqlQuery = properties.sandboxDcqlQuery() != null ? pretty(properties.sandboxDcqlQuery()) : "";
         String walletAuthEndpoint = properties.sandboxWalletAuthEndpoint() != null
                 && !properties.sandboxWalletAuthEndpoint().isBlank()
                 ? properties.sandboxWalletAuthEndpoint() : "openid4vp://";
@@ -242,12 +244,25 @@ public class VerifierController {
         defaults.put("walletClientCert", stripPrivateKey(material.combinedPem()));
         defaults.put("clientMetadata", defaultClientMetadata());
         defaults.put("verifierInfo", verifierInfo);
-        defaults.put("dcqlQuery", dcqlQuery);
-        // Prefer wrpac-provider trust list (RP access certificates) for sandbox,
+        // Build three DCQL variants matching the registration certificate claims.
+        // SD-JWT omits birth_date (known issue with some wallets).
+        String sdJwtOnly = """
+                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["address","street_address"]},{"path":["address","locality"]}]}]}""";
+        String mdocOnly = """
+                {"credentials":[{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","address","street_address"]},{"path":["eu.europa.ec.eudi.pid.1","address","locality"]}]}]}""";
+        String both = """
+                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["address","street_address"]},{"path":["address","locality"]}]},{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","address","street_address"]},{"path":["eu.europa.ec.eudi.pid.1","address","locality"]}]}],"credential_sets":[{"options":[["pid_sd_jwt"],["pid_mdoc"]]}]}""";
+        // Allow env override via sandboxDcqlQuery for backward compat
+        String dcqlOverride = properties.sandboxDcqlQuery();
+        defaults.put("dcqlSdJwt", pretty(sdJwtOnly));
+        defaults.put("dcqlMdoc", pretty(mdocOnly));
+        defaults.put("dcqlBoth", pretty(both));
+        defaults.put("dcqlQuery", dcqlOverride != null ? pretty(dcqlOverride) : pretty(both));
+        // Prefer pid-provider trust list for sandbox,
         // fall back to default if BMI trust lists are not loaded.
         String sandboxTrustList = trustListService.options().stream()
                 .map(TrustListService.TrustListOption::id)
-                .filter(id -> id.equals("wrpac-provider"))
+                .filter(id -> id.equals("pid-provider"))
                 .findFirst()
                 .orElse(trustListService.defaultTrustListId());
         defaults.put("trustListId", sandboxTrustList);
@@ -525,7 +540,8 @@ public class VerifierController {
     }
 
     @PostMapping(value = "/callback", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
-    public Object handleCallback(@RequestParam(name = "state", required = false) String state,
+    @ResponseBody
+    public ResponseEntity<Map<String, String>> handleCallback(@RequestParam(name = "state", required = false) String state,
                                        @RequestParam(name = "vp_token", required = false) String vpToken,
                                        @RequestParam(name = "response", required = false) String encryptedResponse,
                                        @RequestParam(name = "id_token", required = false) String idToken,
@@ -538,7 +554,6 @@ public class VerifierController {
                                        @RequestParam(name = "error_description", required = false) String errorDescription,
                                        HttpServletRequest request,
                                        HttpSession httpSession) {
-        boolean wantsJson = wantsJson(request);
         LOG.info("direct_post callback received state={} error={}", state, error);
         VerificationSteps steps = new VerificationSteps();
         String vpTokenRaw = vpToken;
@@ -550,12 +565,8 @@ public class VerifierController {
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
             ParsedResponseFields parsed = decodeEncryptedResponse(encryptedResponse, steps);
             if (parsed == null) {
-                if (wantsJson) {
-                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .body(Map.of("error", "Unable to decode response"));
-                }
-                return resultView(state, "Unable to decode response", false, steps.titles(), List.of(), vpTokenRaw, idToken, Map.of(), steps.details());
+                storeResult(state, "Unable to decode response", false, steps, List.of(), vpTokenRaw, idToken, Map.of());
+                return callbackErrorResponse("Unable to decode response");
             }
             state = firstNonBlank(state, parsed.state());
             vpTokenRaw = firstNonBlank(vpTokenRaw, parsed.vpToken());
@@ -589,13 +600,11 @@ public class VerifierController {
                     Map.of(),
                     "vp_token length=%d".formatted(vpToken != null ? vpToken.length() : 0),
                     null, vpTokenRaw, keyBindingJwt, effectiveDpop);
-            if (wantsJson) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(Map.of("error", "Invalid verifier session"));
-            }
-            return resultView(state, "Invalid verifier session", false, steps.titles(), parseVpTokens(vpTokenRaw), vpTokenRaw, idToken, Map.of(), steps.details());
+            storeResult(state, "Invalid verifier session", false, steps, parseVpTokens(vpTokenRaw), vpTokenRaw, idToken, Map.of());
+            return callbackErrorResponse("Invalid verifier session");
         }
+        // Build redirect_uri for the result page
+        URI resultUri = baseUri(request).path("/verifier/result/" + state).build().toUri();
         try {
             if (error != null && !error.isBlank()) {
                 String viewMessage = errorDescription != null ? errorDescription : "Presentation denied";
@@ -615,12 +624,8 @@ public class VerifierController {
                         Map.of(),
                         "error=%s\nerror_description=%s".formatted(error, errorDescription),
                         null, vpTokenRaw, keyBindingJwt, effectiveDpop);
-                if (wantsJson) {
-                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .body(Map.of("error", viewMessage));
-                }
-                return resultView(state, viewMessage, false, steps.titles(), parseVpTokens(vpTokenRaw), vpTokenRaw, idToken, Map.of(), steps.details());
+                storeResult(state, viewMessage, false, steps, parseVpTokens(vpTokenRaw), vpTokenRaw, idToken, Map.of());
+                return callbackJsonResponse(resultUri.toString());
             }
             List<VpTokenEntry> vpTokens = extractVpTokens(vpTokenRaw);
             if (vpTokens.isEmpty()) {
@@ -637,12 +642,8 @@ public class VerifierController {
                         Map.of(),
                         "vp_token length=0",
                         null, vpTokenRaw, keyBindingJwt, effectiveDpop);
-                if (wantsJson) {
-                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .body(Map.of("error", "Missing vp_token"));
-                }
-                return resultView(state, "Missing vp_token", false, steps.titles(), List.of(), vpTokenRaw, idToken, Map.of(), steps.details());
+                storeResult(state, "Missing vp_token", false, steps, List.of(), vpTokenRaw, idToken, Map.of());
+                return callbackJsonResponse(resultUri.toString());
             }
             if (verifierSession.authType() != null && !verifierSession.authType().isBlank()) {
                 steps.add("Wallet client authentication",
@@ -701,7 +702,6 @@ public class VerifierController {
             );
             LOG.info("direct_post callback verified state={} tokens={} key_binding_present={} encrypted_vp={}", state, vpTokens.size(), keyBindingJwt != null && !keyBindingJwt.isBlank(),
                     tokenViewService.hasEncryptedToken(vpTokens.stream().map(VpTokenEntry::token).toList()));
-            LOG.info("direct_post callback response body:\n{}", formBody(state, vpTokenRaw, idToken, responseNonce, error, errorDescription, keyBindingJwt, effectiveDpop));
             Map<String, Object> combined = new LinkedHashMap<>();
             String kbFromPayload = null;
             for (int i = 0; i < payloads.size(); i++) {
@@ -719,13 +719,9 @@ public class VerifierController {
             if (effectiveDpop != null && !effectiveDpop.isBlank()) {
                 combined.put("dpop_token", effectiveDpop);
             }
-            if (wantsJson) {
-                return ResponseEntity.ok()
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(Map.of());
-            }
-            return resultView(state, "Verified credential(s)", true, steps.titles(), vpTokens.stream().map(VpTokenEntry::token).toList(), vpTokenRaw, idToken, combined,
-                    steps.details());
+            storeResult(state, "Verified credential(s)", true, steps,
+                    vpTokens.stream().map(VpTokenEntry::token).toList(), vpTokenRaw, idToken, combined);
+            return callbackJsonResponse(resultUri.toString());
         } catch (Exception e) {
             steps.add("Verification failed: " + e.getMessage(),
                     "Verification failed: " + e.getMessage(),
@@ -756,16 +752,50 @@ public class VerifierController {
                 );
             }
             LOG.info("direct_post callback verification failed state={} message={}", state, e.getMessage(), e);
-            if (wantsJson) {
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(Map.of("error", "Unable to verify credential: " + e.getMessage()));
-            }
-            return resultView(state, "Unable to verify credential: " + e.getMessage(), false, steps.titles(), parseVpTokens(vpTokenRaw), vpTokenRaw, idToken,
-                    Map.of(), steps.details());
+            storeResult(state, "Unable to verify credential: " + e.getMessage(), false, steps,
+                    parseVpTokens(vpTokenRaw), vpTokenRaw, idToken, Map.of());
+            return callbackJsonResponse(resultUri.toString());
         } finally {
             verifierSessionStateStore.remove(state);
         }
+    }
+
+    private ResponseEntity<Map<String, String>> callbackJsonResponse(String redirectUri) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("redirect_uri", redirectUri));
+    }
+
+    /**
+     * OID4VP 1.0 Section 8.2: The response_uri MUST respond with HTTP 200
+     * even when the authorization response could not be processed.
+     * When no redirect_uri is available, return an empty JSON object.
+     */
+    private ResponseEntity<Map<String, String>> callbackErrorResponse(String errorMessage) {
+        LOG.info("direct_post callback processing error: {}", errorMessage);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of());
+    }
+
+    private void storeResult(String state, String message, boolean success, VerificationSteps steps,
+                              List<String> vpTokens, String vpTokenRaw, String idToken, Map<String, Object> payload) {
+        if (state == null || state.isBlank()) {
+            return;
+        }
+        verificationResultStore.put(state, new VerificationResultStore.VerificationResult(
+                state, message, success, steps.titles(), steps.details(),
+                vpTokens, vpTokenRaw, idToken, payload));
+    }
+
+    @GetMapping("/result/{state}")
+    public Object showResult(@PathVariable("state") String state) {
+        VerificationResultStore.VerificationResult result = verificationResultStore.get(state);
+        if (result == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Result not found or expired");
+        }
+        return resultView(result.state(), result.message(), result.success(), result.stepTitles(),
+                result.vpTokens(), result.vpTokenRaw(), result.idToken(), result.payload(), result.stepDetails());
     }
 
     private String formatVerificationSteps(VerificationSteps steps) {
@@ -793,32 +823,6 @@ public class VerifierController {
         return sb.toString();
     }
 
-    private boolean wantsJson(HttpServletRequest request) {
-        if (request == null) {
-            return false;
-        }
-        String format = request.getParameter("format");
-        if (format != null && !format.isBlank()) {
-            if ("json".equalsIgnoreCase(format)) {
-                return true;
-            }
-            if ("html".equalsIgnoreCase(format)) {
-                return false;
-            }
-        }
-        String accept = request.getHeader(HttpHeaders.ACCEPT);
-        if (accept == null || accept.isBlank()) {
-            return false;
-        }
-        String lower = accept.toLowerCase();
-        if (lower.contains(MediaType.APPLICATION_JSON_VALUE)) {
-            return true;
-        }
-        if (lower.contains(MediaType.TEXT_HTML_VALUE)) {
-            return false;
-        }
-        return false;
-    }
 
     private String currentRequestExternalUrl(HttpServletRequest request) {
         if (request == null) {

@@ -270,17 +270,30 @@ class ConformanceUiIntegrationTest {
 
         HttpResponse<String> callback = client.send(
                 HttpRequest.newBuilder(URI.create(appBase + "/verifier/callback"))
-                        .header("Accept", "text/html")
                         .header("Content-Type", "application/x-www-form-urlencoded")
                         .POST(HttpRequest.BodyPublishers.ofString("state=" + URLEncoder.encode(state, StandardCharsets.UTF_8)))
                         .build(),
                 HttpResponse.BodyHandlers.ofString());
-        assertThat(callback.statusCode()).isEqualTo(400);
-        assertThat(callback.body()).contains("/css/verification-flow.css");
-        assertThat(callback.body()).contains("/js/verification-flow-view.js");
-        assertThat(callback.body()).contains("id=\"verificationFlowGraph\"");
-        assertThat(callback.body()).contains("data-flow-api-base=\"/verifier/api/flow\"");
-        assertThat(callback.body()).contains("data-flow-state=\"" + state + "\"");
+        assertThat(callback.statusCode()).isEqualTo(200);
+        Map<String, Object> callbackJson = OBJECT_MAPPER.readValue(callback.body(), Map.class);
+        assertThat(callbackJson).containsKey("redirect_uri");
+        String redirectUri = (String) callbackJson.get("redirect_uri");
+        assertThat(redirectUri).contains("/verifier/result/" + state);
+
+        // The redirect_uri uses the public base URL (with /wallet prefix);
+        // extract just the /verifier/result/... path for the local test server.
+        HttpResponse<String> resultPage = client.send(
+                HttpRequest.newBuilder(URI.create(appBase + "/verifier/result/" + state))
+                        .header("Accept", "text/html")
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(resultPage.statusCode()).isEqualTo(400);
+        assertThat(resultPage.body()).contains("/css/verification-flow.css");
+        assertThat(resultPage.body()).contains("/js/verification-flow-view.js");
+        assertThat(resultPage.body()).contains("id=\"verificationFlowGraph\"");
+        assertThat(resultPage.body()).contains("data-flow-api-base=\"/verifier/api/flow\"");
+        assertThat(resultPage.body()).contains("data-flow-state=\"" + state + "\"");
 
         HttpResponse<String> flow = client.send(
                 HttpRequest.newBuilder(URI.create(appBase + "/verifier/api/flow/" + URLEncoder.encode(state, StandardCharsets.UTF_8)))
@@ -296,22 +309,23 @@ class ConformanceUiIntegrationTest {
     }
 
     @Test
-    void verifierResultPageOmitsFlowViewWhenStateMissing() throws Exception {
+    void verifierCallbackReturnsEmptyJsonWhenStateMissing() throws Exception {
         String appBase = "http://localhost:" + port;
         HttpClient client = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .cookieHandler(new CookieManager(null, CookiePolicy.ACCEPT_ALL))
                 .build();
 
+        // OID4VP 1.0 Section 8.2: response_uri MUST respond with HTTP 200
         HttpResponse<String> callback = client.send(
                 HttpRequest.newBuilder(URI.create(appBase + "/verifier/callback"))
-                        .header("Accept", "text/html")
                         .header("Content-Type", "application/x-www-form-urlencoded")
                         .POST(HttpRequest.BodyPublishers.ofString(""))
                         .build(),
                 HttpResponse.BodyHandlers.ofString());
-        assertThat(callback.statusCode()).isEqualTo(400);
-        assertThat(callback.body()).doesNotContain("id=\"verificationFlowGraph\"");
+        assertThat(callback.statusCode()).isEqualTo(200);
+        Map<String, Object> json = OBJECT_MAPPER.readValue(callback.body(), Map.class);
+        assertThat(json).doesNotContainKey("redirect_uri");
     }
 
     private static void ensureConformanceStub() {

@@ -1213,8 +1213,10 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
             if (path == null || !path.isArray() || path.isEmpty()) {
                 return false;
             }
-            // Check the first element of the path (e.g., "family_name" or "place_of_birth")
-            String name = path.get(0).asText("");
+            // Use the last element of the path as the claim name
+            // mDoc paths are 2-element: ["eu.europa.ec.eudi.pid.1", "document_number"]
+            // SD-JWT paths are 1-element: ["document_number"]
+            String name = path.get(path.size() - 1).asText("");
             if (!supportedClaims.contains(name)) {
                 return false;
             }
@@ -1299,7 +1301,9 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
                 if (path == null || !path.isArray() || path.isEmpty()) {
                     continue;
                 }
-                String claimName = path.get(0).asText("");
+                // Use the last element of the path as the claim name
+                // mDoc paths are 2-element: ["eu.europa.ec.eudi.pid.1", "document_number"]
+                String claimName = path.get(path.size() - 1).asText("");
                 allClaimNames.add(claimName);
 
                 // If claim has an ID, map it for claim_sets lookup

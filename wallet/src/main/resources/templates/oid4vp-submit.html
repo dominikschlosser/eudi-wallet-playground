@@ -15,15 +15,30 @@
       </noscript>
     </form>
     <script>
-      // Wait for DOM ready and a short delay to ensure stable submission
+      // Post via fetch and follow the redirect_uri from the JSON response (OID4VP spec)
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', submitForm);
       } else {
         submitForm();
       }
       function submitForm() {
-        setTimeout(function() {
-          document.getElementById('submitForm').submit();
+        setTimeout(async function() {
+          var form = document.getElementById('submitForm');
+          try {
+            var resp = await fetch(form.action, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams(new FormData(form)).toString()
+            });
+            var json = await resp.json();
+            if (json.redirect_uri) {
+              window.location.href = json.redirect_uri;
+              return;
+            }
+          } catch (e) {
+            // Fallback: submit form directly (legacy behavior)
+          }
+          form.submit();
         }, 50);
       }
     </script>

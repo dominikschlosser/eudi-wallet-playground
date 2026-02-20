@@ -168,6 +168,15 @@ public class MdocVerifier {
     }
 
     private void verifySignature(Sign1Message sign1, String trustListId, VerificationStepSink steps) throws Exception {
+        if (trustResolver.isAllowAll(trustListId)) {
+            LOG.info("[OID4VP-MDOC] Trust list is 'allow-all', skipping signature verification");
+            if (steps != null) {
+                steps.add("Signature verification skipped (allow-all trust list)",
+                        "Trust list set to allow-all; credential signature was not checked.",
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
+            }
+            return;
+        }
         List<PublicKey> keys = trustResolver.publicKeys(trustListId);
         if (keys == null) {
             keys = List.of();

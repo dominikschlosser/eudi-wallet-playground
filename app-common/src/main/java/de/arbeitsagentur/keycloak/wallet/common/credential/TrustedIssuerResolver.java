@@ -29,9 +29,15 @@ import java.util.List;
  * Supplies trusted issuer keys for credential signature verification.
  */
 public interface TrustedIssuerResolver {
+    String ALLOW_ALL_ID = "allow-all";
+
     boolean verify(SignedJWT jwt, String trustListId);
 
     List<PublicKey> publicKeys(String trustListId);
+
+    default boolean isAllowAll(String trustListId) {
+        return ALLOW_ALL_ID.equals(trustListId);
+    }
 
     static boolean verifyWithKey(SignedJWT jwt, PublicKey key) {
         try {

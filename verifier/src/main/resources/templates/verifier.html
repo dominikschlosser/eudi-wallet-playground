@@ -16,7 +16,12 @@
         </div>
 	        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
 	          <button type="button" class="btn secondary" id="open-dcql-request">Open DCQL request</button>
-	          <button type="button" class="btn" id="use-sandbox-defaults" th:if="${sandboxAvailable}" th:attr="data-sandbox-url=@{/verifier/sandbox-defaults},data-mock-url=@{/verifier/mock-defaults}">Use Sandbox Defaults</button>
+	          <span th:if="${sandboxAvailable}" id="sandbox-buttons" style="display:inline-flex;gap:0.25rem;" th:attr="data-sandbox-url=@{/verifier/sandbox-defaults},data-mock-url=@{/verifier/mock-defaults}">
+	            <button type="button" class="btn" id="sandbox-sd-jwt">Sandbox SD-JWT</button>
+	            <button type="button" class="btn" id="sandbox-mdoc">Sandbox mDoc</button>
+	            <button type="button" class="btn" id="sandbox-both">Sandbox Both</button>
+	            <button type="button" class="btn secondary" id="sandbox-mock" style="display:none;">Use Mock Defaults</button>
+	          </span>
 	          <a class="btn secondary" th:href="@{/verifier/conformance}" aria-label="Open OIDF conformance UI">Conformance Suite</a>
 	          <a class="btn secondary" th:href="@{/}" aria-label="Go to wallet issuance UI">Go to Wallet</a>
 	        </div>
@@ -1053,14 +1058,49 @@
         setEncryption(encryptionEnabled);
         setMode("builder");
 
-        const sandboxBtn = document.getElementById("use-sandbox-defaults");
-        if (sandboxBtn) {
+        const sandboxButtons = document.getElementById("sandbox-buttons");
+        if (sandboxButtons) {
           let sandboxActive = false;
+          let sandboxData = null; // cached response from /sandbox-defaults
 
-          async function applyDefaults(url) {
-            const res = await fetch(url);
+          const sandboxSdJwtBtn = document.getElementById("sandbox-sd-jwt");
+          const sandboxMdocBtn = document.getElementById("sandbox-mdoc");
+          const sandboxBothBtn = document.getElementById("sandbox-both");
+          const sandboxMockBtn = document.getElementById("sandbox-mock");
+
+          async function fetchSandboxData() {
+            if (sandboxData) return sandboxData;
+            const res = await fetch(sandboxButtons.dataset.sandboxUrl);
             const data = await res.json();
-            if (data.available === false) { alert("Sandbox not configured."); return false; }
+            if (data.available === false) { alert("Sandbox not configured."); return null; }
+            sandboxData = data;
+            return data;
+          }
+
+          function applyDcql(dcqlJson) {
+            if (!dcqlJson) return;
+            dcqlRaw.value = dcqlJson;
+            rawInitialized = true;
+            try {
+              const parsed = JSON.parse(dcqlJson);
+              const creds = Array.isArray(parsed.credentials) ? parsed.credentials : [];
+              if (creds.length) {
+                builderState = { credentials: creds.map((c, idx) => {
+                  const claims = (Array.isArray(c.claims) ? c.claims : []).map(cl => {
+                    const path = Array.isArray(cl.path) ? cl.path : [];
+                    return { name: path.join("."), constValue: typeof cl.value !== "undefined" ? String(cl.value) : "", originalPath: path.length ? [...path] : null };
+                  });
+                  const meta = c.meta && typeof c.meta === "object" ? c.meta : null;
+                  return { id: c.id || "credential-" + (idx + 1), format: c.format || "all", meta, claims: claims.length ? claims : defaultClaims(), claimSets: [] };
+                }), credentialSets: Array.isArray(parsed.credential_sets) ? parsed.credential_sets : null };
+                descriptorCounter = builderState.credentials.length + 1;
+                renderBuilder();
+              }
+            } catch (e) { /* keep raw mode */ }
+            updatePreview();
+          }
+
+          function applyFormDefaults(data) {
             if (authTypeSelect && data.authType) authTypeSelect.value = data.authType;
             if (requestObjectMode && data.requestObjectMode) requestObjectMode.value = data.requestObjectMode;
             const requestUriMethodEl = document.getElementById("requestUriMethod");
@@ -1074,32 +1114,11 @@
             const walletAudienceEl = document.getElementById("walletAudience");
             if (walletAudienceEl && data.walletAudience != null) walletAudienceEl.value = data.walletAudience;
             if (clientIdInput && data.clientId != null) clientIdInput.value = data.clientId;
-            if (data.walletClientCert) sandboxBtn._certChain = data.walletClientCert;
+            if (data.walletClientCert) sandboxButtons._certChain = data.walletClientCert;
             const verifierInfoEl = document.getElementById("verifierInfo");
             if (verifierInfoEl && data.verifierInfo != null) verifierInfoEl.value = data.verifierInfo;
             const trustListEl = document.getElementById("trustList");
             if (trustListEl && data.trustListId) trustListEl.value = data.trustListId;
-            if (data.dcqlQuery) {
-              dcqlRaw.value = data.dcqlQuery;
-              rawInitialized = true;
-              try {
-                const parsed = JSON.parse(data.dcqlQuery);
-                const creds = Array.isArray(parsed.credentials) ? parsed.credentials : [];
-                if (creds.length) {
-                  builderState = { credentials: creds.map((c, idx) => {
-                    const claims = (Array.isArray(c.claims) ? c.claims : []).map(cl => {
-                      const path = Array.isArray(cl.path) ? cl.path : [];
-                      return { name: path.join("."), constValue: typeof cl.value !== "undefined" ? String(cl.value) : "", originalPath: path.length ? [...path] : null };
-                    });
-                    const meta = c.meta && typeof c.meta === "object" ? c.meta : null;
-                    return { id: c.id || "credential-" + (idx + 1), format: c.format || "all", meta, claims: claims.length ? claims : defaultClaims(), claimSets: [] };
-                  }), credentialSets: Array.isArray(parsed.credential_sets) ? parsed.credential_sets : null };
-                  descriptorCounter = builderState.credentials.length + 1;
-                  renderBuilder();
-                }
-              } catch (e) { /* keep raw mode */ }
-              updatePreview();
-            }
             if (data.clientMetadata && clientMetadataField) {
               clientMetadataField.value = data.clientMetadata;
               savedClientMetadata = data.clientMetadata;
@@ -1110,7 +1129,6 @@
               setEncryption(false);
             }
             refreshAuthSections();
-            return true;
           }
 
           function setSandboxMode(active, certChain) {
@@ -1124,19 +1142,49 @@
             if (verifierInfoEl) verifierInfoEl.readOnly = active;
           }
 
-          sandboxBtn.addEventListener("click", async () => {
+          function showSandboxButtons(sandboxMode) {
+            const isSandbox = !!sandboxMode;
+            sandboxSdJwtBtn.style.display = isSandbox ? "none" : "";
+            sandboxMdocBtn.style.display = isSandbox ? "none" : "";
+            sandboxBothBtn.style.display = isSandbox ? "none" : "";
+            sandboxMockBtn.style.display = isSandbox ? "" : "none";
+          }
+
+          async function activateSandbox(variant) {
             try {
-              const url = sandboxActive ? sandboxBtn.dataset.mockUrl : sandboxBtn.dataset.sandboxUrl;
-              const ok = await applyDefaults(url);
-              if (!ok) return;
-              sandboxActive = !sandboxActive;
-              sandboxBtn.textContent = sandboxActive ? "Use Mock Defaults" : "Use Sandbox Defaults";
-              setSandboxMode(sandboxActive, sandboxActive ? (sandboxBtn._certChain || "") : "");
+              const data = await fetchSandboxData();
+              if (!data) return;
+              applyFormDefaults(data);
+              const dcqlKey = variant === "sd-jwt" ? "dcqlSdJwt" : variant === "mdoc" ? "dcqlMdoc" : "dcqlBoth";
+              applyDcql(data[dcqlKey] || data.dcqlQuery);
+              sandboxActive = true;
+              showSandboxButtons(true);
+              setSandboxMode(true, sandboxButtons._certChain || "");
               refreshBindingInsights();
             } catch (e) {
-              alert("Failed to load defaults: " + e.message);
+              alert("Failed to load sandbox defaults: " + e.message);
             }
-          });
+          }
+
+          async function activateMock() {
+            try {
+              const res = await fetch(sandboxButtons.dataset.mockUrl);
+              const data = await res.json();
+              applyFormDefaults(data);
+              applyDcql(data.dcqlQuery);
+              sandboxActive = false;
+              showSandboxButtons(false);
+              setSandboxMode(false, "");
+              refreshBindingInsights();
+            } catch (e) {
+              alert("Failed to load mock defaults: " + e.message);
+            }
+          }
+
+          sandboxSdJwtBtn.addEventListener("click", () => activateSandbox("sd-jwt"));
+          sandboxMdocBtn.addEventListener("click", () => activateSandbox("mdoc"));
+          sandboxBothBtn.addEventListener("click", () => activateSandbox("both"));
+          sandboxMockBtn.addEventListener("click", () => activateMock());
         }
       })();
 

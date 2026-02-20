@@ -180,6 +180,9 @@ public class TrustListService implements
 
     @Override
     public boolean verify(SignedJWT jwt, String trustListId) {
+        if (isAllowAll(trustListId)) {
+            return true;
+        }
         if (jwt.getHeader().getAlgorithm() == null) {
             return false;
         }
@@ -200,6 +203,7 @@ public class TrustListService implements
 
     public List<TrustListOption> options() {
         List<TrustListOption> opts = new ArrayList<>();
+        opts.add(new TrustListOption(ALLOW_ALL_ID, "Allow all (skip signature verification)"));
         for (String id : trustLists.keySet()) {
             String rawLabel = labels.getOrDefault(id, id);
             String label;
