@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.5](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.4...v1.7.5) (2026-02-20)
+
+
+### Bug Fixes
+
+* trust lists and vp_formats_supported ([42b0799](https://github.com/ba-itsys/eudi-wallet-playground/commit/42b0799446f3fe17e63311e4c9c821d46ffec151))
+
 ## [1.7.4](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.3...v1.7.4) (2026-02-20)
 
 
