@@ -9,3 +9,4 @@ demo-app/data/*
 .run/
 demo-app/demo-app/
 sandbox/
+.playwright-mcp/

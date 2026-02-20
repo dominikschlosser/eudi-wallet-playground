@@ -30,7 +30,7 @@ verifier:
   client-id: ${VERIFIER_CLIENT_ID:wallet-verifier}
   keys-file: ${VERIFIER_KEYS_FILE:config/verifier-keys.json}
   max-request-object-inline-bytes: ${VERIFIER_MAX_REQUEST_OBJECT_INLINE_BYTES:12000}
-  etsi-trust-list-base-url: ${VERIFIER_ETSI_TRUST_LIST_BASE_URL:}
+  etsi-trust-list-base-url: ${VERIFIER_ETSI_TRUST_LIST_BASE_URL:https://bmi.usercontent.opencode.de/eudi-wallet/test-trust-lists/}
   client-cert-file: ${VERIFIER_CLIENT_CERT_FILE:../sandbox/sandbox-combined.pem}
   sandbox-verifier-info-file: ${VERIFIER_SANDBOX_VERIFIER_INFO_FILE:../sandbox/sandbox-verifier-info.json}
   sandbox-wallet-auth-endpoint: ${VERIFIER_SANDBOX_WALLET_AUTH_ENDPOINT:openid4vp://}

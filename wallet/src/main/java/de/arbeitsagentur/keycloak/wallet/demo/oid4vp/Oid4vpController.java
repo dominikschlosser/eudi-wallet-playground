@@ -646,7 +646,7 @@ public class Oid4vpController {
             ECKey key = walletKeyService.loadOrCreateKey();
             Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("jwks", new JWKSet(key.toPublicJWK()).toJSONObject(false));
-            meta.put("request_object_signing_alg_values_supported", List.of("RS256"));
+            meta.put("request_object_signing_alg_values_supported", List.of("ES256", "RS256"));
             meta.put("request_object_encryption_alg_values_supported", List.of("ECDH-ES+A256KW"));
             meta.put("request_object_encryption_enc_values_supported", List.of("A256GCM"));
             Map<String, Object> formats = new LinkedHashMap<>();

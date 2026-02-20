@@ -30,6 +30,7 @@ import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Integration test that fetches real ETSI trust lists from the BMI test sandbox
@@ -81,19 +82,26 @@ class EtsiTrustListBmiIntegrationTest {
         assertThat(result.allPublicKeys()).as("PID provider must have extractable public keys").isNotEmpty();
     }
 
-    private static String fetchTrustList(String url) throws Exception {
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(30))
-                .GET()
-                .build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        assertThat(response.statusCode())
-                .as("HTTP status for " + url)
-                .isEqualTo(200);
-        return response.body().trim();
+    private static String fetchTrustList(String url) {
+        try {
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .build();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(30))
+                    .GET()
+                    .build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            assumeTrue(response.statusCode() == 200,
+                    "BMI trust list endpoint returned " + response.statusCode() + " for " + url);
+            String body = response.body().trim();
+            assumeTrue(body != null && !body.isBlank(),
+                    "BMI trust list endpoint returned empty body for " + url);
+            return body;
+        } catch (Exception e) {
+            assumeTrue(false, "BMI trust list endpoint not reachable: " + e.getMessage());
+            return null; // unreachable
+        }
     }
 }

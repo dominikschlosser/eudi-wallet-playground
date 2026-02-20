@@ -1555,6 +1555,51 @@ class WalletIntegrationTest {
     }
 
     @Test
+    void presentationWithEcKeyX509HashRequestUri() throws Exception {
+        // Simulates sandbox-like configuration: EC key for x509_hash with request_uri mode.
+        // This tests that the verifier correctly re-signs request objects with ES256
+        // when the wallet advertises ES256 support (per OID4VP 1.0 Section 5.10).
+        URI base = URI.create("http://localhost:" + serverPort);
+        BasicCookieStore cookieStore = new BasicCookieStore();
+        HttpClientContext context = HttpClientContext.create();
+        context.setCookieStore(cookieStore);
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setRedirectsEnabled(false)
+                .setCookieSpec(StandardCookieSpec.RELAXED)
+                .build();
+        try (CloseableHttpClient client = HttpClients.custom()
+                .setDefaultCookieStore(cookieStore)
+                .setDefaultRequestConfig(requestConfig)
+                .build()) {
+            authenticateThroughLogin(client, context, base);
+            try (CloseableHttpResponse issueResponse = client.execute(new HttpPost(base.resolve("/api/issue")), context)) {
+                assertThat(issueResponse.getCode()).isEqualTo(200);
+            }
+            refreshKeycloakTrustList();
+            SelfSignedMaterial ecMaterial = generateEcSelfSignedCert();
+            String clientId = "x509_hash:" + ecMaterial.hash();
+            String dcql = fetchDefaultDcqlQuery(client, context, base);
+            URI walletAuth = startPresentationRequest(client, context, base, dcql, List.of("given_name"), null,
+                    clientId, "x509_hash", ecMaterial.combinedPem(), null, null, "request_uri");
+            List<String> params = URLEncodedUtils.parse(walletAuth, StandardCharsets.UTF_8).stream()
+                    .map(NameValuePair::getName)
+                    .toList();
+            assertThat(params).contains("client_id").contains("request_uri");
+            PresentationForm form = continuePresentationFlow(client, context, base, walletAuth, "accept",
+                    List.of("given_name"), null, false, Map.of(), null);
+            HttpPost callbackPost = new HttpPost(form.action());
+            callbackPost.setEntity(new UrlEncodedFormEntity(toParams(form.fields()), StandardCharsets.UTF_8));
+            try (CloseableHttpResponse verifierResult = client.execute(callbackPost, context)) {
+                String body = new String(verifierResult.getEntity().getContent().readAllBytes(), StandardCharsets.UTF_8);
+                assertThat(verifierResult.getCode())
+                        .withFailMessage("Verifier callback failed. Body:%n%s", body)
+                        .isEqualTo(200);
+                assertThat(body).contains("Verified credential");
+            }
+        }
+    }
+
+    @Test
     void requestUriResponseIsEncryptedWithWalletNonce() throws Exception {
         URI base = URI.create("http://localhost:" + serverPort);
         BasicCookieStore cookieStore = new BasicCookieStore();
@@ -2344,15 +2389,29 @@ class WalletIntegrationTest {
         return new SelfSignedMaterial(certPem, keyPem, combined, hash);
     }
 
-    private String toPem(byte[] data, String type) {
-        String base64 = Base64.getEncoder().encodeToString(data);
-        StringBuilder sb = new StringBuilder();
-        sb.append("-----BEGIN ").append(type).append("-----\n");
-        for (int i = 0; i < base64.length(); i += 64) {
-            sb.append(base64, i, Math.min(base64.length(), i + 64)).append("\n");
-        }
-        sb.append("-----END ").append(type).append("-----");
-        return sb.toString();
+    private SelfSignedMaterial generateEcSelfSignedCert() throws Exception {
+        // Pre-generated EC P-256 self-signed certificate (valid 10 years)
+        String certPem = "-----BEGIN CERTIFICATE-----\n" +
+                "MIIBizCCATGgAwIBAgIUWuwzwBTp/A746cI7voS+WmmTjKgwCgYIKoZIzj0EAwIw\n" +
+                "GzEZMBcGA1UEAwwQRUMgVmVyaWZpZXIgVGVzdDAeFw0yNjAyMjAxMTIxNDZaFw0z\n" +
+                "NjAyMTgxMTIxNDZaMBsxGTAXBgNVBAMMEEVDIFZlcmlmaWVyIFRlc3QwWTATBgcq\n" +
+                "hkjOPQIBBggqhkjOPQMBBwNCAAShO+o0Y4bTkkiG8NFsAVWe8BCL/s4WLGkS6Gij\n" +
+                "ILm+5MPCctzQ7nAsJDDxbtso5oyvm0OtFqA+p4RSGrUVBlZVo1MwUTAdBgNVHQ4E\n" +
+                "FgQUhRNNu0KrkaCNV4YwJb5vlBwmuvMwHwYDVR0jBBgwFoAUhRNNu0KrkaCNV4Yw\n" +
+                "Jb5vlBwmuvMwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiBC8i4i\n" +
+                "F1wxEduCqAyicI/hxxafg2UoYbKiJYFAXdtY/AIhAIbeTdrXfV5YNDsebKCwLX7l\n" +
+                "OJ6/1fBLzrv7qRI0pVEe\n" +
+                "-----END CERTIFICATE-----";
+        String keyPem = "-----BEGIN PRIVATE KEY-----\n" +
+                "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg7NAKpBLNCJRknyix\n" +
+                "tkHYTyw4eNYfs9EEFUkfg6kaxuahRANCAAShO+o0Y4bTkkiG8NFsAVWe8BCL/s4W\n" +
+                "LGkS6GijILm+5MPCctzQ7nAsJDDxbtso5oyvm0OtFqA+p4RSGrUVBlZV\n" +
+                "-----END PRIVATE KEY-----";
+        byte[] der = Base64.getMimeDecoder().decode(certPem.replaceAll("-----[^-]+-----", "").replaceAll("\\s+", ""));
+        String hash = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(MessageDigest.getInstance("SHA-256").digest(der));
+        String combined = certPem + "\n" + keyPem;
+        return new SelfSignedMaterial(certPem, keyPem, combined, hash);
     }
 
     private record PresentationForm(URI action, Map<String, String> fields) {
