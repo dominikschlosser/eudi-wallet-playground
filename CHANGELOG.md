@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.3](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.2...v1.7.3) (2026-02-20)
+
+
+### Bug Fixes
+
+* use EC for advertised enc-key in client_metadata ([b17a3b9](https://github.com/ba-itsys/eudi-wallet-playground/commit/b17a3b9faeb57f98c84ef54a24d08e0186fe845c))
+
 ## [1.7.2](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.1...v1.7.2) (2026-02-20)
 
 
