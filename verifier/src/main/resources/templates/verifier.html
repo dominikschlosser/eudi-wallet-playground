@@ -497,22 +497,15 @@
         const defaultClaimOptions = [
           "given_name",
           "family_name",
-          "given_name_birth",
-          "family_name_birth",
-          "birth_date",
+          "birth_family_name",
+          "birthdate",
           "place_of_birth",
-          "birth_country",
-          "gender",
-          "age_over_18",
-          "age_over_21",
-          "age_over_65",
           "nationalities",
           "address",
-          "document_number",
+          "age_equal_or_over",
           "issuing_country",
           "issuing_authority",
-          "expiry_date",
-          "personal_id"
+          "source_document_type"
         ];
         const knownFormats = ["dc+sd-jwt", "mso_mdoc", "all"];
         const defaultCredentialFormat = knownFormats[0];
