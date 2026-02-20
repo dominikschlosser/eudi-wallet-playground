@@ -16,7 +16,7 @@
         </div>
 	        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
 	          <button type="button" class="btn secondary" id="open-dcql-request">Open DCQL request</button>
-	          <button type="button" class="btn" id="use-sandbox-defaults" th:if="${sandboxAvailable}" th:attr="data-url=@{/verifier/sandbox-defaults}">Use Sandbox Defaults</button>
+	          <button type="button" class="btn" id="use-sandbox-defaults" th:if="${sandboxAvailable}" th:attr="data-sandbox-url=@{/verifier/sandbox-defaults},data-mock-url=@{/verifier/mock-defaults}">Use Sandbox Defaults</button>
 	          <a class="btn secondary" th:href="@{/verifier/conformance}" aria-label="Open OIDF conformance UI">Conformance Suite</a>
 	          <a class="btn secondary" th:href="@{/}" aria-label="Go to wallet issuance UI">Go to Wallet</a>
 	        </div>
@@ -81,11 +81,20 @@
             <small style="color:#475569;">Use direct_post.jwt for conformance encrypted responses.</small>
           </div>
           <div id="auth-x509">
-            <label for="walletClientCert">Client certificate (PEM)</label>
-            <textarea id="walletClientCert" name="walletClientCert" placeholder="-----BEGIN CERTIFICATE-----&#10;-----BEGIN PRIVATE KEY-----" style="width:100%;min-height:120px;padding:0.75rem;border-radius:10px;border:1px solid #1f2937;"></textarea>
-            <div class="descriptor-actions" style="margin-top:0.35rem;align-items:center;justify-content:space-between;flex-wrap:wrap;">
-              <button type="button" class="btn secondary mini" id="derive-x509-hash">Use x509_hash client_id</button>
-              <small style="color:#475569;">Include private key for PoP. Used for x509-bound <code>client_id</code>; the helper fills <code>x509_hash:&lt;sha256(cert)&gt;</code> and the request is signed with this key. If left empty, the verifier will use its own certificate (<span th:text="${defaultX509ClientId}">x509_hash</span>).</small>
+            <div id="x509-editable">
+              <label for="walletClientCert">Client certificate + private key (PEM)</label>
+              <textarea id="walletClientCert" name="walletClientCert" placeholder="-----BEGIN CERTIFICATE-----&#10;-----BEGIN PRIVATE KEY-----" style="width:100%;min-height:120px;padding:0.75rem;border-radius:10px;border:1px solid #1f2937;"></textarea>
+              <div class="descriptor-actions" style="margin-top:0.35rem;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+                <button type="button" class="btn secondary mini" id="derive-x509-hash">Use x509_hash client_id</button>
+                <small style="color:#475569;">Include private key for PoP. Used for x509-bound <code>client_id</code>; the helper fills <code>x509_hash:&lt;sha256(cert)&gt;</code> and the request is signed with this key. If left empty, the verifier will use its own certificate (<span th:text="${defaultX509ClientId}">x509_hash</span>).</small>
+              </div>
+            </div>
+            <div id="x509-sandbox" style="display:none;">
+              <label>Sandbox certificate chain (read-only)</label>
+              <textarea id="sandboxCertDisplay" readonly style="width:100%;min-height:100px;padding:0.75rem;border-radius:10px;border:1px solid #1f2937;background:#f8fafc;font-family:monospace;font-size:0.8rem;"></textarea>
+              <div style="margin-top:0.35rem;">
+                <small style="color:#475569;">Private key: <strong>stored server-side only</strong> (not sent to browser). The sandbox key file is used automatically for signing.</small>
+              </div>
             </div>
           </div>
           <div id="auth-attestation" style="display:none;">
@@ -167,8 +176,21 @@
               <div class="descriptor-actions" style="margin-top:0.75rem;">
                 <button type="button" class="btn secondary mini" data-action="add-descriptor">+ Add credential request</button>
               </div>
+              <div id="credential-sets-panel" style="display:none;margin-top:0.75rem;">
+                <div class="descriptor-card" style="background:#f0f9ff;">
+                  <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                      <h4 style="margin:0;">credential_sets</h4>
+                      <small style="color:#475569;">Top-level credential set options (e.g. accept SD-JWT <em>or</em> mDoc)</small>
+                    </div>
+                    <button type="button" class="btn secondary mini" id="remove-credential-sets">Remove</button>
+                  </div>
+                  <textarea id="credential-sets-json" rows="4" style="font-family:monospace;font-size:0.85rem;margin-top:0.5rem;width:100%;padding:0.5rem;border-radius:8px;border:1px solid #1f2937;"></textarea>
+                </div>
+              </div>
               <div style="margin-top:0.75rem;">
-                <label>Generated dcql_query (read-only)</label>
+                <label>Request object preview (read-only)</label>
+                <small style="color:#475569;">Preview of the JWT claims sent to the wallet. <code>state</code>, <code>nonce</code>, <code>response_uri</code>, and <code>exp</code> are generated on submit.</small>
                 <pre id="dcql-builder-preview" class="dcql-preview">Loading builder...</pre>
               </div>
             </div>
@@ -192,6 +214,7 @@
               </div>
             </div>
             <input type="hidden" id="dcqlQueryInput" name="dcqlQuery" />
+            <input type="hidden" id="useSandboxKey" name="useSandboxKey" value="false" />
           </div>
         </div>
         <div class="actions">
@@ -283,6 +306,9 @@
         const modeBuilderBtn = document.getElementById("dcql-mode-builder");
         const modeRawBtn = document.getElementById("dcql-mode-raw");
         const resetRawBtn = document.getElementById("dcql-reset-from-builder");
+        const credentialSetsPanel = document.getElementById("credential-sets-panel");
+        const credentialSetsJson = document.getElementById("credential-sets-json");
+        const removeCredentialSetsBtn = document.getElementById("remove-credential-sets");
         const openBtn = document.getElementById("open-dcql-request");
         const addDescriptorBtn = document.querySelector('[data-action="add-descriptor"]');
         const clientMetadataField = document.getElementById("clientMetadata");
@@ -295,6 +321,10 @@
         const defaultClientMetadata = clientMetadataField ? clientMetadataField.dataset.default || "" : "";
         const clientIdInput = document.getElementById("walletClientId");
         const clientCertInput = document.getElementById("walletClientCert");
+        const x509Editable = document.getElementById("x509-editable");
+        const x509Sandbox = document.getElementById("x509-sandbox");
+        const sandboxCertDisplay = document.getElementById("sandboxCertDisplay");
+        const useSandboxKeyInput = document.getElementById("useSandboxKey");
         const deriveX509Btn = document.getElementById("derive-x509-hash");
         const authTypeSelect = document.getElementById("authType");
         const requestObjectModeContainer = document.getElementById("request-object-mode");
@@ -367,6 +397,14 @@
           let source = defaultX509Source === "verifier_self_signed" ? "Verifier self-signed (auto)" : defaultX509Source;
           if (mode === "x509_san_dns") {
             const sanId = clientIdInput?.value || defaultX509SanId || "";
+            if (sandboxCertDisplay?.value.trim()) {
+              certText = sandboxCertDisplay.value.trim();
+              source = "Sandbox certificate (server-side key)";
+            } else if (clientCertInput?.value.trim()) {
+              certText = firstPemBlock(clientCertInput.value.trim());
+              certText = certText ? "-----BEGIN CERTIFICATE-----\n" + certText + "\n-----END CERTIFICATE-----" : clientCertInput.value.trim();
+              source = "Client-supplied PEM";
+            }
             if (bindingX509Hash) bindingX509Hash.textContent = sanId || "n/a";
             if (bindingX509Source) bindingX509Source.textContent = source || "";
             if (bindingX509Cert) bindingX509Cert.value = certText || "";
@@ -444,6 +482,13 @@
           });
         });
 
+        // Update request preview when any relevant form field changes
+        for (const id of ["walletClientId", "responseType", "responseMode", "walletAudience", "verifierInfo", "clientMetadata"]) {
+          const el = document.getElementById(id);
+          el?.addEventListener("input", () => updatePreview(false));
+          el?.addEventListener("change", () => updatePreview(false));
+        }
+
         const defaultClaimOptions = [
           "given_name",
           "family_name",
@@ -470,7 +515,7 @@
         ];
         const knownFormats = ["dc+sd-jwt", "mso_mdoc", "all"];
         const defaultCredentialFormat = knownFormats[0];
-        let builderState = { credentials: [] };
+        let builderState = { credentials: [], credentialSets: null };
         let rawInitialized = false;
         let mode = "builder";
         let descriptorCounter = 1;
@@ -492,8 +537,8 @@
           return {
             id: id || nextDescriptorId(),
             format: format || defaultCredentialFormat,
+            meta: null,
             claims: defaultClaims(),
-            credentialSets: [],
             claimSets: []
           };
         }
@@ -581,22 +626,9 @@
                 const name = path.length ? path.join(".") : "";
                 const val = typeof cl.value !== "undefined" && cl.value !== null ? String(cl.value) : "";
                 if (name) {
-                  claims.push({ name, constValue: val });
+                  claims.push({ name, constValue: val, originalPath: path.length ? [...path] : null });
                 }
               });
-              const credentialSets = [];
-              if (Array.isArray(c.credential_set)) {
-                c.credential_set.forEach((cs) => {
-                  if (typeof cs === "string" && cs.trim()) {
-                    credentialSets.push(cs.trim());
-                  } else if (cs && typeof cs === "object") {
-                    const candidate = cs.id || cs.type || cs.vct || cs.format;
-                    if (candidate && String(candidate).trim()) {
-                      credentialSets.push(String(candidate).trim());
-                    }
-                  }
-                });
-              }
               const claimSets = [];
               if (Array.isArray(c.claim_set)) {
                 c.claim_set.forEach((set) => {
@@ -634,15 +666,16 @@
               }
               const format =
                 typeof c.format === "string" && c.format.trim() ? c.format.trim() : "all";
+              const meta = c.meta && typeof c.meta === "object" ? c.meta : null;
               return {
                 id: c.id || `credential-${idx + 1}`,
                 format,
+                meta,
                 claims: claims.length ? claims : defaultClaims(),
-                credentialSets,
                 claimSets
               };
             });
-            builderState = { credentials: descriptors };
+            builderState = { credentials: descriptors, credentialSets: Array.isArray(parsed.credential_sets) ? parsed.credential_sets : null };
             descriptorCounter = descriptors.length + 1;
           } catch (e) {
             builderState = defaultBuilderState();
@@ -669,7 +702,7 @@
             const claims = (descriptor.claims || [])
               .filter((c) => c.name && c.name.trim())
               .map((claim) => {
-                const segments = claim.name.trim().split(".").filter(Boolean);
+                const segments = claim.originalPath || claim.name.trim().split(".").filter(Boolean);
                 const entry = { path: segments };
                 if (claim.constValue && claim.constValue.trim()) {
                   entry.value = claim.constValue.trim();
@@ -684,11 +717,10 @@
             if (formatValue && formatValue !== "all") {
               base.format = formatValue;
             }
-            const credentialSets = Array.isArray(descriptor.credentialSets) ? descriptor.credentialSets.filter((v) => v && v.trim()) : [];
-            const claimSets = Array.isArray(descriptor.claimSets) ? descriptor.claimSets.filter((v) => v && v.trim()) : [];
-            if (credentialSets.length) {
-              base.credential_set = credentialSets.map((value) => ({ id: value }));
+            if (descriptor.meta && typeof descriptor.meta === "object") {
+              base.meta = descriptor.meta;
             }
+            const claimSets = Array.isArray(descriptor.claimSets) ? descriptor.claimSets.filter((v) => v && v.trim()) : [];
             if (claimSets.length) {
               base.claim_set = claimSets.map((set) => {
                 const names = set.split(",").map((s) => s.trim()).filter(Boolean);
@@ -699,6 +731,9 @@
             return base;
           });
           const dcql = { credentials };
+          if (Array.isArray(builderState.credentialSets) && builderState.credentialSets.length) {
+            dcql.credential_sets = builderState.credentialSets;
+          }
           if (encryptionEnabled && clientMeta) {
             dcql.client_metadata = clientMeta;
           }
@@ -721,6 +756,13 @@
           } catch (e) {
             return raw;
           }
+        }
+
+        function credentialTypeValue(descriptor) {
+          if (!descriptor.meta) return "";
+          if (descriptor.format === "mso_mdoc" && descriptor.meta.doctype_value) return descriptor.meta.doctype_value;
+          if (Array.isArray(descriptor.meta.vct_values) && descriptor.meta.vct_values.length) return descriptor.meta.vct_values[0];
+          return "";
         }
 
         function renderBuilder() {
@@ -767,6 +809,10 @@
                         .join("")}
                     </select>
                   </div>
+                  <div style="flex:1;min-width:200px;${selectValue === "all" ? "display:none;" : ""}" data-role="credential-type-wrapper" data-di="${di}">
+                    <label style="font-weight:600;">${selectValue === "mso_mdoc" ? "Document type (doctype)" : "Credential type (vct)"}</label>
+                    <input type="text" data-field="credential-type" data-di="${di}" placeholder="${selectValue === "mso_mdoc" ? "eu.europa.ec.eudi.pid.1" : "urn:eudi:pid:de:1"}" value="${credentialTypeValue(descriptor)}" style="padding:0.55rem;border-radius:8px;border:1px solid #1f2937;min-width:200px;" />
+                  </div>
                 </div>
                 <div style="margin-top:0.5rem;display:flex;gap:0.35rem;flex-wrap:wrap;">
                   <button type="button" class="btn secondary mini soft" data-action="add-claim" data-di="${di}">+ Add claim</button>
@@ -776,22 +822,61 @@
                   ${claimRows || ""}
                 </div>
                 <div class="tag-row">
-                  <label style="font-weight:600;">credential_set (comma separated)</label>
-                  <input type="text" data-field="credential-set" data-di="${di}" placeholder="e.g. pid, id-wallet" value="${Array.isArray(descriptor.credentialSets) ? descriptor.credentialSets.join(', ') : ''}" />
-                </div>
-                <div class="tag-row">
                   <label style="font-weight:600;">claim_set (comma separated)</label>
                   <input type="text" data-field="claim-set" data-di="${di}" placeholder="e.g. name, address" value="${Array.isArray(descriptor.claimSets) ? descriptor.claimSets.join(', ') : ''}" />
                 </div>
               </div>
             `;
           }).join("");
+          if (credentialSetsPanel) {
+            if (Array.isArray(builderState.credentialSets) && builderState.credentialSets.length) {
+              credentialSetsPanel.style.display = "block";
+              credentialSetsJson.value = JSON.stringify(builderState.credentialSets, null, 2);
+            } else {
+              credentialSetsPanel.style.display = "none";
+              credentialSetsJson.value = "";
+            }
+          }
+        }
+
+        function buildRequestObjectPreview() {
+          const dcql = buildDcqlObject();
+          const clientId = clientIdInput?.value || "";
+          const responseType = document.getElementById("responseType")?.value || "vp_token";
+          const responseMode = responseModeSelect?.value || "direct_post";
+          const audience = document.getElementById("walletAudience")?.value || "";
+          const preview = {
+            iss: clientId,
+            client_id: clientId,
+            response_type: responseType,
+            response_mode: responseMode,
+            response_uri: "<generated on submit>",
+            state: "<generated on submit>",
+            nonce: "<generated on submit>"
+          };
+          if (audience) preview.aud = audience;
+          // dcql_query: remove client_metadata (it's a top-level claim, not inside dcql_query)
+          const dcqlForPreview = { ...dcql };
+          delete dcqlForPreview.client_metadata;
+          preview.dcql_query = dcqlForPreview;
+          if (encryptionEnabled) {
+            const meta = collectClientMetadata();
+            if (meta) preview.client_metadata = meta;
+          } else if (mode === "raw" && clientMetadataField?.value.trim()) {
+            try { preview.client_metadata = JSON.parse(clientMetadataField.value); } catch(e) {}
+          }
+          const verifierInfoEl = document.getElementById("verifierInfo");
+          if (verifierInfoEl?.value.trim()) {
+            try { preview.verifier_info = JSON.parse(verifierInfoEl.value); } catch(e) {}
+          }
+          preview.exp = "<generated on submit>";
+          return preview;
         }
 
         function updatePreview(updateHidden = true) {
           const dcql = buildDcqlObject();
-          const pretty = JSON.stringify(dcql, null, 2);
-          dcqlPreview.textContent = pretty;
+          const preview = buildRequestObjectPreview();
+          dcqlPreview.textContent = JSON.stringify(preview, null, 2);
           if (mode === "builder" && updateHidden) {
             dcqlHidden.value = JSON.stringify(dcql);
           }
@@ -839,16 +924,26 @@
             descriptor.id = event.target.value;
           } else if (event.target.dataset.field === "format-select") {
             descriptor.format = event.target.value;
+            // Re-render to update credential-type label/placeholder/visibility
+            renderBuilder();
           } else if (event.target.dataset.field === "name" || event.target.dataset.field === "const") {
             const ci = Number(event.target.dataset.ci);
             if (Number.isNaN(ci) || !descriptor.claims[ci]) return;
             if (event.target.dataset.field === "name") {
               descriptor.claims[ci].name = event.target.value;
+              descriptor.claims[ci].originalPath = null;
             } else {
               descriptor.claims[ci].constValue = event.target.value;
             }
-          } else if (event.target.dataset.field === "credential-set") {
-            descriptor.credentialSets = event.target.value.split(",").map((v) => v.trim()).filter(Boolean);
+          } else if (event.target.dataset.field === "credential-type") {
+            const val = event.target.value.trim();
+            if (!val) {
+              descriptor.meta = null;
+            } else if (descriptor.format === "mso_mdoc") {
+              descriptor.meta = { doctype_value: val };
+            } else {
+              descriptor.meta = { vct_values: [val] };
+            }
           } else if (event.target.dataset.field === "claim-set") {
             descriptor.claimSets = event.target.value.split(",").map((v) => v.trim()).filter(Boolean);
           }
@@ -892,6 +987,20 @@
         });
 
         addDescriptorBtn?.addEventListener("click", addDescriptor);
+
+        credentialSetsJson?.addEventListener("input", () => {
+          try {
+            const parsed = JSON.parse(credentialSetsJson.value);
+            builderState.credentialSets = Array.isArray(parsed) ? parsed : null;
+          } catch (e) { /* keep current value until valid JSON */ }
+          updatePreview();
+        });
+
+        removeCredentialSetsBtn?.addEventListener("click", () => {
+          builderState.credentialSets = null;
+          renderBuilder();
+          updatePreview();
+        });
 
         dcqlRaw?.addEventListener("input", () => {
           if (mode === "raw") {
@@ -943,58 +1052,89 @@
         updatePreview();
         setEncryption(encryptionEnabled);
         setMode("builder");
-        refreshQueryPanels();
 
         const sandboxBtn = document.getElementById("use-sandbox-defaults");
         if (sandboxBtn) {
+          let sandboxActive = false;
+
+          async function applyDefaults(url) {
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.available === false) { alert("Sandbox not configured."); return false; }
+            if (authTypeSelect && data.authType) authTypeSelect.value = data.authType;
+            if (requestObjectMode && data.requestObjectMode) requestObjectMode.value = data.requestObjectMode;
+            const requestUriMethodEl = document.getElementById("requestUriMethod");
+            if (requestUriMethodEl && data.requestUriMethod) requestUriMethodEl.value = data.requestUriMethod;
+            const responseTypeEl = document.getElementById("responseType");
+            if (responseTypeEl && data.responseType) responseTypeEl.value = data.responseType;
+            const responseModeEl = document.getElementById("responseMode");
+            if (responseModeEl && data.responseMode) responseModeEl.value = data.responseMode;
+            const walletAuthEl = document.getElementById("walletAuthEndpoint");
+            if (walletAuthEl && data.walletAuthEndpoint != null) walletAuthEl.value = data.walletAuthEndpoint;
+            const walletAudienceEl = document.getElementById("walletAudience");
+            if (walletAudienceEl && data.walletAudience != null) walletAudienceEl.value = data.walletAudience;
+            if (clientIdInput && data.clientId != null) clientIdInput.value = data.clientId;
+            if (data.walletClientCert) sandboxBtn._certChain = data.walletClientCert;
+            const verifierInfoEl = document.getElementById("verifierInfo");
+            if (verifierInfoEl && data.verifierInfo != null) verifierInfoEl.value = data.verifierInfo;
+            const trustListEl = document.getElementById("trustList");
+            if (trustListEl && data.trustListId) trustListEl.value = data.trustListId;
+            if (data.dcqlQuery) {
+              dcqlRaw.value = data.dcqlQuery;
+              rawInitialized = true;
+              try {
+                const parsed = JSON.parse(data.dcqlQuery);
+                const creds = Array.isArray(parsed.credentials) ? parsed.credentials : [];
+                if (creds.length) {
+                  builderState = { credentials: creds.map((c, idx) => {
+                    const claims = (Array.isArray(c.claims) ? c.claims : []).map(cl => {
+                      const path = Array.isArray(cl.path) ? cl.path : [];
+                      return { name: path.join("."), constValue: typeof cl.value !== "undefined" ? String(cl.value) : "", originalPath: path.length ? [...path] : null };
+                    });
+                    const meta = c.meta && typeof c.meta === "object" ? c.meta : null;
+                    return { id: c.id || "credential-" + (idx + 1), format: c.format || "all", meta, claims: claims.length ? claims : defaultClaims(), claimSets: [] };
+                  }), credentialSets: Array.isArray(parsed.credential_sets) ? parsed.credential_sets : null };
+                  descriptorCounter = builderState.credentials.length + 1;
+                  renderBuilder();
+                }
+              } catch (e) { /* keep raw mode */ }
+              updatePreview();
+            }
+            if (data.clientMetadata && clientMetadataField) {
+              clientMetadataField.value = data.clientMetadata;
+              savedClientMetadata = data.clientMetadata;
+              setEncryption(true);
+            } else {
+              if (clientMetadataField) clientMetadataField.value = "";
+              savedClientMetadata = "";
+              setEncryption(false);
+            }
+            refreshAuthSections();
+            return true;
+          }
+
+          function setSandboxMode(active, certChain) {
+            if (useSandboxKeyInput) useSandboxKeyInput.value = active ? "true" : "false";
+            if (x509Editable) x509Editable.style.display = active ? "none" : "block";
+            if (x509Sandbox) x509Sandbox.style.display = active ? "block" : "none";
+            if (active && sandboxCertDisplay) sandboxCertDisplay.value = certChain || "";
+            if (active && clientCertInput) clientCertInput.value = "";
+            if (!active && sandboxCertDisplay) sandboxCertDisplay.value = "";
+            const verifierInfoEl = document.getElementById("verifierInfo");
+            if (verifierInfoEl) verifierInfoEl.readOnly = active;
+          }
+
           sandboxBtn.addEventListener("click", async () => {
             try {
-              const res = await fetch(sandboxBtn.dataset.url);
-              const data = await res.json();
-              if (!data.available) { alert("Sandbox not configured."); return; }
-              if (authTypeSelect && data.authType) authTypeSelect.value = data.authType;
-              if (requestObjectMode && data.requestObjectMode) requestObjectMode.value = data.requestObjectMode;
-              const requestUriMethodEl = document.getElementById("requestUriMethod");
-              if (requestUriMethodEl && data.requestUriMethod) requestUriMethodEl.value = data.requestUriMethod;
-              const responseTypeEl = document.getElementById("responseType");
-              if (responseTypeEl && data.responseType) responseTypeEl.value = data.responseType;
-              const responseModeEl = document.getElementById("responseMode");
-              if (responseModeEl && data.responseMode) responseModeEl.value = data.responseMode;
-              const walletAuthEl = document.getElementById("walletAuthEndpoint");
-              if (walletAuthEl && data.walletAuthEndpoint) walletAuthEl.value = data.walletAuthEndpoint;
-              const walletAudienceEl = document.getElementById("walletAudience");
-              if (walletAudienceEl && data.walletAudience) walletAudienceEl.value = data.walletAudience;
-              if (clientIdInput && data.clientId) clientIdInput.value = data.clientId;
-              if (clientCertInput && data.walletClientCert) clientCertInput.value = data.walletClientCert;
-              const verifierInfoEl = document.getElementById("verifierInfo");
-              if (verifierInfoEl && data.verifierInfo) verifierInfoEl.value = data.verifierInfo;
-              const trustListEl = document.getElementById("trustList");
-              if (trustListEl && data.trustListId) trustListEl.value = data.trustListId;
-              if (data.dcqlQuery) {
-                dcqlRaw.value = data.dcqlQuery;
-                rawInitialized = true;
-                try {
-                  const parsed = JSON.parse(data.dcqlQuery);
-                  const creds = Array.isArray(parsed.credentials) ? parsed.credentials : [];
-                  if (creds.length) {
-                    builderState = { credentials: creds.map((c, idx) => {
-                      const claims = (Array.isArray(c.claims) ? c.claims : []).map(cl => {
-                        const path = Array.isArray(cl.path) ? cl.path : [];
-                        return { name: path.join("."), constValue: typeof cl.value !== "undefined" ? String(cl.value) : "" };
-                      });
-                      return { id: c.id || "credential-" + (idx + 1), format: c.format || "all", claims: claims.length ? claims : defaultClaims(), credentialSets: [], claimSets: [] };
-                    })};
-                    descriptorCounter = builderState.credentials.length + 1;
-                    renderBuilder();
-                  }
-                } catch (e) { /* keep raw mode */ }
-                updatePreview();
-              }
-              refreshAuthSections();
-              sandboxBtn.textContent = "Sandbox Defaults Applied";
-              setTimeout(() => sandboxBtn.textContent = "Use Sandbox Defaults", 2000);
+              const url = sandboxActive ? sandboxBtn.dataset.mockUrl : sandboxBtn.dataset.sandboxUrl;
+              const ok = await applyDefaults(url);
+              if (!ok) return;
+              sandboxActive = !sandboxActive;
+              sandboxBtn.textContent = sandboxActive ? "Use Mock Defaults" : "Use Sandbox Defaults";
+              setSandboxMode(sandboxActive, sandboxActive ? (sandboxBtn._certChain || "") : "");
+              refreshBindingInsights();
             } catch (e) {
-              alert("Failed to load sandbox defaults: " + e.message);
+              alert("Failed to load defaults: " + e.message);
             }
           });
         }
