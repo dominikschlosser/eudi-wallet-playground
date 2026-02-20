@@ -106,8 +106,12 @@
         </div>
 
         <details style="margin-top:0.5rem;">
-          <summary>View dcql_query</summary>
-          <pre th:text="${dcqlQuery}"></pre>
+          <summary>View raw request (debug)</summary>
+          <pre th:text="${rawRequestDebug}"></pre>
+          <div th:if="${requestObjectDebug}">
+            <strong style="display:block;margin-top:0.75rem;">Request Object (decoded JWT)</strong>
+            <pre th:text="${requestObjectDebug}"></pre>
+          </div>
         </details>
 
         <div class="actions" style="display:flex;gap:0.5rem;flex-wrap:wrap;">

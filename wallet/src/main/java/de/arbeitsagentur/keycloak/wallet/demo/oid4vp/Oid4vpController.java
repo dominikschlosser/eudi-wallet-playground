@@ -152,8 +152,10 @@ public class Oid4vpController {
                                    @RequestParam(name = "request", required = false) String requestObject,
                                    @RequestParam(name = "request_uri", required = false) String requestUri,
                                    @RequestParam(name = "client_cert", required = false) String clientCert,
-                                   HttpSession httpSession) {
+                                   HttpSession httpSession,
+                                   HttpServletRequest httpRequest) {
         WalletSession walletSession = sessionService.getSession(httpSession);
+        String rawRequestDebug = formatRawRequest(httpRequest);
         String targetResponseUri = responseUri != null && !responseUri.isBlank() ? responseUri : redirectUri;
         PendingRequest pending;
         String resolvedRequestObject = requestObject;
@@ -169,7 +171,7 @@ public class Oid4vpController {
         if (resolvedRequestObject != null && !resolvedRequestObject.isBlank()) {
             try {
                 pending = parseRequestObject(resolvedRequestObject, state, targetResponseUri,
-                        requestResolution != null ? requestResolution.walletNonce() : null);
+                        requestResolution != null ? requestResolution.walletNonce() : null, rawRequestDebug);
             } catch (Exception e) {
                 return requestObjectErrorView(resolvedRequestObject, e);
             }
@@ -203,6 +205,8 @@ public class Oid4vpController {
 	                    dcqlQuery,
 	                    clientMetadata,
 	                    responseMode,
+	                    rawRequestDebug,
+	                    null,
 	                    null,
 	                    null,
 	                    List.of()
@@ -357,11 +361,9 @@ public class Oid4vpController {
         }
         ModelAndView mv = new ModelAndView("oid4vp-consent");
         mv.addObject("descriptorOptions", options.options());
-        mv.addObject("dcqlQuery", pretty(pending.dcqlQuery()));
         mv.addObject("state", pending.state());
-        mv.addObject("responseUri", pending.responseUri());
-        mv.addObject("nonce", pending.nonce());
-        mv.addObject("clientId", pending.clientId());
+        mv.addObject("rawRequestDebug", pending.rawRequestDebug());
+        mv.addObject("requestObjectDebug", decodeJwtFull(pending.requestObjectRaw()));
         mv.addObject("authenticated", authenticated);
         Map<String, String> descriptorVcts = new LinkedHashMap<>();
         for (var opt : options.options()) {
@@ -710,7 +712,8 @@ public class Oid4vpController {
 		    private PendingRequest parseRequestObject(String requestObject,
 		                                              String expectedState,
 		                                              String incomingRedirectUri,
-		                                              String expectedWalletNonce) throws Exception {
+		                                              String expectedWalletNonce,
+		                                              String rawRequestDebug) throws Exception {
 		        JWT parsed = JWTParser.parse(requestObject);
 		        SignedJWT requestJwt = parsed instanceof SignedJWT sj ? sj : null;
 		        JWTClaimsSet claims = parsed.getJWTClaimsSet();
@@ -771,6 +774,8 @@ public class Oid4vpController {
 		                dcqlQuery,
 		                clientMetadata,
 		                responseMode,
+		                rawRequestDebug,
+		                requestObject,
 		                null,
 		                null,
 		                warnings
@@ -910,6 +915,36 @@ public class Oid4vpController {
             }
         }
         return null;
+    }
+
+    private String decodeJwtFull(String token) {
+        if (token == null || token.isBlank()) {
+            return null;
+        }
+        try {
+            if (sdJwtParser.isSdJwt(token)) {
+                token = sdJwtParser.signedJwt(token);
+            }
+            if (!token.contains(".")) {
+                return null;
+            }
+            String[] parts = token.split("\\.");
+            if (parts.length < 2) {
+                return null;
+            }
+            var sb = new StringBuilder();
+            sb.append("--- JOSE Header ---\n");
+            byte[] header = base64UrlDecode(parts[0]);
+            sb.append(objectMapper.writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(objectMapper.readTree(header)));
+            sb.append("\n\n--- Payload ---\n");
+            byte[] payload = base64UrlDecode(parts[1]);
+            sb.append(objectMapper.writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(objectMapper.readTree(payload)));
+            return sb.toString();
+        } catch (Exception e) {
+            return token;
+        }
     }
 
     private String decodeJwtLike(String token) {
@@ -1068,6 +1103,38 @@ public class Oid4vpController {
             }
         }
         return "";
+    }
+
+    private String formatRawRequest(HttpServletRequest request) {
+        var sb = new StringBuilder();
+        sb.append(request.getMethod()).append(" ").append(request.getRequestURI());
+        if (request.getQueryString() != null) {
+            sb.append("?").append(request.getQueryString());
+        }
+        sb.append("\n");
+        var headerNames = request.getHeaderNames();
+        while (headerNames.hasMoreElements()) {
+            String name = headerNames.nextElement();
+            var values = request.getHeaders(name);
+            while (values.hasMoreElements()) {
+                sb.append(name).append(": ").append(values.nextElement()).append("\n");
+            }
+        }
+        // For GET requests, show decoded query parameters as the body section
+        if ("GET".equalsIgnoreCase(request.getMethod()) && request.getQueryString() != null) {
+            sb.append("\n--- Query Parameters ---\n");
+            request.getParameterMap().forEach((key, vals) -> {
+                for (String val : vals) {
+                    String display = val;
+                    // Try to pretty-print JSON values
+                    if (display.trim().startsWith("{") || display.trim().startsWith("[")) {
+                        display = pretty(display);
+                    }
+                    sb.append(key).append("=").append(display).append("\n");
+                }
+            });
+        }
+        return sb.toString();
     }
 
     private String pretty(String json) {
@@ -1414,17 +1481,19 @@ public class Oid4vpController {
                                   String dcqlQuery,
                                   String clientMetadata,
                                   String responseMode,
+                                  String rawRequestDebug,
+                                  String requestObjectRaw,
                                   PresentationService.PresentationOptions options,
                                   Map<String, String> selections,
                                   List<String> warnings) {
         PendingRequest withOptions(PresentationService.PresentationOptions o) {
             return new PendingRequest(state, nonce, responseUri, clientId, dcqlQuery, clientMetadata, responseMode,
-                    o, selections, warnings);
+                    rawRequestDebug, requestObjectRaw, o, selections, warnings);
         }
 
         PendingRequest withSelections(Map<String, String> newSelections) {
             return new PendingRequest(state, nonce, responseUri, clientId, dcqlQuery, clientMetadata, responseMode,
-                    options, newSelections, warnings);
+                    rawRequestDebug, requestObjectRaw, options, newSelections, warnings);
         }
     }
 }
