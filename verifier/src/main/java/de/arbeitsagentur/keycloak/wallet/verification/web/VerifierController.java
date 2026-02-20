@@ -246,12 +246,13 @@ public class VerifierController {
         defaults.put("verifierInfo", verifierInfo);
         // Build three DCQL variants matching the registration certificate claims.
         // SD-JWT: "address" is a single selective disclosure in the PID — request the whole object.
+        // Note: BMI PID uses "birthdate" (no underscore), not "birth_date".
         String sdJwtOnly = """
-                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["address"]},{"path":["birth_date"]}]}]}""";
+                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["address"]},{"path":["birthdate"]}]}]}""";
         String mdocOnly = """
-                {"credentials":[{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","address"]}]}]}""";
+                {"credentials":[{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birthdate"]},{"path":["eu.europa.ec.eudi.pid.1","address"]}]}]}""";
         String both = """
-                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["address"]},{"path":["birth_date"]}]},{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","address"]}]}],"credential_sets":[{"options":[["pid_sd_jwt"],["pid_mdoc"]]}]}""";
+                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["address"]},{"path":["birthdate"]}]},{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birthdate"]},{"path":["eu.europa.ec.eudi.pid.1","address"]}]}],"credential_sets":[{"options":[["pid_sd_jwt"],["pid_mdoc"]]}]}""";
         // Allow env override via sandboxDcqlQuery for backward compat
         String dcqlOverride = properties.sandboxDcqlQuery();
         defaults.put("dcqlSdJwt", pretty(sdJwtOnly));
@@ -905,7 +906,7 @@ public class VerifierController {
             // OAuth 2.0 client metadata for encrypted responses (RFC 9101)
             // Use ECDH-ES per HAIP Section 5-2.5
             meta.put("authorization_encrypted_response_alg", "ECDH-ES");
-            meta.put("authorization_encrypted_response_enc", "A128GCM");
+            meta.put("authorization_encrypted_response_enc", "A256GCM");
             // VP formats per OID4VP 1.0 Section 11.1
             ObjectNode formats = meta.putObject("vp_formats_supported");
             ObjectNode sdJwt = objectMapper.createObjectNode();

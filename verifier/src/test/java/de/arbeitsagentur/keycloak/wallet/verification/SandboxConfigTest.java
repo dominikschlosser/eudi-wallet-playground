@@ -201,7 +201,7 @@ class SandboxConfigTest {
 
     @Test
     void sandboxDcqlQueryIsStructurallyValid() throws Exception {
-        String dcql = "{\"credentials\":[{\"id\":\"pid_sd_jwt\",\"format\":\"dc+sd-jwt\",\"meta\":{\"vct_values\":[\"urn:eudi:pid:de:1\"]},\"claims\":[{\"path\":[\"given_name\"]},{\"path\":[\"family_name\"]},{\"path\":[\"address\"]},{\"path\":[\"birth_date\"]}]},{\"id\":\"pid_mdoc\",\"format\":\"mso_mdoc\",\"meta\":{\"doctype_value\":\"eu.europa.ec.eudi.pid.1\"},\"claims\":[{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"given_name\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"family_name\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"birth_date\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"address\"]}]}],\"credential_sets\":[{\"options\":[[\"pid_sd_jwt\"],[\"pid_mdoc\"]]}]}";
+        String dcql = "{\"credentials\":[{\"id\":\"pid_sd_jwt\",\"format\":\"dc+sd-jwt\",\"meta\":{\"vct_values\":[\"urn:eudi:pid:de:1\"]},\"claims\":[{\"path\":[\"given_name\"]},{\"path\":[\"family_name\"]},{\"path\":[\"address\"]},{\"path\":[\"birthdate\"]}]},{\"id\":\"pid_mdoc\",\"format\":\"mso_mdoc\",\"meta\":{\"doctype_value\":\"eu.europa.ec.eudi.pid.1\"},\"claims\":[{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"given_name\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"family_name\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"birthdate\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"address\"]}]}],\"credential_sets\":[{\"options\":[[\"pid_sd_jwt\"],[\"pid_mdoc\"]]}]}";
         ObjectMapper mapper = new ObjectMapper();
         var tree = mapper.readTree(dcql);
 
