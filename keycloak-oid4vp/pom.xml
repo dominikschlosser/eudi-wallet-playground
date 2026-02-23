@@ -4,7 +4,7 @@
     <parent>
         <groupId>de.arbeitagentur.opdt</groupId>
         <artifactId>eudi-wallet-playground</artifactId>
-        <version>1.7.7-SNAPSHOT</version>
+        <version>1.7.7</version>
     </parent>
 
     <artifactId>keycloak-oid4vp</artifactId>

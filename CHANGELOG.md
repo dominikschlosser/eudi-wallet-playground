@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.7](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.6...v1.7.7) (2026-02-23)
+
+
+### Bug Fixes
+
+* client_metadata claim format ([192ecbf](https://github.com/ba-itsys/eudi-wallet-playground/commit/192ecbf0e419bcfabb6aa167471167f03908aeda))
+
 ## [1.7.6](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.5...v1.7.6) (2026-02-23)
 
 
