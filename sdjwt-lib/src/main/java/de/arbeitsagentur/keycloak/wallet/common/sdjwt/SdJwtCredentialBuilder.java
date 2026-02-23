@@ -84,7 +84,19 @@ public class SdJwtCredentialBuilder {
             SDObjectBuilder builder = new SDObjectBuilder();
             List<Disclosure> disclosures = new ArrayList<>();
             for (Map.Entry<String, Object> entry : claims.entrySet()) {
-                Disclosure disclosure = builder.putSDClaim(entry.getKey(), entry.getValue());
+                Object value = entry.getValue();
+                if (value instanceof Map<?, ?> mapValue) {
+                    SDObjectBuilder inner = new SDObjectBuilder();
+                    for (Map.Entry<?, ?> innerEntry : mapValue.entrySet()) {
+                        Disclosure innerDisclosure = inner.putSDClaim(
+                                String.valueOf(innerEntry.getKey()), innerEntry.getValue());
+                        if (innerDisclosure != null) {
+                            disclosures.add(innerDisclosure);
+                        }
+                    }
+                    value = inner.build();
+                }
+                Disclosure disclosure = builder.putSDClaim(entry.getKey(), value);
                 if (disclosure != null) {
                     disclosures.add(disclosure);
                 }

@@ -80,9 +80,10 @@ public final class ClaimPathNormalizer {
                 return true;
             }
         }
-        // Match against request name with path semantics
+        // Match against request name with path semantics (both directions)
         if (requestName != null) {
-            return isPathSuffix(claimName, requestName) || isPathPrefix(requestName, claimName);
+            return isPathSuffix(claimName, requestName) || isPathPrefix(requestName, claimName)
+                    || isPathSuffix(requestName, claimName) || isPathPrefix(claimName, requestName);
         }
         return false;
     }
