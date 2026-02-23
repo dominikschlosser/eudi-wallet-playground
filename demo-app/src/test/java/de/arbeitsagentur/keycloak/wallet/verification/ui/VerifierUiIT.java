@@ -225,16 +225,21 @@ class VerifierUiIT {
             var sdJwt = credentials.get(0);
             assertThat(sdJwt.get("format").asText()).isEqualTo("dc+sd-jwt");
             assertThat(sdJwt.get("meta").get("vct_values").get(0).asText()).isEqualTo("urn:eudi:pid:de:1");
-            // SD-JWT address claim is a single selective disclosure (whole object)
+            // SD-JWT address claims: street_address and locality as individual claims
             var sdJwtClaims = sdJwt.get("claims");
-            boolean foundSdJwtAddress = false;
+            boolean foundSdJwtStreetAddress = false;
+            boolean foundSdJwtLocality = false;
             for (var claim : sdJwtClaims) {
                 var path = claim.get("path");
-                if (path.size() == 1 && "address".equals(path.get(0).asText())) {
-                    foundSdJwtAddress = true;
+                if (path.size() == 1 && "street_address".equals(path.get(0).asText())) {
+                    foundSdJwtStreetAddress = true;
+                }
+                if (path.size() == 1 && "locality".equals(path.get(0).asText())) {
+                    foundSdJwtLocality = true;
                 }
             }
-            assertThat(foundSdJwtAddress).as("SD-JWT should have ['address'] path").isTrue();
+            assertThat(foundSdJwtStreetAddress).as("SD-JWT should have ['street_address'] path").isTrue();
+            assertThat(foundSdJwtLocality).as("SD-JWT should have ['locality'] path").isTrue();
 
             // mDoc credential: meta.doctype_value present, paths match registration cert
             var mdoc = credentials.get(1);
@@ -243,7 +248,8 @@ class VerifierUiIT {
             // mDoc claims: paths must be exactly 2 elements [namespace, element_identifier]
             var mdocClaims = mdoc.get("claims");
             boolean foundMdocGivenName = false;
-            boolean foundMdocAddress = false;
+            boolean foundMdocStreetAddress = false;
+            boolean foundMdocLocality = false;
             for (var claim : mdocClaims) {
                 var path = claim.get("path");
                 if (path.size() == 2
@@ -253,12 +259,18 @@ class VerifierUiIT {
                 }
                 if (path.size() == 2
                         && "eu.europa.ec.eudi.pid.1".equals(path.get(0).asText())
-                        && "address".equals(path.get(1).asText())) {
-                    foundMdocAddress = true;
+                        && "street_address".equals(path.get(1).asText())) {
+                    foundMdocStreetAddress = true;
+                }
+                if (path.size() == 2
+                        && "eu.europa.ec.eudi.pid.1".equals(path.get(0).asText())
+                        && "locality".equals(path.get(1).asText())) {
+                    foundMdocLocality = true;
                 }
             }
             assertThat(foundMdocGivenName).as("mDoc should have 2-element path ['eu.europa.ec.eudi.pid.1','given_name']").isTrue();
-            assertThat(foundMdocAddress).as("mDoc should have 2-element path ['eu.europa.ec.eudi.pid.1','address']").isTrue();
+            assertThat(foundMdocStreetAddress).as("mDoc should have 2-element path ['eu.europa.ec.eudi.pid.1','street_address']").isTrue();
+            assertThat(foundMdocLocality).as("mDoc should have 2-element path ['eu.europa.ec.eudi.pid.1','locality']").isTrue();
 
             // credential_sets panel should be visible in builder mode
             assertThat(page.locator("#credential-sets-panel").isVisible())

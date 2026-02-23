@@ -537,20 +537,12 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
 
         JWEAlgorithm jweAlg = JWEAlgorithm.parse(jwk.getAlgorithm().getName());
         EncryptionMethod jweEnc = EncryptionMethod.A128GCM;
-        // Prefer new OID4VP parameter, fall back to legacy parameter
-        JsonNode encValue = meta.get("authorization_encrypted_response_enc");
-        if (encValue != null && encValue.isTextual()) {
-            String enc = encValue.asText(null);
+        // OID4VP 1.0: encrypted_response_enc_values_supported declares supported content encryption methods
+        JsonNode encValues = meta.get("encrypted_response_enc_values_supported");
+        if (encValues != null && encValues.isArray() && !encValues.isEmpty()) {
+            String enc = encValues.get(0).asText(null);
             if (enc != null && !enc.isBlank()) {
                 jweEnc = EncryptionMethod.parse(enc);
-            }
-        } else {
-            JsonNode encValues = meta.get("encrypted_response_enc_values_supported");
-            if (encValues != null && encValues.isArray() && !encValues.isEmpty()) {
-                String enc = encValues.get(0).asText(null);
-                if (enc != null && !enc.isBlank()) {
-                    jweEnc = EncryptionMethod.parse(enc);
-                }
             }
         }
         JWEHeader.Builder header = new JWEHeader.Builder(jweAlg, jweEnc);

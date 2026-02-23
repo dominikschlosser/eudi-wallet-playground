@@ -310,28 +310,33 @@ class Oid4vpDcApiHaipComplianceTest {
     class ResponseEncryptionRequirements {
 
         @Test
-        @DisplayName("client_metadata MUST include ECDH-ES in authorization_encrypted_response_alg [5-2.5]")
-        void clientMetadataMustIncludeEcdhEs() {
+        @DisplayName("client_metadata JWK MUST include ECDH-ES via alg field [5-2.5]")
+        void clientMetadataJwkMustIncludeEcdhEs() {
             Map<String, Object> clientMetadata = buildEncryptedResponseClientMetadata(testEcKey);
 
-            String algValue = (String) clientMetadata.get("authorization_encrypted_response_alg");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> jwks = (Map<String, Object>) clientMetadata.get("jwks");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> keys = (List<Map<String, Object>>) jwks.get("keys");
+            String alg = (String) keys.get(0).get("alg");
 
-            assertThat(algValue)
-                    .as("HAIP 5-2.5: ECDH-ES MUST be supported")
+            assertThat(alg)
+                    .as("HAIP 5-2.5: JWK alg MUST indicate ECDH-ES")
                     .startsWith("ECDH-ES");
         }
 
         @Test
-        @DisplayName("client_metadata MUST include authorization_encrypted_response_enc [5-2.5]")
+        @DisplayName("client_metadata MUST include encrypted_response_enc_values_supported with A128GCM and A256GCM [5-2.5]")
         void clientMetadataMustIncludeEncryptionMethod() {
             Map<String, Object> clientMetadata = buildEncryptedResponseClientMetadata(testEcKey);
 
-            String encValue = (String) clientMetadata.get("authorization_encrypted_response_enc");
+            @SuppressWarnings("unchecked")
+            List<String> encValues = (List<String>) clientMetadata.get("encrypted_response_enc_values_supported");
 
-            assertThat(encValue)
-                    .as("HAIP 5-2.5: Encryption method MUST be specified")
+            assertThat(encValues)
+                    .as("HAIP 5-2.5: encrypted_response_enc_values_supported MUST be present")
                     .isNotNull()
-                    .isIn("A128GCM", "A256GCM");
+                    .contains("A128GCM", "A256GCM");
         }
 
         @Test
@@ -966,11 +971,17 @@ class Oid4vpDcApiHaipComplianceTest {
      */
     private Map<String, Object> buildEncryptedResponseClientMetadata(ECKey responseEncryptionKey) {
         var meta = new LinkedHashMap<String, Object>();
-        meta.put("jwks", new JWKSet(responseEncryptionKey.toPublicJWK()).toJSONObject(false));
-        // OAuth 2.0 client metadata for encrypted responses (RFC 9101)
-        // Use ECDH-ES per HAIP Section 5-2.5
-        meta.put("authorization_encrypted_response_alg", JWEAlgorithm.ECDH_ES.getName());
-        meta.put("authorization_encrypted_response_enc", EncryptionMethod.A128GCM.getName());
+        ECKey publicKey = responseEncryptionKey.toPublicJWK();
+        Map<String, Object> jwk = new LinkedHashMap<>(publicKey.toJSONObject());
+        jwk.put("alg", JWEAlgorithm.ECDH_ES.getName());
+        jwk.put("use", "enc");
+        Map<String, Object> jwks = new LinkedHashMap<>();
+        jwks.put("keys", List.of(jwk));
+        meta.put("jwks", jwks);
+        // OID4VP 1.0: encrypted_response_enc_values_supported
+        // HAIP Section 5-2.5: MUST support A128GCM and A256GCM
+        meta.put("encrypted_response_enc_values_supported", List.of(
+                EncryptionMethod.A128GCM.getName(), EncryptionMethod.A256GCM.getName()));
         return meta;
     }
 

@@ -778,10 +778,7 @@ class KeycloakIdpConformanceIT {
     private boolean isPassed(String status, String result) {
         String s = (status == null ? "" : status).trim().toUpperCase();
         String r = (result == null ? "" : result).trim().toUpperCase();
-        // Accept WARNING as passed - the OIDF conformance test has a known issue with client_metadata
-        // parameter validation where it checks for incorrect parameter names (encrypted_response_enc_values_supported
-        // instead of the correct authorization_encrypted_response_enc per JARM/RFC 9101).
-        // All actual verification steps pass, only the client_metadata parameter check produces a WARNING.
+        // Accept WARNING as passed - conformance tests may produce warnings for non-critical issues.
         return s.equals("FINISHED") && (r.equals("PASSED") || r.equals("SUCCESS") || r.equals("WARNING"));
     }
 

@@ -254,10 +254,11 @@ public final class Oid4vpDcApiRequestObjectService {
         jwks.put("keys", List.of(jwk));
         meta.put("jwks", jwks);
 
-        // OAuth 2.0 client metadata for encrypted responses (RFC 9101)
-        // Use ECDH-ES per HAIP Section 5-2.5
-        meta.put("authorization_encrypted_response_alg", JWEAlgorithm.ECDH_ES.getName());
-        meta.put("authorization_encrypted_response_enc", EncryptionMethod.A256GCM.getName());
+        // OID4VP 1.0: encrypted_response_enc_values_supported declares supported content encryption methods
+        // HAIP Section 5-2.5: MUST support A128GCM and A256GCM
+        // The key agreement algorithm (ECDH-ES) is conveyed via the JWK's "alg" field
+        meta.put("encrypted_response_enc_values_supported", List.of(
+                EncryptionMethod.A128GCM.getName(), EncryptionMethod.A256GCM.getName()));
 
         // vp_formats_supported declares which credential formats the verifier can accept
         // Required per OID4VP 1.0 Section 11.1

@@ -857,8 +857,7 @@ const credential = await navigator.credentials.get({
       "kid": "response-enc-key"
     }]
   },
-  "authorization_encrypted_response_alg": "RSA-OAEP-256",
-  "authorization_encrypted_response_enc": "A128GCM"
+  "encrypted_response_enc_values_supported": ["A128GCM", "A256GCM"]
 }
 ```
 

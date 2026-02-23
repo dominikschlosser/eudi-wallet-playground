@@ -616,14 +616,8 @@ public class Oid4vpRedirectFlowService {
     private Object buildClientMetadata(ECKey responseEncryptionKey) {
         var meta = new LinkedHashMap<String, Object>();
         if (responseEncryptionKey != null) {
-            // Per OID4VP PR #233, client_metadata may contain:
-            // - jwks (for encryption keys)
-            // - vp_formats (required when not available via another mechanism)
-            // - authorization_signed_response_alg, authorization_encrypted_response_alg/enc (JARM)
-
             // Build the public key JWK with explicit alg field
             ECKey publicKey = responseEncryptionKey.toPublicJWK();
-            // Create a mutable map with all required fields
             Map<String, Object> jwk = new LinkedHashMap<>(publicKey.toJSONObject());
             // Ensure alg is present (conformance test requires it)
             jwk.put("alg", JWEAlgorithm.ECDH_ES.getName());
@@ -632,6 +626,12 @@ public class Oid4vpRedirectFlowService {
             Map<String, Object> jwks = new LinkedHashMap<>();
             jwks.put("keys", List.of(jwk));
             meta.put("jwks", jwks);
+
+            // OID4VP 1.0: encrypted_response_enc_values_supported declares supported content encryption methods
+            // HAIP Section 5-2.5: MUST support A128GCM and A256GCM
+            // The key agreement algorithm (ECDH-ES) is conveyed via the JWK's "alg" field
+            meta.put("encrypted_response_enc_values_supported", List.of(
+                    EncryptionMethod.A128GCM.getName(), EncryptionMethod.A256GCM.getName()));
 
             // vp_formats_supported declares which credential formats the verifier can accept
             // Required per OID4VP 1.0 Section 11.1

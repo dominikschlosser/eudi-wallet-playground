@@ -997,20 +997,12 @@ public class Oid4vpController {
         }
         JWEAlgorithm jweAlg = JWEAlgorithm.parse(jwk.getAlgorithm().getName());
         EncryptionMethod jweEnc = EncryptionMethod.A128GCM;
-        // Prefer new OID4VP parameter, fall back to legacy parameter
-        JsonNode encValue = meta.get("authorization_encrypted_response_enc");
-        if (encValue != null && encValue.isTextual()) {
-            String enc = encValue.asText(null);
+        // OID4VP 1.0: encrypted_response_enc_values_supported declares supported content encryption methods
+        JsonNode encValues = meta.get("encrypted_response_enc_values_supported");
+        if (encValues != null && encValues.isArray() && !encValues.isEmpty()) {
+            String enc = encValues.get(0).asText(null);
             if (enc != null && !enc.isBlank()) {
                 jweEnc = EncryptionMethod.parse(enc);
-            }
-        } else {
-            JsonNode encValues = meta.get("encrypted_response_enc_values_supported");
-            if (encValues != null && encValues.isArray() && !encValues.isEmpty()) {
-                String enc = encValues.get(0).asText(null);
-                if (enc != null && !enc.isBlank()) {
-                    jweEnc = EncryptionMethod.parse(enc);
-                }
             }
         }
         JWEHeader.Builder header = new JWEHeader.Builder(jweAlg, jweEnc);
@@ -1166,11 +1158,9 @@ public class Oid4vpController {
                 // If client provides encryption keys via jwks and specifies encryption alg values,
                 // prefer encrypted response mode
                 JsonNode jwks = meta.get("jwks");
-                JsonNode encAlgValues = meta.get("authorization_encrypted_response_alg");
-                if (encAlgValues == null) {
-                    encAlgValues = meta.get("encrypted_response_alg_values_supported");
-                }
-                if (jwks != null && !jwks.isMissingNode() && encAlgValues != null && !encAlgValues.isMissingNode()) {
+                // OID4VP 1.0: encrypted_response_enc_values_supported indicates encrypted responses are supported
+                JsonNode encValues = meta.get("encrypted_response_enc_values_supported");
+                if (jwks != null && !jwks.isMissingNode() && encValues != null && !encValues.isMissingNode()) {
                     return "direct_post.jwt";
                 }
             } catch (Exception ignored) {
