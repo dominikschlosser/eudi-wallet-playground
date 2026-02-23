@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.7.6](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.5...v1.7.6) (2026-02-23)
+
+
+### Bug Fixes
+
+* add support for recursive disclosures like address ([1cd5620](https://github.com/ba-itsys/eudi-wallet-playground/commit/1cd5620b62d2db84b91ff3fa4215b2878e8a6901))
+* simplify local tests ([e79c75d](https://github.com/ba-itsys/eudi-wallet-playground/commit/e79c75d035a4d41ec864616244ec9104baae5aa8))
+* use A256GCM for enc as eudi required, use birthdate instead of birth_date ([71b53b1](https://github.com/ba-itsys/eudi-wallet-playground/commit/71b53b1ebfba254d724d62c62025b33a29f49581))
+
 ## [1.7.5](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.4...v1.7.5) (2026-02-20)
 
 
