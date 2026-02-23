@@ -1260,6 +1260,45 @@
       }
     },
     {
+      "name": "sd-jwt-address-to-attribute",
+      "identityProviderAlias": "oid4vp",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:1",
+        "claim": "address",
+        "user.attribute": "address",
+        "optional": "true"
+      }
+    },
+    {
+      "name": "sd-jwt-street_address-to-attribute",
+      "identityProviderAlias": "oid4vp",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:1",
+        "claim": "street_address",
+        "user.attribute": "address.street_address",
+        "optional": "true"
+      }
+    },
+    {
+      "name": "sd-jwt-locality-to-attribute",
+      "identityProviderAlias": "oid4vp",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:1",
+        "claim": "locality",
+        "user.attribute": "address.locality",
+        "optional": "true"
+      }
+    },
+    {
       "name": "sd-jwt-nationalities-optional",
       "identityProviderAlias": "oid4vp",
       "identityProviderMapper": "oid4vp-user-attribute-mapper",
