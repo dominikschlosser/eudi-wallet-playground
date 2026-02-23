@@ -201,7 +201,7 @@ class SandboxConfigTest {
 
     @Test
     void sandboxDcqlQueryIsStructurallyValid() throws Exception {
-        String dcql = "{\"credentials\":[{\"id\":\"pid_sd_jwt\",\"format\":\"dc+sd-jwt\",\"meta\":{\"vct_values\":[\"urn:eudi:pid:de:1\"]},\"claims\":[{\"path\":[\"given_name\"]},{\"path\":[\"family_name\"]},{\"path\":[\"address\"]},{\"path\":[\"birthdate\"]}]},{\"id\":\"pid_mdoc\",\"format\":\"mso_mdoc\",\"meta\":{\"doctype_value\":\"eu.europa.ec.eudi.pid.1\"},\"claims\":[{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"given_name\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"family_name\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"birthdate\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"address\"]}]}],\"credential_sets\":[{\"options\":[[\"pid_sd_jwt\"],[\"pid_mdoc\"]]}]}";
+        String dcql = "{\"credentials\":[{\"id\":\"pid_sd_jwt\",\"format\":\"dc+sd-jwt\",\"meta\":{\"vct_values\":[\"urn:eudi:pid:de:1\"]},\"claims\":[{\"path\":[\"given_name\"]},{\"path\":[\"family_name\"]},{\"path\":[\"birthdate\"]},{\"path\":[\"address\"]},{\"path\":[\"street_address\"]},{\"path\":[\"locality\"]}]},{\"id\":\"pid_mdoc\",\"format\":\"mso_mdoc\",\"meta\":{\"doctype_value\":\"eu.europa.ec.eudi.pid.1\"},\"claims\":[{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"given_name\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"family_name\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"birth_date\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"street_address\"]},{\"path\":[\"eu.europa.ec.eudi.pid.1\",\"locality\"]}]}],\"credential_sets\":[{\"options\":[[\"pid_sd_jwt\"],[\"pid_mdoc\"]]}]}";
         ObjectMapper mapper = new ObjectMapper();
         var tree = mapper.readTree(dcql);
 
@@ -388,16 +388,15 @@ class SandboxConfigTest {
         JsonNode jwksNode = mapper.readTree(jwks);
         var meta = mapper.createObjectNode();
         meta.set("jwks", jwksNode);
-        meta.put("authorization_encrypted_response_alg", "ECDH-ES");
-        meta.put("authorization_encrypted_response_enc", "A128GCM");
+        meta.putArray("encrypted_response_enc_values_supported").add("A128GCM").add("A256GCM");
 
-        // Verify the JWKS key type is compatible with the advertised algorithm
+        // Verify the JWKS key type is compatible with ECDH-ES (conveyed via JWK alg)
         JsonNode keys = meta.get("jwks").get("keys");
         assertThat(keys.isArray()).isTrue();
         assertThat(keys.size()).isGreaterThan(0);
 
         String kty = keys.get(0).get("kty").asText();
-        String alg = meta.get("authorization_encrypted_response_alg").asText();
+        String alg = keys.get(0).get("alg").asText();
 
         // ECDH-ES requires EC keys, not RSA
         assertThat(kty).as("ECDH-ES requires EC key type, not RSA").isEqualTo("EC");

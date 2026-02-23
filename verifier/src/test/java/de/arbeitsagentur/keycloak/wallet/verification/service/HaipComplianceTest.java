@@ -509,31 +509,37 @@ class HaipComplianceTest {
     class ResponseEncryptionRequirements {
 
         @Test
-        @DisplayName("ECDH-ES with P-256 curve MUST be supported [5-2.5]")
+        @DisplayName("ECDH-ES with P-256 curve MUST be supported via JWK alg [5-2.5]")
         void ecdhEsMustBeSupported() throws Exception {
             ObjectNode meta = buildClientMetadata();
 
-            JsonNode algValue = meta.get("authorization_encrypted_response_alg");
-            assertThat(algValue)
-                    .as("HAIP 5-2.5: authorization_encrypted_response_alg MUST be present")
-                    .isNotNull();
-            assertThat(algValue.asText())
-                    .as("HAIP 5-2.5: ECDH-ES MUST be supported")
+            // ECDH-ES is conveyed via the JWK's "alg" field in the JWKS
+            JsonNode jwks = meta.get("jwks");
+            assertThat(jwks).as("JWKS must be present").isNotNull();
+            JsonNode keys = jwks.get("keys");
+            assertThat(keys).as("JWKS keys must be present").isNotNull();
+            assertThat(keys.get(0).get("alg").asText())
+                    .as("HAIP 5-2.5: JWK alg MUST indicate ECDH-ES")
                     .startsWith("ECDH-ES");
         }
 
         @Test
-        @DisplayName("client_metadata MUST include authorization_encrypted_response_enc [5-2.5]")
+        @DisplayName("client_metadata MUST include encrypted_response_enc_values_supported [5-2.5]")
         void encMethodMustBeSpecified() throws Exception {
             ObjectNode meta = buildClientMetadata();
 
-            JsonNode encValue = meta.get("authorization_encrypted_response_enc");
-            assertThat(encValue)
-                    .as("HAIP 5-2.5: authorization_encrypted_response_enc MUST be present")
+            JsonNode encValues = meta.get("encrypted_response_enc_values_supported");
+            assertThat(encValues)
+                    .as("HAIP 5-2.5: encrypted_response_enc_values_supported MUST be present")
                     .isNotNull();
-            assertThat(encValue.asText())
-                    .as("HAIP 5-2.5: Encryption method MUST be A128GCM or A256GCM")
-                    .isIn("A128GCM", "A256GCM");
+            assertThat(encValues.isArray()).isTrue();
+            assertThat(encValues.size()).isGreaterThanOrEqualTo(2);
+            assertThat(encValues.get(0).asText())
+                    .as("HAIP 5-2.5: A128GCM MUST be supported")
+                    .isEqualTo("A128GCM");
+            assertThat(encValues.get(1).asText())
+                    .as("HAIP 5-2.5: A256GCM MUST be supported")
+                    .isEqualTo("A256GCM");
         }
 
         @Test
@@ -662,23 +668,20 @@ class HaipComplianceTest {
         }
 
         @Test
-        @DisplayName("client_metadata MUST include authorization_encrypted_response_alg")
-        void mustIncludeAuthorizationEncryptedResponseAlg() throws Exception {
+        @DisplayName("client_metadata MUST include encrypted_response_enc_values_supported with A128GCM and A256GCM")
+        void mustIncludeEncryptedResponseEncValuesSupported() throws Exception {
             ObjectNode meta = buildClientMetadata();
 
-            assertThat(meta.has("authorization_encrypted_response_alg"))
-                    .as("client_metadata must include authorization_encrypted_response_alg")
+            assertThat(meta.has("encrypted_response_enc_values_supported"))
+                    .as("client_metadata must include encrypted_response_enc_values_supported")
                     .isTrue();
-        }
-
-        @Test
-        @DisplayName("client_metadata MUST include authorization_encrypted_response_enc")
-        void mustIncludeAuthorizationEncryptedResponseEnc() throws Exception {
-            ObjectNode meta = buildClientMetadata();
-
-            assertThat(meta.has("authorization_encrypted_response_enc"))
-                    .as("client_metadata must include authorization_encrypted_response_enc")
-                    .isTrue();
+            JsonNode encValues = meta.get("encrypted_response_enc_values_supported");
+            assertThat(encValues.isArray()).isTrue();
+            java.util.List<String> values = new java.util.ArrayList<>();
+            encValues.forEach(v -> values.add(v.asText()));
+            assertThat(values)
+                    .as("HAIP 5-2.5: MUST support both A128GCM and A256GCM")
+                    .contains("A128GCM", "A256GCM");
         }
 
         @Test
@@ -922,10 +925,9 @@ class HaipComplianceTest {
         JsonNode node = objectMapper.readTree(jwks);
         ObjectNode meta = objectMapper.createObjectNode();
         meta.set("jwks", node);
-        // OAuth 2.0 client metadata for encrypted responses (RFC 9101)
-        // Use ECDH-ES per HAIP Section 5-2.5
-        meta.put("authorization_encrypted_response_alg", "ECDH-ES");
-        meta.put("authorization_encrypted_response_enc", "A128GCM");
+        // OID4VP 1.0: encrypted_response_enc_values_supported declares supported content encryption methods
+        // HAIP Section 5-2.5: MUST support A128GCM and A256GCM
+        meta.putArray("encrypted_response_enc_values_supported").add("A128GCM").add("A256GCM");
         // VP formats per OID4VP 1.0 Section 11.1
         ObjectNode formats = meta.putObject("vp_formats_supported");
         ObjectNode sdJwt = objectMapper.createObjectNode();

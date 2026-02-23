@@ -245,14 +245,14 @@ public class VerifierController {
         defaults.put("clientMetadata", defaultClientMetadata());
         defaults.put("verifierInfo", verifierInfo);
         // Build three DCQL variants matching the registration certificate claims.
-        // SD-JWT: "address" is a single selective disclosure in the PID — request the whole object.
+        // SD-JWT: request street_address and locality as individual claims (nested under address disclosure).
         // Note: BMI PID uses "birthdate" (no underscore), not "birth_date".
         String sdJwtOnly = """
-                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["address"]},{"path":["birthdate"]}]}]}""";
+                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["birthdate"]},{"path":["address"]},{"path":["street_address"]},{"path":["locality"]}]}]}""";
         String mdocOnly = """
-                {"credentials":[{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birthdate"]},{"path":["eu.europa.ec.eudi.pid.1","address"]}]}]}""";
+                {"credentials":[{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","street_address"]},{"path":["eu.europa.ec.eudi.pid.1","locality"]}]}]}""";
         String both = """
-                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["address"]},{"path":["birthdate"]}]},{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birthdate"]},{"path":["eu.europa.ec.eudi.pid.1","address"]}]}],"credential_sets":[{"options":[["pid_sd_jwt"],["pid_mdoc"]]}]}""";
+                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["birthdate"]},{"path":["address"]},{"path":["street_address"]},{"path":["locality"]}]},{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","street_address"]},{"path":["eu.europa.ec.eudi.pid.1","locality"]}]}],"credential_sets":[{"options":[["pid_sd_jwt"],["pid_mdoc"]]}]}""";
         // Allow env override via sandboxDcqlQuery for backward compat
         String dcqlOverride = properties.sandboxDcqlQuery();
         defaults.put("dcqlSdJwt", pretty(sdJwtOnly));
@@ -903,10 +903,10 @@ public class VerifierController {
             JsonNode node = objectMapper.readTree(jwks);
             ObjectNode meta = objectMapper.createObjectNode();
             meta.set("jwks", node);
-            // OAuth 2.0 client metadata for encrypted responses (RFC 9101)
-            // Use ECDH-ES per HAIP Section 5-2.5
-            meta.put("authorization_encrypted_response_alg", "ECDH-ES");
-            meta.put("authorization_encrypted_response_enc", "A256GCM");
+            // OID4VP 1.0: encrypted_response_enc_values_supported declares supported content encryption methods
+            // HAIP Section 5-2.5: MUST support A128GCM and A256GCM
+            // The key agreement algorithm (ECDH-ES) is conveyed via the JWK's "alg" field
+            meta.putArray("encrypted_response_enc_values_supported").add("A128GCM").add("A256GCM");
             // VP formats per OID4VP 1.0 Section 11.1
             ObjectNode formats = meta.putObject("vp_formats_supported");
             ObjectNode sdJwt = objectMapper.createObjectNode();

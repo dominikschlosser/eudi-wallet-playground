@@ -1424,8 +1424,10 @@ class PresentationServiceTest {
                       "claims": [
                         { "path": ["given_name"] },
                         { "path": ["family_name"] },
+                        { "path": ["birthdate"] },
                         { "path": ["address"] },
-                        { "path": ["birth_date"] }
+                        { "path": ["street_address"] },
+                        { "path": ["locality"] }
                       ]
                     },
                     {
@@ -1436,7 +1438,8 @@ class PresentationServiceTest {
                         { "path": ["eu.europa.ec.eudi.pid.1", "given_name"] },
                         { "path": ["eu.europa.ec.eudi.pid.1", "family_name"] },
                         { "path": ["eu.europa.ec.eudi.pid.1", "birth_date"] },
-                        { "path": ["eu.europa.ec.eudi.pid.1", "address"] }
+                        { "path": ["eu.europa.ec.eudi.pid.1", "street_address"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "locality"] }
                       ]
                     }
                   ],
@@ -1479,8 +1482,10 @@ class PresentationServiceTest {
                       "claims": [
                         { "path": ["given_name"] },
                         { "path": ["family_name"] },
+                        { "path": ["birthdate"] },
                         { "path": ["address"] },
-                        { "path": ["birth_date"] }
+                        { "path": ["street_address"] },
+                        { "path": ["locality"] }
                       ]
                     },
                     {
@@ -1491,7 +1496,8 @@ class PresentationServiceTest {
                         { "path": ["eu.europa.ec.eudi.pid.1", "given_name"] },
                         { "path": ["eu.europa.ec.eudi.pid.1", "family_name"] },
                         { "path": ["eu.europa.ec.eudi.pid.1", "birth_date"] },
-                        { "path": ["eu.europa.ec.eudi.pid.1", "address"] }
+                        { "path": ["eu.europa.ec.eudi.pid.1", "street_address"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "locality"] }
                       ]
                     }
                   ],
