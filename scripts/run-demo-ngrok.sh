@@ -12,13 +12,14 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-demo-ngrok.sh [port] [--ngrok-only] [-- <maven args>]
+Usage: scripts/run-demo-ngrok.sh [port] [--domain <name>] [--ngrok-only] [-- <maven args>]
 
 Starts ngrok and the demo app (wallet + verifier) with a public HTTPS URL.
 Useful for testing with mobile devices that need to reach your local server.
 
 Options:
-  --ngrok-only   Start only ngrok and print env vars to copy/paste.
+  --domain <name>  Use a custom ngrok domain (registered in your ngrok account).
+  --ngrok-only     Start only ngrok and print env vars to copy/paste.
 
 Defaults:
   - port: $PORT or 3000
@@ -27,8 +28,8 @@ Defaults:
 Examples:
   scripts/run-demo-ngrok.sh
   scripts/run-demo-ngrok.sh 3000
-  scripts/run-demo-ngrok.sh --ngrok-only
-  scripts/run-demo-ngrok.sh 3000 --ngrok-only
+  scripts/run-demo-ngrok.sh --domain myapp.ngrok-free.app
+  scripts/run-demo-ngrok.sh 3000 --domain myapp.ngrok-free.app --ngrok-only
   scripts/run-demo-ngrok.sh 3000 -- -Dspring-boot.run.profiles=dev
 EOF
 }
@@ -53,12 +54,22 @@ maybe_init_sdkman() {
 PORT="${PORT:-3000}"
 PORT_SET=0
 NGROK_ONLY=false
+NGROK_DOMAIN=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)
       usage
       exit 0
+      ;;
+    --domain)
+      if [ $# -lt 2 ]; then
+        echo "Missing value for --domain" >&2
+        usage >&2
+        exit 2
+      fi
+      NGROK_DOMAIN="$2"
+      shift 2
       ;;
     --ngrok-only|--tunnel-only|--no-app)
       NGROK_ONLY=true
@@ -116,7 +127,11 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
-ngrok http "$PORT" --log=stdout --log-format=json >"$tmp_log" 2>&1 &
+NGROK_ARGS="http $PORT --log=stdout --log-format=json"
+if [ -n "$NGROK_DOMAIN" ]; then
+  NGROK_ARGS="$NGROK_ARGS --url=$NGROK_DOMAIN"
+fi
+ngrok $NGROK_ARGS >"$tmp_log" 2>&1 &
 NGROK_PID="$!"
 
 get_public_url() {

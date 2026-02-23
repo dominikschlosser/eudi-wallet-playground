@@ -40,11 +40,34 @@ public record VerifierProperties(
     }
 
     public Path clientCertFilePath() {
-        return clientCertFile != null && !clientCertFile.isBlank() ? Path.of(clientCertFile) : null;
+        return resolveWithFallback(clientCertFile);
     }
 
     public Path sandboxVerifierInfoFilePath() {
-        return sandboxVerifierInfoFile != null && !sandboxVerifierInfoFile.isBlank() ? Path.of(sandboxVerifierInfoFile) : null;
+        return resolveWithFallback(sandboxVerifierInfoFile);
+    }
+
+    private static Path resolveWithFallback(String filePath) {
+        if (filePath == null || filePath.isBlank()) {
+            return null;
+        }
+        Path primary = Path.of(filePath);
+        if (java.nio.file.Files.exists(primary)) {
+            return primary;
+        }
+        // Fallback: try ../sandbox/ if sandbox/ was configured, or vice versa
+        if (filePath.startsWith("sandbox/")) {
+            Path fallback = Path.of("../" + filePath);
+            if (java.nio.file.Files.exists(fallback)) {
+                return fallback;
+            }
+        } else if (filePath.startsWith("../sandbox/")) {
+            Path fallback = Path.of(filePath.substring(3));
+            if (java.nio.file.Files.exists(fallback)) {
+                return fallback;
+            }
+        }
+        return primary;
     }
 
     public int resolvedMaxRequestObjectInlineBytes() {
