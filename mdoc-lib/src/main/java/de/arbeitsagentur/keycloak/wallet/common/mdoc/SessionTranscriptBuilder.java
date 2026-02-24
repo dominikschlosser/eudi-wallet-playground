@@ -21,22 +21,48 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.security.MessageDigest;
-import java.util.Base64;
 
 /**
- * Builder for mDoc SessionTranscript as defined in ISO/IEC 18013-5 and OpenID4VP.
+ * Builder for mDoc SessionTranscript supporting both OpenID4VP 1.0 and ISO 18013-7 formats.
  * <p>
- * SessionTranscript structure for OpenID4VP:
+ * The SessionTranscript binds the device authentication signature to the specific presentation
+ * request, preventing replay attacks. Two competing specifications define different handover
+ * formats for this binding:
+ *
+ * <h3>OpenID4VP 1.0 (Draft 28+)</h3>
+ * Defined in <a href="https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#appendix-B.3.2.2">
+ * OpenID4VP 1.0, Appendix B.3.2.2 — OID4VP Handover</a>.
  * <pre>
  * SessionTranscript = [
- *   DeviceEngagementBytes: null,
- *   EReaderKeyBytes: null,
- *   Handover: [
- *     "OpenID4VPHandover",
- *     SHA-256(CBOR([client_id, nonce, jwk_thumbprint, response_uri]))
+ *   null,                     // DeviceEngagementBytes (not used in OID4VP)
+ *   null,                     // EReaderKeyBytes (not used in OID4VP)
+ *   OID4VPHandover
+ * ]
+ *
+ * OID4VPHandover = [
+ *   "OpenID4VPHandover",
+ *   SHA-256(CBOR([client_id, nonce, jwk_thumbprint, response_uri]))
+ * ]
+ * </pre>
+ *
+ * <h3>ISO 18013-7 Annex B (Working Draft)</h3>
+ * Defined in <a href="https://www.iso.org/standard/82772.html">ISO/IEC 18013-7</a>,
+ * Annex B.4.4 — SessionTranscript for OID4VP over the Internet.
+ * Used by the German EUDI wallet (Bundesdruckerei). The wallet signals use of this format
+ * by including an {@code mdoc_generated_nonce} in the JWE {@code apu} (Agreement PartyUInfo) header.
+ * <pre>
+ * SessionTranscript = [
+ *   null,                                                // DeviceEngagementBytes
+ *   null,                                                // EReaderKeyBytes
+ *   [
+ *     SHA-256(CBOR([client_id, mdoc_generated_nonce])),  // OID4VPHandoverClientIdHash
+ *     SHA-256(CBOR([response_uri, mdoc_generated_nonce])),// OID4VPHandoverResponseUriHash
+ *     nonce                                               // authorization request nonce
  *   ]
  * ]
  * </pre>
+ *
+ * @see MdocVerifier#verify for the dual-format verification logic
  */
 public final class SessionTranscriptBuilder {
     private static final Logger LOG = LoggerFactory.getLogger(SessionTranscriptBuilder.class);
@@ -48,6 +74,7 @@ public final class SessionTranscriptBuilder {
     private String nonce;
     private byte[] jwkThumbprint;
     private String responseUri;
+    private String mdocGeneratedNonce;
 
     public SessionTranscriptBuilder clientId(String clientId) {
         this.clientId = clientId;
@@ -69,11 +96,11 @@ public final class SessionTranscriptBuilder {
         return this;
     }
 
-    /**
-     * Validates the required inputs for SessionTranscript.
-     *
-     * @throws IllegalStateException if required inputs are missing
-     */
+    public SessionTranscriptBuilder mdocGeneratedNonce(String mdocGeneratedNonce) {
+        this.mdocGeneratedNonce = mdocGeneratedNonce;
+        return this;
+    }
+
     public void validate() {
         if (clientId == null || clientId.isBlank()) {
             throw new IllegalStateException("Missing expected client_id for SessionTranscript");
@@ -87,28 +114,63 @@ public final class SessionTranscriptBuilder {
     }
 
     /**
-     * Builds the SessionTranscript CBOR object.
-     *
-     * @return the SessionTranscript as CBORObject
-     * @throws Exception if hashing fails
+     * Builds the SessionTranscript using the OpenID4VP 1.0 format (Appendix B.3.2.2).
+     * Requires clientId, nonce, and responseUri; jwkThumbprint is optional.
      */
     public CBORObject build() throws Exception {
         validate();
 
         byte[] hash = computeHandoverHash();
-        LOG.debug("buildSessionTranscript inputs: clientId='{}', nonce='{}', jwkThumbprint={}, responseUri='{}' -> hash={}",
-                clientId, nonce,
-                jwkThumbprint != null ? Base64.getUrlEncoder().withoutPadding().encodeToString(jwkThumbprint) : "null",
-                responseUri,
-                Base64.getUrlEncoder().withoutPadding().encodeToString(hash));
+        LOG.debug("buildSessionTranscript (OID4VP 1.0) inputs: clientId='{}', nonce='{}', responseUri='{}'",
+                clientId, nonce, responseUri);
 
         CBORObject handover = CBORObject.NewArray();
         handover.Add(HANDOVER_TYPE);
         handover.Add(hash);
 
         CBORObject sessionTranscript = CBORObject.NewArray();
-        sessionTranscript.Add(CBORObject.Null); // DeviceEngagementBytes
-        sessionTranscript.Add(CBORObject.Null); // EReaderKeyBytes
+        sessionTranscript.Add(CBORObject.Null);
+        sessionTranscript.Add(CBORObject.Null);
+        sessionTranscript.Add(handover);
+        return sessionTranscript;
+    }
+
+    /**
+     * Builds the SessionTranscript using the ISO 18013-7 Annex B.4.4 format.
+     * Requires mdocGeneratedNonce (from JWE {@code apu} header) in addition to the standard fields.
+     * Used by wallets that implement the ISO 18013-7 handover (e.g. German EUDI wallet).
+     */
+    public CBORObject buildIso18013_7() throws Exception {
+        validate();
+        if (mdocGeneratedNonce == null || mdocGeneratedNonce.isBlank()) {
+            throw new IllegalStateException("Missing mdoc_generated_nonce for ISO 18013-7 SessionTranscript");
+        }
+
+        MessageDigest sha256 = MessageDigest.getInstance(HASH_ALGORITHM);
+
+        // SHA-256(CBOR([clientId, mdocGeneratedNonce]))
+        CBORObject clientIdArray = CBORObject.NewArray();
+        clientIdArray.Add(clientId);
+        clientIdArray.Add(mdocGeneratedNonce);
+        byte[] clientIdHash = sha256.digest(clientIdArray.EncodeToBytes(ENCODE_OPTIONS));
+
+        // SHA-256(CBOR([responseUri, mdocGeneratedNonce]))
+        CBORObject responseUriArray = CBORObject.NewArray();
+        responseUriArray.Add(responseUri);
+        responseUriArray.Add(mdocGeneratedNonce);
+        byte[] responseUriHash = sha256.digest(responseUriArray.EncodeToBytes(ENCODE_OPTIONS));
+
+        LOG.debug("buildSessionTranscript (ISO 18013-7) inputs: clientId='{}', responseUri='{}', mdocGeneratedNonce='{}', nonce='{}'",
+                clientId, responseUri, mdocGeneratedNonce, nonce);
+
+        CBORObject handover = CBORObject.NewArray();
+        handover.Add(clientIdHash);
+        handover.Add(responseUriHash);
+        handover.Add(nonce);
+
+        CBORObject sessionTranscript = CBORObject.NewArray();
+        sessionTranscript.Add(CBORObject.Null);
+        sessionTranscript.Add(CBORObject.Null);
         sessionTranscript.Add(handover);
         return sessionTranscript;
     }
@@ -127,9 +189,6 @@ public final class SessionTranscriptBuilder {
         return MessageDigest.getInstance(HASH_ALGORITHM).digest(infoBytes);
     }
 
-    /**
-     * Creates a new builder instance.
-     */
     public static SessionTranscriptBuilder create() {
         return new SessionTranscriptBuilder();
     }

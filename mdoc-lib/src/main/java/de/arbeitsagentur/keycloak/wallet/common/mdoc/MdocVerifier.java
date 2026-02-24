@@ -77,9 +77,22 @@ public class MdocVerifier {
                                       String expectedResponseUri,
                                       byte[] expectedJwkThumbprint,
                                       VerificationStepSink steps) {
-        LOG.debug("verify() called with: expectedClientId={}, expectedNonce={}, expectedResponseUri={}, expectedJwkThumbprint={}",
+        return verify(deviceResponseToken, trustListId, expectedClientId, expectedNonce,
+                expectedResponseUri, expectedJwkThumbprint, null, steps);
+    }
+
+    public Map<String, Object> verify(String deviceResponseToken,
+                                      String trustListId,
+                                      String expectedClientId,
+                                      String expectedNonce,
+                                      String expectedResponseUri,
+                                      byte[] expectedJwkThumbprint,
+                                      String mdocGeneratedNonce,
+                                      VerificationStepSink steps) {
+        LOG.debug("verify() called with: expectedClientId={}, expectedNonce={}, expectedResponseUri={}, expectedJwkThumbprint={}, mdocGeneratedNonce={}",
                 expectedClientId, expectedNonce, expectedResponseUri,
-                expectedJwkThumbprint != null ? Base64.getUrlEncoder().withoutPadding().encodeToString(expectedJwkThumbprint) : "null");
+                expectedJwkThumbprint != null ? Base64.getUrlEncoder().withoutPadding().encodeToString(expectedJwkThumbprint) : "null",
+                mdocGeneratedNonce);
         try {
             CBORObject root = decodeToken(deviceResponseToken);
             CBORObject document = firstDocument(root);
@@ -108,7 +121,7 @@ public class MdocVerifier {
                         "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-14.1.2");
             }
 
-            verifyDeviceAuth(document, mso, docType, expectedClientId, expectedNonce, expectedResponseUri, expectedJwkThumbprint);
+            verifyDeviceAuth(document, mso, docType, expectedClientId, expectedNonce, expectedResponseUri, expectedJwkThumbprint, mdocGeneratedNonce);
             if (steps != null) {
                 steps.add("Validated holder binding (mdoc deviceAuth)",
                         "Validated deviceAuth signature and OpenID4VP SessionTranscript binding for the mDoc presentation.",
@@ -185,6 +198,12 @@ public class MdocVerifier {
 
         logX5ChainInfo(sign1);
 
+        // Try x5c certificate chain validation (e.g. SPRIND trust lists)
+        if (tryVerifyWithX5cChain(sign1, trustListId, steps)) {
+            return;
+        }
+
+        // Fall back to direct key matching
         if (tryVerifyWithTrustListKeys(sign1, keys, steps)) {
             return;
         }
@@ -206,18 +225,51 @@ public class MdocVerifier {
         if (key instanceof ECPublicKey ecKey) {
             String x = Base64.getUrlEncoder().withoutPadding().encodeToString(
                     toUnsignedBytes(ecKey.getW().getAffineX()));
-            LOG.info("[OID4VP-MDOC] {} public key x={}", label, x);
+            LOG.debug("[OID4VP-MDOC] {} public key x={}", label, x);
         }
     }
 
     private void logCertificateInfo(X509Certificate cert) {
         try {
-            String certBase64 = Base64.getEncoder().encodeToString(cert.getEncoded());
-            LOG.info("[OID4VP-MDOC] mDoc issuerAuth x5chain certificate (base64): {}", certBase64);
-            LOG.info("[OID4VP-MDOC] mDoc issuerAuth x5chain subject: {}, issuer: {}",
+            LOG.debug("[OID4VP-MDOC] mDoc issuerAuth x5chain subject: {}, issuer: {}",
                     cert.getSubjectX500Principal().getName(), cert.getIssuerX500Principal().getName());
         } catch (Exception e) {
-            LOG.warn("[OID4VP-MDOC] Could not log x5chain certificate: {}", e.getMessage());
+            LOG.debug("[OID4VP-MDOC] Could not log x5chain certificate: {}", e.getMessage());
+        }
+    }
+
+    private boolean tryVerifyWithX5cChain(Sign1Message sign1, String trustListId, VerificationStepSink steps) {
+        List<X509Certificate> x5cChain = x5ChainCertificates(sign1);
+        if (x5cChain.isEmpty()) {
+            return false;
+        }
+        List<X509Certificate> trustAnchors = trustResolver.certificates(trustListId);
+        if (trustAnchors.isEmpty()) {
+            return false;
+        }
+        PublicKey leafKey = TrustedIssuerResolver.verifyX5cChain(x5cChain, trustAnchors);
+        if (leafKey == null) {
+            LOG.info("[OID4VP-MDOC] x5c chain validation failed against trust list '{}'", trustListId);
+            return false;
+        }
+        OneKey coseKey = OneKeyFromPublicKey.build(leafKey);
+        if (coseKey == null) {
+            return false;
+        }
+        try {
+            boolean valid = sign1.validate(coseKey);
+            if (valid) {
+                LOG.info("[OID4VP-MDOC] Verified mDoc signature via x5c chain validation against trust list '{}'", trustListId);
+                if (steps != null) {
+                    steps.add("Signature verified via x5c chain against trust list",
+                            "Validated mDoc issuerAuth x5c certificate chain against trusted CA certificates, then verified signature with leaf key.",
+                            "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
+                }
+            }
+            return valid;
+        } catch (Exception e) {
+            LOG.info("[OID4VP-MDOC] x5c chain signature validation exception: {}", e.getMessage());
+            return false;
         }
     }
 
@@ -337,13 +389,23 @@ public class MdocVerifier {
         }
     }
 
+    /**
+     * Verifies the deviceAuth signature using dual-format SessionTranscript support.
+     * <p>
+     * When {@code mdocGeneratedNonce} is present (extracted from JWE {@code apu} header),
+     * tries ISO 18013-7 Annex B.4.4 format first, then falls back to OID4VP 1.0.
+     * When absent, uses OID4VP 1.0 format only.
+     *
+     * @see SessionTranscriptBuilder
+     */
     private void verifyDeviceAuth(CBORObject document,
                                   CBORObject mso,
                                   String docType,
                                   String expectedClientId,
                                   String expectedNonce,
                                   String expectedResponseUri,
-                                  byte[] expectedJwkThumbprint) throws Exception {
+                                  byte[] expectedJwkThumbprint,
+                                  String mdocGeneratedNonce) throws Exception {
         // Extract and validate deviceSigned structure
         CBORObject deviceSigned = asMap(document.get("deviceSigned"));
         if (deviceSigned == null) {
@@ -354,12 +416,47 @@ public class MdocVerifier {
         Sign1Message sign1 = extractDeviceSignature(deviceSigned);
         OneKey coseKey = extractAndValidateDeviceKey(mso);
 
-        // Build expected transcript and set payload if needed
-        CBORObject expectedTranscript = buildSessionTranscript(expectedClientId, expectedNonce, expectedJwkThumbprint, expectedResponseUri);
+        // Try ISO 18013-7 format first (used by German EUDI wallet), then OID4VP 1.0 format
+        CBORObject expectedTranscript;
+        if (mdocGeneratedNonce != null && !mdocGeneratedNonce.isBlank()) {
+            expectedTranscript = buildSessionTranscriptIso18013_7(expectedClientId, expectedNonce, expectedResponseUri, mdocGeneratedNonce);
+        } else {
+            expectedTranscript = buildSessionTranscript(expectedClientId, expectedNonce, expectedJwkThumbprint, expectedResponseUri);
+        }
         byte[] effectivePayloadBytes = ensurePayloadContent(sign1, expectedTranscript, docType, deviceSigned);
 
         // Verify signature
-        if (coseKey == null || !sign1.validate(coseKey)) {
+        boolean deviceAuthValid = false;
+        try {
+            deviceAuthValid = coseKey != null && sign1.validate(coseKey);
+        } catch (Exception valEx) {
+            LOG.debug("[OID4VP-MDOC] deviceAuth validate() threw: {} - {}", valEx.getClass().getSimpleName(), valEx.getMessage());
+        }
+
+        // If primary format fails, try the alternative format
+        if (!deviceAuthValid && mdocGeneratedNonce != null && !mdocGeneratedNonce.isBlank()) {
+            // Primary was ISO 18013-7, try OID4VP 1.0 format as fallback
+            LOG.debug("[OID4VP-MDOC] ISO 18013-7 format failed, trying OID4VP 1.0 format");
+            try {
+                CBORObject oid4vpTranscript = buildSessionTranscript(expectedClientId, expectedNonce, expectedJwkThumbprint, expectedResponseUri);
+                byte[] oid4vpPayload = buildDeviceAuthenticationPayload(oid4vpTranscript, docType, deviceSigned.get("nameSpaces"));
+                sign1.SetContent(oid4vpPayload);
+                deviceAuthValid = sign1.validate(coseKey);
+                if (deviceAuthValid) {
+                    LOG.info("[OID4VP-MDOC] deviceAuth verified with OID4VP 1.0 SessionTranscript format (fallback)");
+                    effectivePayloadBytes = oid4vpPayload;
+                    expectedTranscript = oid4vpTranscript;
+                }
+            } catch (Exception e) {
+                LOG.debug("[OID4VP-MDOC] OID4VP 1.0 fallback failed: {}", e.getMessage());
+            }
+        } else if (!deviceAuthValid && (mdocGeneratedNonce == null || mdocGeneratedNonce.isBlank())) {
+            // Primary was OID4VP 1.0, no ISO 18013-7 fallback possible without mdocGeneratedNonce
+            LOG.debug("[OID4VP-MDOC] OID4VP 1.0 format failed, no mdoc_generated_nonce available for ISO 18013-7 fallback");
+        }
+
+        if (!deviceAuthValid) {
+            LOG.info("[OID4VP-MDOC] deviceAuth validation FAILED with all transcript formats. coseKey null={}", coseKey == null);
             throw new IllegalStateException("deviceAuth signature invalid");
         }
 
@@ -369,6 +466,10 @@ public class MdocVerifier {
 
     private Sign1Message extractDeviceSignature(CBORObject deviceSigned) throws Exception {
         CBORObject deviceAuth = deviceSigned.get("deviceAuth");
+        // Unwrap tag-24 if present
+        if (deviceAuth != null && deviceAuth.HasMostOuterTag(24) && deviceAuth.getType() == CBORType.ByteString) {
+            deviceAuth = CBORObject.DecodeFromBytes(deviceAuth.GetByteString());
+        }
         CBORObject deviceAuthMap = asMap(deviceAuth);
         CBORObject deviceSignature = deviceAuthMap != null ? deviceAuthMap.get("deviceSignature") : deviceAuth;
         return decodeDeviceSignature(deviceSignature);
@@ -386,7 +487,9 @@ public class MdocVerifier {
                                         String docType, CBORObject deviceSigned) {
         byte[] payloadBytes = sign1.GetContent();
         if (payloadBytes == null || payloadBytes.length == 0) {
-            payloadBytes = buildDeviceAuthenticationPayload(expectedTranscript, docType, deviceSigned.get("nameSpaces"));
+            CBORObject nameSpaces = deviceSigned.get("nameSpaces");
+            LOG.debug("[OID4VP-MDOC] deviceAuth payload is detached, building from expected transcript");
+            payloadBytes = buildDeviceAuthenticationPayload(expectedTranscript, docType, nameSpaces);
             sign1.SetContent(payloadBytes);
         }
         return payloadBytes;
@@ -493,6 +596,15 @@ public class MdocVerifier {
                 .jwkThumbprint(jwkThumbprint)
                 .responseUri(responseUri)
                 .build();
+    }
+
+    private CBORObject buildSessionTranscriptIso18013_7(String clientId, String nonce, String responseUri, String mdocGeneratedNonce) throws Exception {
+        return SessionTranscriptBuilder.create()
+                .clientId(clientId)
+                .nonce(nonce)
+                .responseUri(responseUri)
+                .mdocGeneratedNonce(mdocGeneratedNonce)
+                .buildIso18013_7();
     }
 
     private void verifyDigests(CBORObject mso, CBORObject issuerSigned) throws Exception {

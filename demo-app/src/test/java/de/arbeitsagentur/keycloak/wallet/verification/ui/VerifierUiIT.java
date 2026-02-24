@@ -157,10 +157,9 @@ class VerifierUiIT {
                     .as("Sandbox Both button should be visible")
                     .isTrue();
 
+            // Click sandbox button and wait for the async fetch + form update
             sandboxBothBtn.click();
-
-            // Wait for the async fetch to complete and form to update
-            page.waitForTimeout(1000);
+            page.waitForTimeout(2000);
 
             // Auth type should be set to x509_san_dns
             String authType = page.locator("#authType").inputValue();
@@ -396,6 +395,249 @@ class VerifierUiIT {
 
             assertThat(errors)
                     .as("JavaScript console errors during DCQL mode toggle")
+                    .isEmpty();
+        } finally {
+            page.close();
+        }
+    }
+
+    @Test
+    void mdocFormatShowsNamespaceAndElementFields() {
+        List<String> errors = new ArrayList<>();
+        Page page = browser.newPage();
+        try {
+            page.onConsoleMessage(msg -> {
+                if ("error".equals(msg.type())) {
+                    errors.add(msg.text());
+                }
+            });
+            page.navigate("http://localhost:" + port + "/verifier");
+            page.waitForLoadState();
+
+            // Default format is dc+sd-jwt — should show "Claim path" labels
+            assertThat(page.locator("#dcql-descriptors").textContent()).contains("Claim path");
+
+            // Switch format to mso_mdoc
+            page.locator("[data-field='format-select']").first().selectOption("mso_mdoc");
+            page.waitForTimeout(300);
+
+            // Should now show "Namespace" and "Element identifier" labels instead of "Claim path"
+            String descriptorText = page.locator("#dcql-descriptors").textContent();
+            assertThat(descriptorText)
+                    .as("mDoc format should show Namespace field")
+                    .contains("Namespace");
+            assertThat(descriptorText)
+                    .as("mDoc format should show Element identifier field")
+                    .contains("Element identifier");
+
+            // Should NOT show "Claim path" for mDoc
+            // (The label might still appear in other places, so check the claim rows specifically)
+            var claimRows = page.locator("#dcql-descriptors .claim-row");
+            for (int i = 0; i < claimRows.count(); i++) {
+                String rowText = claimRows.nth(i).textContent();
+                assertThat(rowText)
+                        .as("mDoc claim row should not have 'Claim path' label")
+                        .doesNotContain("Claim path");
+            }
+
+            // Switch back to dc+sd-jwt — should show "Claim path" again
+            page.locator("[data-field='format-select']").first().selectOption("dc+sd-jwt");
+            page.waitForTimeout(300);
+
+            var sdJwtClaimRows = page.locator("#dcql-descriptors .claim-row");
+            for (int i = 0; i < sdJwtClaimRows.count(); i++) {
+                String rowText = sdJwtClaimRows.nth(i).textContent();
+                assertThat(rowText)
+                        .as("SD-JWT claim row should have 'Claim path' label")
+                        .contains("Claim path");
+                assertThat(rowText)
+                        .as("SD-JWT claim row should not have 'Namespace' label")
+                        .doesNotContain("Namespace");
+            }
+
+            assertThat(errors)
+                    .as("JavaScript console errors during format switching")
+                    .isEmpty();
+        } finally {
+            page.close();
+        }
+    }
+
+    @Test
+    void mdocQuickAddButtonsUseMdocClaimNames() {
+        List<String> errors = new ArrayList<>();
+        Page page = browser.newPage();
+        try {
+            page.onConsoleMessage(msg -> {
+                if ("error".equals(msg.type())) {
+                    errors.add(msg.text());
+                }
+            });
+            page.navigate("http://localhost:" + port + "/verifier");
+            page.waitForLoadState();
+
+            // Switch to mso_mdoc format
+            page.locator("[data-field='format-select']").first().selectOption("mso_mdoc");
+            page.waitForTimeout(300);
+
+            // Quick-add buttons should show mdoc claim names
+            String buttonsText = page.locator("#dcql-descriptors").textContent();
+            assertThat(buttonsText)
+                    .as("mDoc should have birth_date button (not birthdate)")
+                    .contains("birth_date");
+            assertThat(buttonsText)
+                    .as("mDoc should have birth_place button (not place_of_birth)")
+                    .contains("birth_place");
+            assertThat(buttonsText)
+                    .as("mDoc should have age_over_18 button (not age_equal_or_over)")
+                    .contains("age_over_18");
+
+            // SD-JWT specific names should NOT appear as quick-add buttons
+            // Check that 'birthdate' (without underscore) does not appear as a button
+            var addButtons = page.locator("#dcql-descriptors [data-action='add-claim']");
+            boolean hasBirthdateButton = false;
+            boolean hasPlaceOfBirthButton = false;
+            for (int i = 0; i < addButtons.count(); i++) {
+                String claim = addButtons.nth(i).getAttribute("data-claim");
+                if ("birthdate".equals(claim)) hasBirthdateButton = true;
+                if ("place_of_birth".equals(claim)) hasPlaceOfBirthButton = true;
+            }
+            assertThat(hasBirthdateButton)
+                    .as("mDoc should NOT have 'birthdate' quick-add button")
+                    .isFalse();
+            assertThat(hasPlaceOfBirthButton)
+                    .as("mDoc should NOT have 'place_of_birth' quick-add button")
+                    .isFalse();
+
+            // Switch back to SD-JWT and verify opposite
+            page.locator("[data-field='format-select']").first().selectOption("dc+sd-jwt");
+            page.waitForTimeout(300);
+
+            var sdJwtButtons = page.locator("#dcql-descriptors [data-action='add-claim']");
+            boolean hasBirthDateButton = false;
+            boolean hasBirthPlaceButton = false;
+            for (int i = 0; i < sdJwtButtons.count(); i++) {
+                String claim = sdJwtButtons.nth(i).getAttribute("data-claim");
+                if ("birth_date".equals(claim)) hasBirthDateButton = true;
+                if ("birth_place".equals(claim)) hasBirthPlaceButton = true;
+            }
+            assertThat(hasBirthDateButton)
+                    .as("SD-JWT should NOT have 'birth_date' quick-add button")
+                    .isFalse();
+            assertThat(hasBirthPlaceButton)
+                    .as("SD-JWT should NOT have 'birth_place' quick-add button")
+                    .isFalse();
+
+            assertThat(errors)
+                    .as("JavaScript console errors during quick-add button check")
+                    .isEmpty();
+        } finally {
+            page.close();
+        }
+    }
+
+    @Test
+    void mdocBuilderGeneratesCorrectDcqlPaths() {
+        List<String> errors = new ArrayList<>();
+        Page page = browser.newPage();
+        try {
+            page.onConsoleMessage(msg -> {
+                if ("error".equals(msg.type())) {
+                    errors.add(msg.text());
+                }
+            });
+            page.navigate("http://localhost:" + port + "/verifier");
+            page.waitForLoadState();
+
+            // Switch to mso_mdoc format
+            page.locator("[data-field='format-select']").first().selectOption("mso_mdoc");
+            page.waitForTimeout(300);
+
+            // Click a quick-add button (e.g. birth_date)
+            page.locator("[data-action='add-claim'][data-claim='birth_date']").first().click();
+            page.waitForTimeout(1000);
+
+            // Read the preview (builder initializes on page load so it should be valid JSON)
+            String preview = page.locator("#dcql-builder-preview").textContent();
+            var mapper = new tools.jackson.databind.ObjectMapper();
+            var previewJson = mapper.readTree(preview);
+            var dcql = previewJson.get("dcql_query");
+            var credentials = dcql.get("credentials");
+            var cred = credentials.get(0);
+
+            assertThat(cred.get("format").asText()).isEqualTo("mso_mdoc");
+
+            // Find the birth_date claim
+            boolean foundBirthDate = false;
+            for (var claim : cred.get("claims")) {
+                var path = claim.get("path");
+                if (path.size() == 2 && "birth_date".equals(path.get(1).asText())) {
+                    assertThat(path.get(0).asText())
+                            .as("mDoc claim namespace should be eu.europa.ec.eudi.pid.1")
+                            .isEqualTo("eu.europa.ec.eudi.pid.1");
+                    foundBirthDate = true;
+                }
+            }
+            assertThat(foundBirthDate)
+                    .as("DCQL should contain birth_date with [namespace, element] path")
+                    .isTrue();
+
+            // All mDoc claims should have exactly 2-element paths
+            for (var claim : cred.get("claims")) {
+                var path = claim.get("path");
+                assertThat(path.size())
+                        .as("mDoc claim path should have exactly 2 elements: " + path)
+                        .isEqualTo(2);
+            }
+
+            assertThat(errors)
+                    .as("JavaScript console errors during mDoc DCQL generation")
+                    .isEmpty();
+        } finally {
+            page.close();
+        }
+    }
+
+    @Test
+    void sdJwtNestedClaimPathsGenerateMultiElementArrays() {
+        List<String> errors = new ArrayList<>();
+        Page page = browser.newPage();
+        try {
+            page.onConsoleMessage(msg -> {
+                if ("error".equals(msg.type())) {
+                    errors.add(msg.text());
+                }
+            });
+            page.navigate("http://localhost:" + port + "/verifier");
+            page.waitForLoadState();
+
+            // Default format is dc+sd-jwt — click the "address/street_address" quick-add button
+            page.locator("[data-action='add-claim'][data-claim='address/street_address']").first().click();
+            page.waitForTimeout(500);
+
+            // Read the preview
+            String preview = page.locator("#dcql-builder-preview").textContent();
+            var mapper = new tools.jackson.databind.ObjectMapper();
+            var previewJson = mapper.readTree(preview);
+            var dcql = previewJson.get("dcql_query");
+            var cred = dcql.get("credentials").get(0);
+
+            // Find the address/street_address claim — should be ["address", "street_address"]
+            boolean found = false;
+            for (var claim : cred.get("claims")) {
+                var path = claim.get("path");
+                if (path.size() == 2
+                        && "address".equals(path.get(0).asText())
+                        && "street_address".equals(path.get(1).asText())) {
+                    found = true;
+                }
+            }
+            assertThat(found)
+                    .as("DCQL should contain ['address','street_address'] 2-element path")
+                    .isTrue();
+
+            assertThat(errors)
+                    .as("JavaScript console errors during nested path generation")
                     .isEmpty();
         } finally {
             page.close();

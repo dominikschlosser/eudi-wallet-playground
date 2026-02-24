@@ -109,7 +109,7 @@ public class PresentationVerificationService {
         }
         if (mdocVerifier != null && mdocVerifier.isMdoc(decryptedToken)) {
             return verifyMdocPresentation(decryptedToken, ctx.trustListId(), audience, ctx.expectedNonce(),
-                    ctx.expectedResponseUri(), ctx.expectedResponseMode(), mdocVerifier, ctx.steps());
+                    ctx.expectedResponseUri(), ctx.expectedResponseMode(), ctx.mdocGeneratedNonce(), mdocVerifier, ctx.steps());
         }
 
         // Plain JWT fallback
@@ -147,13 +147,13 @@ public class PresentationVerificationService {
 
     private Map<String, Object> verifyMdocPresentation(String token, String trustListId, String audience,
                                                        String expectedNonce, String expectedResponseUri,
-                                                       String expectedResponseMode, MdocVerifier mdocVerifier,
-                                                       VerificationSteps steps) throws Exception {
+                                                       String expectedResponseMode, String mdocGeneratedNonce,
+                                                       MdocVerifier mdocVerifier, VerificationSteps steps) throws Exception {
         byte[] thumbprint = computeJwkThumbprintIfEncrypted(expectedResponseMode);
         org.slf4j.LoggerFactory.getLogger(PresentationVerificationService.class)
-                .info("[mDoc-verify] Verifying mDoc: audience={}, nonce={}, responseUri={}, hasThumbprint={}",
-                        audience, expectedNonce, expectedResponseUri, thumbprint != null);
-        return mdocVerifier.verify(token, trustListId, audience, expectedNonce, expectedResponseUri, thumbprint, steps);
+                .info("[mDoc-verify] Verifying mDoc: audience={}, nonce={}, responseUri={}, hasThumbprint={}, mdocGeneratedNonce={}",
+                        audience, expectedNonce, expectedResponseUri, thumbprint != null, mdocGeneratedNonce);
+        return mdocVerifier.verify(token, trustListId, audience, expectedNonce, expectedResponseUri, thumbprint, mdocGeneratedNonce, steps);
     }
 
     private byte[] computeJwkThumbprintIfEncrypted(String expectedResponseMode) throws Exception {
@@ -307,13 +307,22 @@ public class PresentationVerificationService {
             String expectedResponseUri,
             String expectedResponseMode,
             VerificationSteps steps,
-            List<String> trustedIssuerJwks
+            List<String> trustedIssuerJwks,
+            String mdocGeneratedNonce
     ) {
+        public VerificationContext(String expectedNonce, String responseNonce, String trustListId,
+                                   String expectedAudience, String expectedResponseUri,
+                                   String expectedResponseMode, VerificationSteps steps,
+                                   List<String> trustedIssuerJwks) {
+            this(expectedNonce, responseNonce, trustListId, expectedAudience, expectedResponseUri,
+                    expectedResponseMode, steps, trustedIssuerJwks, null);
+        }
+
         public static VerificationContext of(String expectedNonce, String responseNonce, String trustListId,
                                               String expectedAudience, String expectedResponseUri,
                                               String expectedResponseMode, VerificationSteps steps) {
             return new VerificationContext(expectedNonce, responseNonce, trustListId,
-                    expectedAudience, expectedResponseUri, expectedResponseMode, steps, List.of());
+                    expectedAudience, expectedResponseUri, expectedResponseMode, steps, List.of(), null);
         }
     }
 
@@ -382,6 +391,11 @@ public class PresentationVerificationService {
             List<PublicKey> combined = new ArrayList<>(delegate.publicKeys(trustListId));
             combined.addAll(additional);
             return List.copyOf(combined);
+        }
+
+        @Override
+        public List<java.security.cert.X509Certificate> certificates(String trustListId) {
+            return delegate.certificates(trustListId);
         }
     }
 

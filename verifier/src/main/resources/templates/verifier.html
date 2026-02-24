@@ -415,7 +415,11 @@
             if (bindingX509Cert) bindingX509Cert.value = certText || "";
             return;
           }
-          if (clientCertInput?.value.trim()) {
+          if (sandboxCertDisplay?.value.trim()) {
+            certText = sandboxCertDisplay.value.trim();
+            source = "Sandbox certificate (server-side key)";
+            hash = await computeX509Hash(certText) || hash;
+          } else if (clientCertInput?.value.trim()) {
             certText = clientCertInput.value.trim();
             source = "Client-supplied PEM";
             hash = await computeX509Hash(certText) || hash;
@@ -475,7 +479,21 @@
           }
           refreshBindingInsights();
         }
-        authTypeSelect?.addEventListener("change", refreshAuthSections);
+        authTypeSelect?.addEventListener("change", () => {
+          refreshAuthSections();
+          // When sandbox is active, swap client_id between x509_san_dns and x509_hash
+          const sb = document.getElementById("sandbox-buttons");
+          const useSandbox = document.getElementById("useSandboxKey");
+          if (sb && useSandbox && useSandbox.value === "true" && clientIdInput) {
+            const mode = authTypeSelect.value;
+            if (mode === "x509_hash" && sb._clientIdHash) {
+              clientIdInput.value = sb._clientIdHash;
+            } else if (mode === "x509_san_dns" && sb._clientIdSanDns) {
+              clientIdInput.value = sb._clientIdSanDns;
+            }
+            refreshBindingInsights();
+          }
+        });
         refreshAuthSections();
         clientIdInput?.addEventListener("input", () => refreshBindingInsights());
         clientCertInput?.addEventListener("input", () => refreshBindingInsights());
@@ -494,19 +512,43 @@
           el?.addEventListener("change", () => updatePreview(false));
         }
 
-        const defaultClaimOptions = [
+        const sdJwtClaimOptions = [
           "given_name",
           "family_name",
           "birth_family_name",
           "birthdate",
           "place_of_birth",
           "nationalities",
-          "address",
+          "address/street_address",
+          "address/locality",
+          "address/postal_code",
+          "address/country",
           "age_equal_or_over",
           "issuing_country",
           "issuing_authority",
           "source_document_type"
         ];
+        const mdocClaimOptions = [
+          "given_name",
+          "family_name",
+          "birth_family_name",
+          "birth_date",
+          "birth_place",
+          "nationalities",
+          "resident_street",
+          "resident_city",
+          "resident_postal_code",
+          "resident_country",
+          "age_over_18",
+          "age_over_21",
+          "issuing_country",
+          "issuing_authority",
+          "source_document_type"
+        ];
+        const defaultMdocNamespace = "eu.europa.ec.eudi.pid.1";
+        function claimOptionsForFormat(format) {
+          return format === "mso_mdoc" ? mdocClaimOptions : sdJwtClaimOptions;
+        }
         const knownFormats = ["dc+sd-jwt", "mso_mdoc", "all"];
         const defaultCredentialFormat = knownFormats[0];
         let builderState = { credentials: [], credentialSets: null };
@@ -617,10 +659,16 @@
               const claimNodes = Array.isArray(c.claims) ? c.claims : [];
               claimNodes.forEach((cl) => {
                 const path = Array.isArray(cl.path) ? cl.path : [];
-                const name = path.length ? path.join(".") : "";
+                const name = path.length ? path.join("/") : "";
                 const val = typeof cl.value !== "undefined" && cl.value !== null ? String(cl.value) : "";
                 if (name) {
-                  claims.push({ name, constValue: val, originalPath: path.length ? [...path] : null });
+                  const claim = { name, constValue: val, originalPath: path.length ? [...path] : null };
+                  if (format === "mso_mdoc" && path.length === 2) {
+                    claim.namespace = path[0];
+                    claim.element = path[1];
+                    claim.name = path[1];
+                  }
+                  claims.push(claim);
                 }
               });
               const claimSets = [];
@@ -633,7 +681,7 @@
                       .map((v) => {
                         if (typeof v === "string") return v;
                         if (v && typeof v === "object" && Array.isArray(v.path)) {
-                          return v.path.join(".");
+                          return v.path.join("/");
                         }
                         return "";
                       })
@@ -647,7 +695,7 @@
                       .map((v) => {
                         if (typeof v === "string") return v;
                         if (v && typeof v === "object" && Array.isArray(v.path)) {
-                          return v.path.join(".");
+                          return v.path.join("/");
                         }
                         return "";
                       })
@@ -693,16 +741,23 @@
           const clientMeta = collectClientMetadata();
           const credentials = builderState.credentials.map((descriptor, idx) => {
             const descriptorId = descriptor.id && descriptor.id.trim() ? descriptor.id.trim() : `credential-${idx + 1}`;
+            const formatValue =
+              typeof descriptor.format === "string" && descriptor.format.trim()
+                ? descriptor.format.trim()
+                : defaultCredentialFormat;
+            const isMdocFormat = formatValue === "mso_mdoc";
             const claims = (descriptor.claims || [])
-              .filter((c) => c.name && c.name.trim())
+              .filter((c) => isMdocFormat ? (c.element && c.element.trim()) || (c.name && c.name.trim()) : c.name && c.name.trim())
               .map((claim) => {
                 let segments;
                 if (claim.originalPath) {
                   segments = claim.originalPath;
+                } else if (isMdocFormat) {
+                  const ns = (claim.namespace || defaultMdocNamespace).trim();
+                  const elem = (claim.element || claim.name || "").trim();
+                  segments = [ns, elem];
                 } else {
                   const name = claim.name.trim();
-                  // Use "/" as path separator (consistent with DCQL spec).
-                  // For mso_mdoc, paths must be exactly [namespace, element_identifier].
                   segments = name.includes("/") ? name.split("/").filter(Boolean) : [name];
                 }
                 const entry = { path: segments };
@@ -711,10 +766,6 @@
                 }
                 return entry;
               });
-            const formatValue =
-              typeof descriptor.format === "string" && descriptor.format.trim()
-                ? descriptor.format.trim()
-                : defaultCredentialFormat;
             const base = { id: descriptorId, claims };
             if (formatValue && formatValue !== "all") {
               base.format = formatValue;
@@ -771,11 +822,35 @@
             const formatValue =
               descriptor.format && descriptor.format.trim() ? descriptor.format.trim() : defaultCredentialFormat;
             const selectValue = !formatValue || formatValue === "all" ? "all" : formatValue;
-            const claimRows = claims.map((claim, ci) => `
+            const isMdoc = formatValue === "mso_mdoc";
+            const claimRows = claims.map((claim, ci) => {
+              if (isMdoc) {
+                const ns = claim.namespace || defaultMdocNamespace;
+                const elem = claim.element || claim.name || "";
+                return `
+              <div class="claim-row">
+                <div>
+                  <label style="font-weight:600;">Namespace</label>
+                  <input type="text" data-di="${di}" data-ci="${ci}" data-field="namespace" placeholder="eu.europa.ec.eudi.pid.1" value="${ns}" />
+                </div>
+                <div>
+                  <label style="font-weight:600;">Element identifier</label>
+                  <input type="text" data-di="${di}" data-ci="${ci}" data-field="element" placeholder="e.g. given_name" value="${elem}" />
+                </div>
+                <div>
+                  <label style="font-weight:600;">Value (optional)</label>
+                  <input type="text" data-di="${di}" data-ci="${ci}" data-field="const" placeholder="Exact required value" value="${claim.constValue || ""}" />
+                </div>
+                <div style="display:flex;align-items:flex-end;gap:0.35rem;">
+                  <button type="button" class="btn secondary mini" data-action="remove-claim" data-di="${di}" data-ci="${ci}">Remove</button>
+                </div>
+              </div>`;
+              }
+              return `
               <div class="claim-row">
                 <div>
                   <label style="font-weight:600;">Claim path</label>
-                  <input type="text" data-di="${di}" data-ci="${ci}" data-field="name" placeholder="e.g. personal_id or address.street_address" value="${claim.name || ""}" />
+                  <input type="text" data-di="${di}" data-ci="${ci}" data-field="name" placeholder="e.g. given_name or address/street_address" value="${claim.name || ""}" />
                 </div>
                 <div>
                   <label style="font-weight:600;">Value (optional exact match)</label>
@@ -784,8 +859,8 @@
                 <div style="display:flex;align-items:flex-end;gap:0.35rem;">
                   <button type="button" class="btn secondary mini" data-action="remove-claim" data-di="${di}" data-ci="${ci}">Remove</button>
                 </div>
-              </div>
-            `).join("");
+              </div>`;
+            }).join("");
             return `
               <div class="descriptor-card">
                 <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
@@ -815,7 +890,7 @@
                 </div>
                 <div style="margin-top:0.5rem;display:flex;gap:0.35rem;flex-wrap:wrap;">
                   <button type="button" class="btn secondary mini soft" data-action="add-claim" data-di="${di}">+ Add claim</button>
-                  ${defaultClaimOptions.map((opt) => `<button type="button" class="btn secondary mini soft" data-action="add-claim" data-claim="${opt}" data-di="${di}">${opt}</button>`).join("")}
+                  ${claimOptionsForFormat(formatValue).map((opt) => `<button type="button" class="btn secondary mini soft" data-action="add-claim" data-claim="${opt}" data-di="${di}">${opt}</button>`).join("")}
                 </div>
                 <div style="display:grid;gap:0.5rem;margin-top:0.5rem;">
                   ${claimRows || ""}
@@ -925,10 +1000,18 @@
             descriptor.format = event.target.value;
             // Re-render to update credential-type label/placeholder/visibility
             renderBuilder();
-          } else if (event.target.dataset.field === "name" || event.target.dataset.field === "const") {
+          } else if (event.target.dataset.field === "name" || event.target.dataset.field === "const" || event.target.dataset.field === "namespace" || event.target.dataset.field === "element") {
             const ci = Number(event.target.dataset.ci);
             if (Number.isNaN(ci) || !descriptor.claims[ci]) return;
-            if (event.target.dataset.field === "name") {
+            const field = event.target.dataset.field;
+            if (field === "name") {
+              descriptor.claims[ci].name = event.target.value;
+              descriptor.claims[ci].originalPath = null;
+            } else if (field === "namespace") {
+              descriptor.claims[ci].namespace = event.target.value;
+              descriptor.claims[ci].originalPath = null;
+            } else if (field === "element") {
+              descriptor.claims[ci].element = event.target.value;
               descriptor.claims[ci].name = event.target.value;
               descriptor.claims[ci].originalPath = null;
             } else {
@@ -971,7 +1054,14 @@
           if (action === "add-claim") {
             const descriptor = builderState.credentials[di];
             if (!descriptor) return;
-            addClaim(descriptor, event.target.dataset.claim || "", "");
+            const claimName = event.target.dataset.claim || "";
+            const claim = { name: claimName, constValue: "" };
+            if (descriptor.format === "mso_mdoc") {
+              claim.namespace = defaultMdocNamespace;
+              claim.element = claimName;
+            }
+            descriptor.claims = descriptor.claims || [];
+            descriptor.claims.push(claim);
             renderBuilder();
             updatePreview();
           }
@@ -1080,12 +1170,19 @@
               const creds = Array.isArray(parsed.credentials) ? parsed.credentials : [];
               if (creds.length) {
                 builderState = { credentials: creds.map((c, idx) => {
+                  const fmt = c.format || "all";
                   const claims = (Array.isArray(c.claims) ? c.claims : []).map(cl => {
                     const path = Array.isArray(cl.path) ? cl.path : [];
-                    return { name: path.join("."), constValue: typeof cl.value !== "undefined" ? String(cl.value) : "", originalPath: path.length ? [...path] : null };
+                    const claim = { name: path.join("/"), constValue: typeof cl.value !== "undefined" ? String(cl.value) : "", originalPath: path.length ? [...path] : null };
+                    if (fmt === "mso_mdoc" && path.length === 2) {
+                      claim.namespace = path[0];
+                      claim.element = path[1];
+                      claim.name = path[1];
+                    }
+                    return claim;
                   });
                   const meta = c.meta && typeof c.meta === "object" ? c.meta : null;
-                  return { id: c.id || "credential-" + (idx + 1), format: c.format || "all", meta, claims: claims.length ? claims : defaultClaims(), claimSets: [] };
+                  return { id: c.id || "credential-" + (idx + 1), format: fmt, meta, claims: claims.length ? claims : defaultClaims(), claimSets: [] };
                 }), credentialSets: Array.isArray(parsed.credential_sets) ? parsed.credential_sets : null };
                 descriptorCounter = builderState.credentials.length + 1;
                 renderBuilder();
@@ -1109,6 +1206,8 @@
             if (walletAudienceEl && data.walletAudience != null) walletAudienceEl.value = data.walletAudience;
             if (clientIdInput && data.clientId != null) clientIdInput.value = data.clientId;
             if (data.walletClientCert) sandboxButtons._certChain = data.walletClientCert;
+            if (data.clientIdHash) sandboxButtons._clientIdHash = data.clientIdHash;
+            if (data.clientId) sandboxButtons._clientIdSanDns = data.clientId;
             const verifierInfoEl = document.getElementById("verifierInfo");
             if (verifierInfoEl && data.verifierInfo != null) verifierInfoEl.value = data.verifierInfo;
             const trustListEl = document.getElementById("trustList");

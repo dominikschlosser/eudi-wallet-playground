@@ -243,6 +243,14 @@ public class TrustListService implements
         );
     }
 
+    @Override
+    public List<X509Certificate> certificates(String trustListId) {
+        return trustListCerts.getOrDefault(
+                trustListId != null ? trustListId : defaultTrustListId,
+                trustListCerts.getOrDefault(defaultTrustListId, List.of())
+        );
+    }
+
     public static boolean verifyWithKey(SignedJWT jwt, PublicKey key) {
         try {
             JWSVerifier verifier = null;

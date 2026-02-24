@@ -49,6 +49,10 @@ public interface TrustedIssuerResolver {
 
     List<PublicKey> publicKeys(String trustListId);
 
+    default List<X509Certificate> certificates(String trustListId) {
+        return List.of();
+    }
+
     default boolean isAllowAll(String trustListId) {
         return ALLOW_ALL_ID.equals(trustListId);
     }
@@ -123,6 +127,54 @@ public interface TrustedIssuerResolver {
 
         // Chain is valid — verify the JWT signature against the leaf certificate's key
         return verifyWithKey(jwt, leafCert.getPublicKey());
+    }
+
+    /**
+     * Validates an x5c certificate chain against trust anchors and returns the leaf certificate's
+     * public key if the chain is valid.
+     *
+     * @param x5cChain      the certificate chain (leaf first)
+     * @param trustAnchors  CA certificates from the trust list
+     * @return the leaf certificate's public key if the chain validates, or null
+     */
+    static PublicKey verifyX5cChain(List<X509Certificate> x5cChain, List<X509Certificate> trustAnchors) {
+        if (trustAnchors == null || trustAnchors.isEmpty() || x5cChain == null || x5cChain.isEmpty()) {
+            return null;
+        }
+
+        X509Certificate leafCert = x5cChain.get(0);
+
+        Set<TrustAnchor> anchors = new HashSet<>();
+        for (X509Certificate anchor : trustAnchors) {
+            anchors.add(new TrustAnchor(anchor, null));
+        }
+
+        Set<PublicKey> anchorKeys = new HashSet<>();
+        for (X509Certificate anchor : trustAnchors) {
+            anchorKeys.add(anchor.getPublicKey());
+        }
+        List<X509Certificate> pathCerts = new ArrayList<>();
+        for (X509Certificate cert : x5cChain) {
+            if (!anchorKeys.contains(cert.getPublicKey())) {
+                pathCerts.add(cert);
+            }
+        }
+
+        try {
+            CertificateFactory factory = CertificateFactory.getInstance("X.509");
+            var certPath = factory.generateCertPath(pathCerts);
+
+            PKIXParameters params = new PKIXParameters(anchors);
+            params.setRevocationEnabled(false);
+
+            CertPathValidator validator = CertPathValidator.getInstance("PKIX");
+            validator.validate(certPath, params);
+        } catch (Exception e) {
+            LOG.debug("x5c chain validation failed: {}", e.getMessage());
+            return null;
+        }
+
+        return leafCert.getPublicKey();
     }
 
     /**
