@@ -31,6 +31,7 @@ import de.arbeitsagentur.keycloak.wallet.common.credential.CredentialBuildResult
 
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
@@ -45,15 +46,22 @@ import java.util.Map;
  * Builds ISO 18013-5 compliant mDoc credentials.
  */
 public class MdocCredentialBuilder {
+    private static final int COSE_HEADER_PARAM_X5CHAIN = 33;
     private static final CBOREncodeOptions ENCODE_OPTIONS = CBOREncodeOptions.Default;
     private final ECKey signingKey;
     private final Duration credentialTtl;
     private final CBORMapper cborMapper = new CBORMapper();
     private final SecureRandom random = new SecureRandom();
+    private List<X509Certificate> issuerCertificateChain;
 
     public MdocCredentialBuilder(ECKey signingKey, Duration credentialTtl) {
         this.signingKey = signingKey;
         this.credentialTtl = credentialTtl;
+    }
+
+    public MdocCredentialBuilder issuerCertificateChain(List<X509Certificate> chain) {
+        this.issuerCertificateChain = chain;
+        return this;
     }
 
     public CredentialBuildResult build(String configurationId, String vct, String issuer,
@@ -224,6 +232,18 @@ public class MdocCredentialBuilder {
         sign1.addAttribute(CBORObject.FromObject(1), AlgorithmID.ECDSA_256.AsCBOR(), Attribute.PROTECTED);
         if (signingKey.getKeyID() != null) {
             sign1.addAttribute(CBORObject.FromObject(4), CBORObject.FromObject(signingKey.getKeyID()), Attribute.PROTECTED);
+        }
+        if (issuerCertificateChain != null && !issuerCertificateChain.isEmpty()) {
+            CBORObject x5chain;
+            if (issuerCertificateChain.size() == 1) {
+                x5chain = CBORObject.FromObject(issuerCertificateChain.get(0).getEncoded());
+            } else {
+                x5chain = CBORObject.NewArray();
+                for (X509Certificate cert : issuerCertificateChain) {
+                    x5chain.Add(CBORObject.FromObject(cert.getEncoded()));
+                }
+            }
+            sign1.addAttribute(CBORObject.FromObject(COSE_HEADER_PARAM_X5CHAIN), x5chain, Attribute.UNPROTECTED);
         }
         sign1.SetContent(msoPayload);
         try {

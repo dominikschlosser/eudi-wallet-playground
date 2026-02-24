@@ -220,12 +220,13 @@ public class VerifierController {
         if (material == null) {
             return Map.of("available", false);
         }
-        String clientId;
+        String clientIdSanDns;
         try {
-            clientId = verifierCryptoService.deriveX509SanClientId(null, material.certificatePem());
+            clientIdSanDns = verifierCryptoService.deriveX509SanClientId(null, material.certificatePem());
         } catch (Exception e) {
-            clientId = "";
+            clientIdSanDns = "";
         }
+        String clientIdHash = verifierCryptoService.deriveX509ClientId(null, material.certificatePem());
         String verifierInfo = readFileIfExists(properties.sandboxVerifierInfoFilePath());
         String walletAuthEndpoint = properties.sandboxWalletAuthEndpoint() != null
                 && !properties.sandboxWalletAuthEndpoint().isBlank()
@@ -239,20 +240,22 @@ public class VerifierController {
         defaults.put("responseMode", "direct_post.jwt");
         defaults.put("walletAuthEndpoint", walletAuthEndpoint);
         defaults.put("walletAudience", "https://self-issued.me/v2");
-        defaults.put("clientId", clientId);
+        defaults.put("clientId", clientIdSanDns);
+        defaults.put("clientIdHash", clientIdHash);
         // Send only the certificate chain to the browser — never the private key
         defaults.put("walletClientCert", stripPrivateKey(material.combinedPem()));
         defaults.put("clientMetadata", defaultClientMetadata());
         defaults.put("verifierInfo", verifierInfo);
         // Build three DCQL variants matching the registration certificate claims.
-        // SD-JWT: request street_address and locality as individual claims (nested under address disclosure).
+        // SD-JWT: nested address/* paths for selective disclosure of address sub-fields; "nationalities" (plural, array).
+        // mDoc: resident_* element identifiers and "nationality" (singular) as defined in EU PID mDoc namespace.
         // Note: BMI PID uses "birthdate" (no underscore), not "birth_date".
         String sdJwtOnly = """
-                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["birthdate"]},{"path":["address"]},{"path":["street_address"]},{"path":["locality"]}]}]}""";
+                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["birthdate"]},{"path":["nationalities"]},{"path":["address","street_address"]},{"path":["address","locality"]}]}]}""";
         String mdocOnly = """
-                {"credentials":[{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","street_address"]},{"path":["eu.europa.ec.eudi.pid.1","locality"]}]}]}""";
+                {"credentials":[{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","nationality"]},{"path":["eu.europa.ec.eudi.pid.1","resident_street"]},{"path":["eu.europa.ec.eudi.pid.1","resident_city"]},{"path":["eu.europa.ec.eudi.pid.1","resident_postal_code"]},{"path":["eu.europa.ec.eudi.pid.1","resident_country"]}]}]}""";
         String both = """
-                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["birthdate"]},{"path":["address"]},{"path":["street_address"]},{"path":["locality"]}]},{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","street_address"]},{"path":["eu.europa.ec.eudi.pid.1","locality"]}]}],"credential_sets":[{"options":[["pid_sd_jwt"],["pid_mdoc"]]}]}""";
+                {"credentials":[{"id":"pid_sd_jwt","format":"dc+sd-jwt","meta":{"vct_values":["urn:eudi:pid:de:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["birthdate"]},{"path":["nationalities"]},{"path":["address","street_address"]},{"path":["address","locality"]}]},{"id":"pid_mdoc","format":"mso_mdoc","meta":{"doctype_value":"eu.europa.ec.eudi.pid.1"},"claims":[{"path":["eu.europa.ec.eudi.pid.1","given_name"]},{"path":["eu.europa.ec.eudi.pid.1","family_name"]},{"path":["eu.europa.ec.eudi.pid.1","birth_date"]},{"path":["eu.europa.ec.eudi.pid.1","nationality"]},{"path":["eu.europa.ec.eudi.pid.1","resident_street"]},{"path":["eu.europa.ec.eudi.pid.1","resident_city"]},{"path":["eu.europa.ec.eudi.pid.1","resident_postal_code"]},{"path":["eu.europa.ec.eudi.pid.1","resident_country"]}]}],"credential_sets":[{"options":[["pid_sd_jwt"],["pid_mdoc"]]}]}""";
         // Allow env override via sandboxDcqlQuery for backward compat
         String dcqlOverride = properties.sandboxDcqlQuery();
         defaults.put("dcqlSdJwt", pretty(sdJwtOnly));
@@ -560,6 +563,7 @@ public class VerifierController {
         String vpTokenRaw = vpToken;
         String keyBindingJwt = firstNonBlank(keyBindingTokenAlt, keyBindingToken);
         String effectiveDpop = firstNonBlank(dpopToken, dpopTokenAlt);
+        String mdocGeneratedNonce = null;
         if (encryptedResponse != null && !encryptedResponse.isBlank()) {
             steps.add("Processing response (direct_post.jwt)",
                     "Response parameter contained a JWT/JWE; decode it to extract vp_token, state, nonce, and errors.",
@@ -576,6 +580,7 @@ public class VerifierController {
             error = firstNonBlank(error, parsed.error());
             errorDescription = firstNonBlank(errorDescription, parsed.errorDescription());
             keyBindingJwt = firstNonBlank(keyBindingJwt, parsed.keyBindingJwt());
+            mdocGeneratedNonce = parsed.mdocGeneratedNonce();
         }
         String callbackRequestBody = (encryptedResponse != null && !encryptedResponse.isBlank() ? "response=" + encryptedResponse + "\n" : "")
                 + formBody(state, vpTokenRaw, idToken, responseNonce, error, errorDescription, keyBindingJwt, effectiveDpop);
@@ -656,16 +661,21 @@ public class VerifierController {
             String expectedResponseUri = verifierSession.responseUri() != null
                     ? verifierSession.responseUri()
                     : currentRequestExternalUrl(request);
+            if (mdocGeneratedNonce != null) {
+                LOG.info("[OID4VP] mdoc_generated_nonce='{}' extracted from JWE apu header", mdocGeneratedNonce);
+            }
             List<Map<String, Object>> payloads = verificationService.verifyPresentations(
                     vpTokens.stream().map(VpTokenEntry::token).toList(),
-                    verifierSession.nonce(),
-                    responseNonce,
-                    verifierSession.trustListId(),
-                    verifierSession.clientId(),
-                    expectedResponseUri,
-                    verifierSession.responseMode(),
-                    steps,
-                    verifierSession.trustedIssuerJwks());
+                    new PresentationVerificationService.VerificationContext(
+                            verifierSession.nonce(),
+                            responseNonce,
+                            verifierSession.trustListId(),
+                            verifierSession.clientId(),
+                            expectedResponseUri,
+                            verifierSession.responseMode(),
+                            steps,
+                            verifierSession.trustedIssuerJwks(),
+                            mdocGeneratedNonce));
             steps.add("Presentation verified successfully (%d token%s)".formatted(payloads.size(), payloads.size() == 1 ? "" : "s"),
                     "All verification checks passed for the presented credential(s).",
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
@@ -1242,18 +1252,21 @@ public class VerifierController {
     }
 
     private record ParsedResponseFields(String state, String vpToken, String idToken, String nonce,
-                                         String error, String errorDescription, String keyBindingJwt) {
+                                         String error, String errorDescription, String keyBindingJwt,
+                                         String mdocGeneratedNonce) {
     }
 
     private ParsedResponseFields decodeEncryptedResponse(String encryptedResponse, VerificationSteps steps) {
         // Try JWE decryption first
         try {
+            com.nimbusds.jose.JWEObject jweObject = com.nimbusds.jose.JWEObject.parse(encryptedResponse);
+            String mdocGeneratedNonce = extractApuNonce(jweObject);
             String decrypted = verifierKeyService.decrypt(encryptedResponse);
             JsonNode node = objectMapper.readTree(decrypted);
             steps.add("Decrypted encrypted response (JWE)",
                     "Decrypted response payload with verifier encryption key.",
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
-            return extractResponseFields(node);
+            return extractResponseFields(node, mdocGeneratedNonce);
         } catch (Exception e) {
             // Fall back to JWS parsing
             try {
@@ -1262,7 +1275,7 @@ public class VerifierController {
                 steps.add("Parsed signed response (JWS)",
                         "Decoded signed response JWT payload (signature not validated).",
                         "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
-                return extractResponseFields(node);
+                return extractResponseFields(node, null);
             } catch (Exception parseException) {
                 steps.add("Unable to decode response", e.getMessage(),
                         "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
@@ -1271,7 +1284,21 @@ public class VerifierController {
         }
     }
 
-    private ParsedResponseFields extractResponseFields(JsonNode node) {
+    private String extractApuNonce(com.nimbusds.jose.JWEObject jweObject) {
+        try {
+            com.nimbusds.jose.util.Base64URL apu = jweObject.getHeader().getAgreementPartyUInfo();
+            if (apu != null) {
+                String nonce = new String(apu.decode(), java.nio.charset.StandardCharsets.UTF_8);
+                LOG.info("[OID4VP] Extracted mdoc_generated_nonce from JWE apu: '{}'", nonce);
+                return nonce;
+            }
+        } catch (Exception e) {
+            LOG.info("[OID4VP] Could not extract apu from JWE header: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    private ParsedResponseFields extractResponseFields(JsonNode node, String mdocGeneratedNonce) {
         String vpToken = null;
         JsonNode vpNode = node.get("vp_token");
         if (vpNode != null && !vpNode.isNull()) {
@@ -1288,7 +1315,8 @@ public class VerifierController {
                 node.path("nonce").asText(null),
                 node.path("error").asText(null),
                 node.path("error_description").asText(null),
-                node.path("key_binding_jwt").asText(null)
+                node.path("key_binding_jwt").asText(null),
+                mdocGeneratedNonce
         );
     }
 

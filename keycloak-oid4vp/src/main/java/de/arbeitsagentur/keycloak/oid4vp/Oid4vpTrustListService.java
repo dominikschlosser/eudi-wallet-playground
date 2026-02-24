@@ -72,6 +72,12 @@ public final class Oid4vpTrustListService implements TrustedIssuerResolver {
         return data.keys();
     }
 
+    @Override
+    public List<X509Certificate> certificates(String trustListId) {
+        TrustListData data = resolveData(trustListId);
+        return data.certificates();
+    }
+
     private TrustListData resolveData(String trustListId) {
         String id = normalizeTrustListId(trustListId);
         LOG.infof("[OID4VP-TRUSTLIST] resolveData() called for trustListId: %s (normalized: %s)", trustListId, id);
