@@ -19,7 +19,15 @@ Useful for testing with mobile devices that need to reach your local server.
 
 Options:
   --domain <name>  Use a custom ngrok domain (registered in your ngrok account).
+                   Overrides the auto-detected domain from the sandbox cert.
   --ngrok-only     Start only ngrok and print env vars to copy/paste.
+
+Sandbox certificate:
+  If sandbox/sandbox-ngrok-combined.pem exists, the script automatically:
+    - extracts the dNSName SAN and uses it as the ngrok --url domain
+    - sets VERIFIER_CLIENT_CERT_FILE so the verifier uses the ngrok cert
+  If the file is missing, ngrok starts with a random URL and the verifier
+  falls back to its default certificate (sandbox/sandbox-combined.pem).
 
 Defaults:
   - port: $PORT or 3000
@@ -127,6 +135,15 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
+NGROK_CERT_FILE="$ROOT_DIR/sandbox/sandbox-ngrok-combined.pem"
+if [ -z "$NGROK_DOMAIN" ] && command -v openssl >/dev/null 2>&1 && [ -f "$NGROK_CERT_FILE" ]; then
+  NGROK_DOMAIN="$(openssl x509 -in "$NGROK_CERT_FILE" -noout -ext subjectAltName 2>/dev/null \
+    | grep -oE 'DNS:[^ ,]+' | head -n1 | sed 's/DNS://')" || true
+  if [ -n "$NGROK_DOMAIN" ]; then
+    echo "Auto-detected ngrok domain from cert: $NGROK_DOMAIN"
+  fi
+fi
+
 NGROK_ARGS="http $PORT --log=stdout --log-format=json"
 if [ -n "$NGROK_DOMAIN" ]; then
   NGROK_ARGS="$NGROK_ARGS --url=$NGROK_DOMAIN"
@@ -163,6 +180,9 @@ keys_file="$ROOT_DIR/target/verifier-keys-ngrok-$timestamp.json"
 export PORT="$PORT"
 export WALLET_PUBLIC_BASE_URL="$public_url"
 export VERIFIER_KEYS_FILE="$keys_file"
+if [ -f "$NGROK_CERT_FILE" ]; then
+  export VERIFIER_CLIENT_CERT_FILE="$NGROK_CERT_FILE"
+fi
 
 cat <<EOF
 ngrok is running (pid $NGROK_PID)
@@ -184,6 +204,9 @@ Env (applied to the app process):
   WALLET_PUBLIC_BASE_URL=$WALLET_PUBLIC_BASE_URL
   VERIFIER_KEYS_FILE=$VERIFIER_KEYS_FILE
 EOF
+if [ -n "${VERIFIER_CLIENT_CERT_FILE:-}" ]; then
+  echo "  VERIFIER_CLIENT_CERT_FILE=$VERIFIER_CLIENT_CERT_FILE"
+fi
 
 if [ "$NGROK_ONLY" = "true" ]; then
   if [ $# -gt 0 ]; then
@@ -199,6 +222,11 @@ Suggested env to copy/paste (for an IDE / another terminal):
   export PORT=$PORT
   export WALLET_PUBLIC_BASE_URL=$WALLET_PUBLIC_BASE_URL
   export VERIFIER_KEYS_FILE=$VERIFIER_KEYS_FILE
+EOF
+  if [ -n "${VERIFIER_CLIENT_CERT_FILE:-}" ]; then
+    echo "  export VERIFIER_CLIENT_CERT_FILE=$VERIFIER_CLIENT_CERT_FILE"
+  fi
+  cat <<'EOF'
 
 Press Ctrl+C to stop ngrok.
 EOF
