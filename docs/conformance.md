@@ -23,7 +23,23 @@ Paste the plan ID into “OIDF Conformance Suite” and click “Load plan”. T
 
 ## 1) Make the verifier publicly reachable
 
-Example with ngrok:
+### Using the helper script (recommended)
+
+```bash
+scripts/run-demo-ngrok.sh
+```
+
+The script automatically:
+- reads the dNSName SAN from `sandbox/sandbox-ngrok-combined.pem` and starts ngrok with that domain (e.g. `wallet-test.ngrok.dev`)
+- sets `VERIFIER_CLIENT_CERT_FILE` so the verifier's sandbox defaults use the ngrok certificate
+- starts the demo app with the correct env vars
+
+If `sandbox/sandbox-ngrok-combined.pem` does not exist, ngrok starts with a random URL and the verifier falls back to its default certificate (`sandbox/sandbox-combined.pem`).
+
+Use `--domain <name>` to override the auto-detected domain, or `--ngrok-only` to start just the tunnel.
+
+### Manual setup
+
 ```bash
 # start the app locally (example: 3000)
 . ~/.sdkman/bin/sdkman-init.sh
