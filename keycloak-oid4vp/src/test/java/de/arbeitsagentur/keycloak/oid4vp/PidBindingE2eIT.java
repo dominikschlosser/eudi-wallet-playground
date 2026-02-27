@@ -601,12 +601,19 @@ class PidBindingE2eIT {
     }
 
     /**
-     * Test 4: Verify the DCQL query requests both credentials.
-     * This verifies that the IdP is configured to request both PID and ba-login-credential.
+     * Test 4: Verify the DCQL query structure — both credential types and nested claim paths.
+     * <p>
+     * This tests two things:
+     * <ol>
+     *   <li>The DCQL requests both PID and ba-login-credential with proper credential_sets</li>
+     *   <li>Nested claim paths like "address/street_address" are correctly split into
+     *       {@code ["address", "street_address"]} (not left as a single element
+     *       {@code ["address/street_address"]})</li>
+     * </ol>
      */
     @Test
     @Order(4)
-    void dcqlQueryRequestsBothCredentials() throws Exception {
+    void dcqlQueryHasCorrectStructureAndNestedClaimPaths() throws Exception {
         callback.reset();
         clearBrowserSession();
         wallet.clearSimulatedCredentials();
@@ -622,15 +629,78 @@ class PidBindingE2eIT {
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
 
-        // Click to start - we just want to see what DCQL query is sent
+        // Click to start - we want to inspect the DCQL query sent to the wallet
         int walletRequestsBefore = wallet.requestCount();
         setupPopupHandler();
         page.locator("#oid4vpStartButton").click();
         waitForWalletRequest(walletRequestsBefore + 1, Duration.ofSeconds(15));
 
-        // Verify we received a request
-        assertThat(wallet.requestCount()).isGreaterThan(walletRequestsBefore);
-        LOG.info("[Test] Wallet received request - DCQL query verification complete");
+        // Verify we received a request with a DCQL query
+        String dcqlRaw = wallet.lastDcqlQuery();
+        assertThat(dcqlRaw).as("Wallet should have received a DCQL query").isNotNull();
+        LOG.info("[Test] Received DCQL query: {}", dcqlRaw);
+
+        tools.jackson.databind.JsonNode dcql = OBJECT_MAPPER.readTree(dcqlRaw);
+
+        // Verify credential structure: should have german_pid and ba_login_credential
+        tools.jackson.databind.JsonNode credentials = dcql.get("credentials");
+        assertThat(credentials).as("DCQL must have credentials array").isNotNull();
+        assertThat(credentials.size()).as("Should request 2 credentials (PID + login)").isEqualTo(2);
+
+        // Find PID credential by id
+        tools.jackson.databind.JsonNode pidCred = null;
+        tools.jackson.databind.JsonNode loginCred = null;
+        for (var cred : credentials) {
+            String id = cred.get("id").asText();
+            if ("german_pid".equals(id)) pidCred = cred;
+            if ("ba_login_credential".equals(id)) loginCred = cred;
+        }
+        assertThat(pidCred).as("Should have german_pid credential").isNotNull();
+        assertThat(loginCred).as("Should have ba_login_credential credential").isNotNull();
+
+        // Verify PID credential has correct format and type
+        assertThat(pidCred.get("format").asText()).isEqualTo("dc+sd-jwt");
+        assertThat(pidCred.get("meta").get("vct_values").get(0).asText()).isEqualTo("urn:eudi:pid:de:1");
+
+        // CRITICAL: Verify nested claim paths are correctly split.
+        // The realm config has: "given_name,family_name,birthdate,address,address/street_address,address/locality"
+        // "address/street_address" must become path: ["address", "street_address"] (2 elements)
+        // NOT path: ["address/street_address"] (1 element — the bug we fixed)
+        tools.jackson.databind.JsonNode pidClaims = pidCred.get("claims");
+        assertThat(pidClaims).as("PID credential should have claims").isNotNull();
+
+        boolean foundStreetAddress = false;
+        boolean foundLocality = false;
+        for (var claim : pidClaims) {
+            tools.jackson.databind.JsonNode path = claim.get("path");
+            // Check for nested path: ["address", "street_address"]
+            if (path.size() == 2 && "address".equals(path.get(0).asText()) && "street_address".equals(path.get(1).asText())) {
+                foundStreetAddress = true;
+            }
+            // Check for nested path: ["address", "locality"]
+            if (path.size() == 2 && "address".equals(path.get(0).asText()) && "locality".equals(path.get(1).asText())) {
+                foundLocality = true;
+            }
+            // Verify NO path contains a slash in a single element (the old bug)
+            if (path.size() == 1) {
+                assertThat(path.get(0).asText())
+                        .as("Single-element claim path must not contain '/' — nested paths must be split into separate elements")
+                        .doesNotContain("/");
+            }
+        }
+        assertThat(foundStreetAddress)
+                .as("DCQL must contain path [\"address\", \"street_address\"] (split from \"address/street_address\")")
+                .isTrue();
+        assertThat(foundLocality)
+                .as("DCQL must contain path [\"address\", \"locality\"] (split from \"address/locality\")")
+                .isTrue();
+
+        // Verify credential_sets allows PID+login or PID-only
+        tools.jackson.databind.JsonNode credentialSets = dcql.get("credential_sets");
+        assertThat(credentialSets).as("Should have credential_sets").isNotNull();
+        assertThat(credentialSets.size()).isGreaterThan(0);
+
+        LOG.info("[Test] DCQL query structure and nested claim paths verified successfully");
     }
 
     /**
@@ -772,8 +842,107 @@ class PidBindingE2eIT {
         assertThat(page.url()).contains("code=");
         LOG.info("[Test] Re-issuance flow completed successfully - user re-authenticated and received new credential");
 
-        // The federated identity should now be automatically updated by PidBindingCredentialIssuanceAuthenticator
-        // when the user clicks "Continue" (setId() is called with the correct lookup key)
+        // Verify the federated identity was correctly overridden (not duplicated or left stale).
+        // The lookup key must match what the returning-user flow will compute.
+        var reissuedIdentity = Oid4vpTestKeycloakSetup.getFederatedIdentity(
+                adminClient, REALM, issuedUserId, "german-pid");
+
+        assertThat(reissuedIdentity)
+                .as("Federated identity should still exist after re-issuance (override, not deletion)")
+                .isNotNull();
+
+        String actualKey = String.valueOf(reissuedIdentity.get("userId"));
+        String expectedKey = Oid4vpTestKeycloakSetup.computeExpectedLookupKey(adminBaseUrl, REALM, issuedUserId);
+        LOG.info("[Test] Re-issuance: federated identity lookup key — expected: {}, actual: {}", expectedKey, actualKey);
+
+        assertThat(actualKey)
+                .as("Federated identity must have the correct lookup key after re-issuance " +
+                        "(proves OVERRIDE_LINK worked and afterFirstBrokerLogin succeeded)")
+                .isEqualTo(expectedKey);
+    }
+
+    /**
+     * Test 6: After re-issuance, verify the newly issued credential enables direct login.
+     * <p>
+     * This is the critical round-trip test for the federated identity override fix:
+     * <ol>
+     *   <li>Test 2 created the initial federated identity and issued a credential</li>
+     *   <li>Test 5 simulated losing the credential and re-issued a new one</li>
+     *   <li>This test verifies the new credential works for direct login (no username/password)</li>
+     * </ol>
+     * <p>
+     * If the federated identity override in test 5 failed (e.g., duplicate key error swallowed
+     * silently, or lookup key not updated), this test would fail because the returning-user
+     * flow would not find a matching federated identity and redirect to first-broker-login.
+     */
+    @Test
+    @Order(6)
+    void directLoginWorksAfterReissuance() throws Exception {
+        callback.reset();
+        clearBrowserSession();
+
+        // Verify pre-conditions from previous tests
+        assertThat(issuedUserId).as("User ID should be set from test 2").isNotNull();
+        assertThat(wallet.hasIssuedCredential())
+                .as("Wallet should have the re-issued credential from test 5")
+                .isTrue();
+
+        LOG.info("[Test] Re-issued credential round-trip: verifying direct login with new credential");
+
+        safeNavigate(buildAuthRequestUri().toString());
+        page.waitForLoadState(LoadState.NETWORKIDLE);
+
+        // Click the IdP link
+        page.locator("a#social-german-pid").click();
+
+        // Wait for wallet login page
+        waitForOid4vpStartButton();
+        configureWalletBridgeEndpoint();
+        assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
+
+        // Start wallet flow — wallet presents PID + re-issued ba-login-credential
+        int walletRequestsBefore = wallet.requestCount();
+        setupPopupHandler();
+        long startTime = System.currentTimeMillis();
+        page.locator("#oid4vpStartButton").click();
+        waitForWalletRequest(walletRequestsBefore + 1, Duration.ofSeconds(15));
+
+        // Wait for popup processing
+        Thread.sleep(3000);
+
+        // CRITICAL: Returning user with re-issued credential should get DIRECT LOGIN.
+        // If the federated identity override in test 5 didn't work correctly, this will
+        // redirect to first-broker-login instead of the callback URL.
+        try {
+            page.waitForURL(url -> url.startsWith(callbackUrl),
+                    new Page.WaitForURLOptions().setTimeout(10000));
+        } catch (Exception e) {
+            String currentUrl = page.url();
+            boolean hasLoginForm = page.locator("input[name='username']").count() > 0 ||
+                    page.locator("input[name='password']").count() > 0;
+
+            // Fetch the current federated identity for diagnostics
+            var identity = Oid4vpTestKeycloakSetup.getFederatedIdentity(adminClient, REALM, issuedUserId, "german-pid");
+            String actualKey = identity != null ? String.valueOf(identity.get("userId")) : "NOT FOUND";
+            String expectedKey = Oid4vpTestKeycloakSetup.computeExpectedLookupKey(adminBaseUrl, REALM, issuedUserId);
+
+            throw new AssertionError(
+                    "DIRECT LOGIN WITH RE-ISSUED CREDENTIAL FAILED!\n" +
+                            "After re-issuance (test 5), the new credential should enable direct login.\n" +
+                            "This failure indicates the federated identity was not correctly overridden.\n" +
+                            "Has login form: " + hasLoginForm + "\n" +
+                            "Expected lookup key: " + expectedKey + "\n" +
+                            "Actual lookup key:   " + actualKey + "\n" +
+                            "URL: " + currentUrl, e);
+        }
+
+        long duration = System.currentTimeMillis() - startTime;
+
+        assertThat(page.url()).contains("code=");
+        LOG.info("[Test] SUCCESS: Direct login with re-issued credential in {}ms — " +
+                "federated identity override working correctly", duration);
+
+        wallet.clearSimulatedCredentials();
     }
 
     // ========== Helper Methods ==========

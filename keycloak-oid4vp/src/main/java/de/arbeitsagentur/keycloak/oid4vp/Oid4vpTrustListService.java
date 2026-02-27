@@ -90,6 +90,19 @@ public final class Oid4vpTrustListService implements TrustedIssuerResolver {
         return resolved;
     }
 
+    /**
+     * Load trust list data, returning null on failure instead of throwing.
+     * Used during key/certificate registration to eagerly merge with configured trust list.
+     */
+    private TrustListData loadDataSafe(String trustListId) {
+        try {
+            TrustListData data = loadData(trustListId);
+            return data.found() ? data : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private TrustListData loadData(String trustListId) {
         if (configuredTrustListJwt == null || configuredTrustListJwt.isBlank()) {
             LOG.warnf("[OID4VP-TRUSTLIST] No trust list JWT configured");
@@ -110,6 +123,9 @@ public final class Oid4vpTrustListService implements TrustedIssuerResolver {
         trustListData.compute(id, (key, existing) -> {
             List<PublicKey> keys = new ArrayList<>();
             List<X509Certificate> certs = new ArrayList<>();
+            if (existing == null) {
+                existing = loadDataSafe(key);
+            }
             if (existing != null && existing.found()) {
                 keys.addAll(existing.keys());
                 certs.addAll(existing.certificates());
@@ -130,6 +146,9 @@ public final class Oid4vpTrustListService implements TrustedIssuerResolver {
             trustListData.compute(id, (key, existing) -> {
                 List<PublicKey> keys = new ArrayList<>();
                 List<X509Certificate> certs = new ArrayList<>();
+                if (existing == null) {
+                    existing = loadDataSafe(key);
+                }
                 if (existing != null && existing.found()) {
                     keys.addAll(existing.keys());
                     certs.addAll(existing.certificates());

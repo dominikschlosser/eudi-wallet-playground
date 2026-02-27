@@ -115,6 +115,7 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
     private volatile boolean useGermanPid = false; // Use German PID (no identifiers) instead of default PID
     private volatile String lastPostResponseBody; // Diagnostic: last VP token POST response body
     private volatile int lastPostResponseCode; // Diagnostic: last VP token POST response code
+    private volatile String lastDcqlQuery; // Last DCQL query received from Keycloak
 
     Oid4vpTestDcApiMockWalletServer(ObjectMapper objectMapper, String containerHost) throws Exception {
         this.objectMapper = objectMapper;
@@ -160,6 +161,10 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
 
     String lastNonce() {
         return lastNonce;
+    }
+
+    String lastDcqlQuery() {
+        return lastDcqlQuery;
     }
 
     void failNextRequestWithNoMatchingCredential() {
@@ -372,6 +377,7 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
         this.lastResponseMode = responseMode;
         this.lastResponseUri = responseUri;
         this.lastClientId = clientId;
+        this.lastDcqlQuery = params.get("dcql_query");
 
         String errorCode = nextErrorCode.getAndSet(null);
         String errorDesc = nextErrorDescription.getAndSet(null);

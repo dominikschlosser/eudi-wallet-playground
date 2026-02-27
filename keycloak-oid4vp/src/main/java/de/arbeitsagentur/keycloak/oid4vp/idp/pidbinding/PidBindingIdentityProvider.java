@@ -30,6 +30,7 @@ import org.keycloak.sessions.AuthenticationSessionModel;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -138,7 +139,7 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
 
     private Map<String, Object> buildPidCredentialEntry() {
         List<Map<String, Object>> claims = pidBindingConfig.getPidRequestedClaimsList().stream()
-                .map(claim -> Map.<String, Object>of("path", List.of(claim)))
+                .map(claim -> Map.<String, Object>of("path", splitClaimPath(claim)))
                 .toList();
         return Map.of(
                 "id", CRED_ID_PID,
@@ -146,6 +147,13 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
                 "meta", Map.of("vct_values", List.of(pidBindingConfig.getPidCredentialType())),
                 "claims", claims
         );
+    }
+
+    private static List<String> splitClaimPath(String claim) {
+        if (claim.contains("/")) {
+            return Arrays.asList(claim.split("/"));
+        }
+        return List.of(claim);
     }
 
     private Map<String, Object> buildLoginCredentialEntry() {

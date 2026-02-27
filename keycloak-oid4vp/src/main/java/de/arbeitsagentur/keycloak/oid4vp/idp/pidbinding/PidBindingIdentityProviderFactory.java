@@ -19,6 +19,8 @@ import de.arbeitsagentur.keycloak.oid4vp.Oid4vpTrustListService;
 import de.arbeitsagentur.keycloak.oid4vp.idp.Oid4vpIdentityProviderFactory;
 import org.jboss.logging.Logger;
 import org.keycloak.broker.provider.AbstractIdentityProviderFactory;
+import org.keycloak.crypto.KeyUse;
+import org.keycloak.crypto.KeyWrapper;
 import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.provider.ProviderConfigProperty;
@@ -280,7 +282,27 @@ public class PidBindingIdentityProviderFactory extends AbstractIdentityProviderF
             registerAdditionalCertificates(trustListService, trustListId, additionalCerts);
         }
 
+        // Register Keycloak's own signing keys so that ba-login-credentials
+        // issued by this realm are trusted when presented back by the wallet.
+        registerRealmSigningKeys(session, trustListService, config.getTrustListId());
+
         return new PidBindingIdentityProvider(session, config, objectMapper, trustListService);
+    }
+
+    private void registerRealmSigningKeys(KeycloakSession session, Oid4vpTrustListService trustListService, String trustListId) {
+        try {
+            var realm = session.getContext().getRealm();
+            session.keys().getKeysStream(realm)
+                    .filter(key -> KeyUse.SIG.equals(key.getUse()))
+                    .filter(key -> key.getPublicKey() instanceof java.security.PublicKey)
+                    .forEach(key -> {
+                        trustListService.registerKey(trustListId, (java.security.PublicKey) key.getPublicKey());
+                        LOG.infof("[PID-BINDING] Registered realm signing key: kid=%s, alg=%s",
+                                key.getKid(), key.getAlgorithmOrDefault());
+                    });
+        } catch (Exception e) {
+            LOG.warnf(e, "[PID-BINDING] Failed to register realm signing keys: %s", e.getMessage());
+        }
     }
 
     private void registerAdditionalCertificates(Oid4vpTrustListService trustListService,

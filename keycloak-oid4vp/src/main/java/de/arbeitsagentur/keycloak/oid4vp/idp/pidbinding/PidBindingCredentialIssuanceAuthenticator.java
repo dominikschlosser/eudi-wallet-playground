@@ -26,7 +26,6 @@ import org.keycloak.authentication.authenticators.broker.AbstractIdpAuthenticato
 import org.keycloak.authentication.authenticators.broker.util.SerializedBrokeredIdentityContext;
 import org.keycloak.common.util.SecretGenerator;
 import org.keycloak.common.util.Time;
-import org.keycloak.models.FederatedIdentityModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
@@ -45,10 +44,15 @@ import java.util.List;
  * This authenticator should run AFTER the standard username/password authenticator.
  * It handles:
  * <ol>
- *   <li>Updating the federated identity with the permanent lookup key (based on user ID)</li>
+ *   <li>Updating the BrokeredIdentityContext with the permanent lookup key (based on user ID)</li>
  *   <li>Showing the credential issuance page with QR code</li>
  *   <li>Handling continue/skip actions</li>
  * </ol>
+ * <p>
+ * <b>Important:</b> Custom auth notes set by the identity provider (e.g. SESSION_IDP_ALIAS) are
+ * cleared by Keycloak's {@code AuthenticationProcessor.resetFlow()} before the first-broker-login
+ * flow starts. This authenticator therefore reads the IDP alias from the
+ * {@code BROKERED_CONTEXT_NOTE} (the serialized BrokeredIdentityContext), which IS preserved.
  */
 public class PidBindingCredentialIssuanceAuthenticator implements Authenticator {
 
@@ -68,17 +72,8 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
             return;
         }
 
-        String idpAlias = context.getAuthenticationSession().getAuthNote(PidBindingIdentityProvider.SESSION_IDP_ALIAS);
+        String idpAlias = resolveIdpAlias(context);
         LOG.infof("[PID-CREDENTIAL-ISSUANCE] User: %s, IdP: %s", user.getUsername(), idpAlias);
-
-        // Show credential issuance page
-        // Note: Federated identity is updated only when user clicks "Continue" (received credential)
-        LOG.infof("[PID-CREDENTIAL-ISSUANCE] Showing credential issuance page");
-
-        // For re-issuance flow: Remove existing federated identity if present.
-        // This prevents duplicate key errors when Keycloak's afterFirstBrokerLogin
-        // tries to create a new federated identity.
-        removeExistingFederatedIdentityIfPresent(context, user, idpAlias);
 
         // Set user_id attribute for OID4VCI mapper
         user.setSingleAttribute("user_id", user.getId());
@@ -97,11 +92,14 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
         String continueAction = formData.getFirst("continue");
         if (continueAction != null) {
             LOG.infof("[PID-CREDENTIAL-ISSUANCE] Continue action - user has received credential");
-            // Update the BrokeredIdentityContext with the correct lookup key.
-            // Keycloak's afterFirstBrokerLogin() will use this to create the federated identity.
             UserModel user = context.getUser();
             if (user != null) {
+                // Update the BrokeredIdentityContext with the correct lookup key.
+                // Keycloak's afterFirstBrokerLogin() will use this to create the federated identity.
                 updateBrokeredIdentityContextWithCorrectLookupKey(context, user);
+                // For re-issuance: remove any existing federated identity so that
+                // afterFirstBrokerLogin() can create the new one without duplicate key error.
+                removeExistingFederatedIdentity(context, user);
             }
             context.success();
             return;
@@ -110,8 +108,11 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
         // Check if this is a "skip" action (user skipped credential)
         String skipAction = formData.getFirst("skip");
         if (skipAction != null) {
-            LOG.infof("[PID-CREDENTIAL-ISSUANCE] Skip action - completing flow (federated identity NOT updated)");
-            // Don't update federated identity - user doesn't have the credential
+            LOG.infof("[PID-CREDENTIAL-ISSUANCE] Skip action - completing flow");
+            UserModel user = context.getUser();
+            if (user != null) {
+                removeExistingFederatedIdentity(context, user);
+            }
             context.success();
             return;
         }
@@ -119,6 +120,50 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
         // Unknown action - show form again
         LOG.warnf("[PID-CREDENTIAL-ISSUANCE] Unknown action, showing form again");
         showCredentialIssuancePage(context, context.getUser());
+    }
+
+    /**
+     * Resolve the IDP alias from the BrokeredIdentityContext stored in the auth session.
+     * <p>
+     * We cannot use custom auth notes (like SESSION_IDP_ALIAS) because Keycloak's
+     * {@code AuthenticationProcessor.resetFlow()} clears all auth notes before the
+     * first-broker-login flow starts. The BrokeredIdentityContext is saved AFTER the reset,
+     * so its identity provider ID is always available.
+     */
+    private String resolveIdpAlias(AuthenticationFlowContext context) {
+        SerializedBrokeredIdentityContext serializedCtx = SerializedBrokeredIdentityContext.readFromAuthenticationSession(
+                context.getAuthenticationSession(), AbstractIdpAuthenticator.BROKERED_CONTEXT_NOTE);
+        if (serializedCtx != null) {
+            String alias = serializedCtx.getIdentityProviderId();
+            if (alias != null && !alias.isBlank()) {
+                return alias;
+            }
+        }
+
+        // Fallback: find the first pid-binding IDP in the realm
+        for (var idp : context.getRealm().getIdentityProvidersStream().toList()) {
+            if (PidBindingIdentityProviderFactory.PROVIDER_ID.equals(idp.getProviderId())) {
+                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Resolved IDP by provider type fallback: %s", idp.getAlias());
+                return idp.getAlias();
+            }
+        }
+
+        LOG.warnf("[PID-CREDENTIAL-ISSUANCE] Could not resolve IDP alias");
+        return null;
+    }
+
+    /**
+     * Get the PID binding IDP config, resolving the alias from the BrokeredIdentityContext.
+     */
+    private PidBindingIdentityProviderConfig getPidBindingIdpConfig(AuthenticationFlowContext context) {
+        String idpAlias = resolveIdpAlias(context);
+        if (idpAlias != null) {
+            var idp = context.getRealm().getIdentityProviderByAlias(idpAlias);
+            if (idp != null) {
+                return new PidBindingIdentityProviderConfig(idp);
+            }
+        }
+        return null;
     }
 
     /**
@@ -134,9 +179,11 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
 
         // Get wallet URL for same-device flow
         String sameDeviceWalletUrl;
-        String walletUrl = getWalletUrl(context);
-        if (isNativeWalletMode(context) || walletUrl == null || walletUrl.isBlank()) {
-            // Use native openid-credential-offer:// URI
+        PidBindingIdentityProviderConfig config = getPidBindingIdpConfig(context);
+        String walletUrl = config != null ? config.getCredentialIssuanceWalletUrl() : null;
+        boolean nativeWallet = config != null && config.isNativeWalletMode();
+
+        if (nativeWallet || walletUrl == null || walletUrl.isBlank()) {
             sameDeviceWalletUrl = openidCredentialOfferUri;
         } else {
             sameDeviceWalletUrl = walletUrl + "?credentialOffer=" +
@@ -164,6 +211,28 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
     }
 
     /**
+     * Remove any existing federated identity for this user+provider.
+     * Uses the correct IDP alias resolved from the BrokeredIdentityContext.
+     * This is a no-op on first login (no existing identity to remove).
+     */
+    private void removeExistingFederatedIdentity(AuthenticationFlowContext context, UserModel user) {
+        try {
+            String idpAlias = resolveIdpAlias(context);
+            if (idpAlias == null) {
+                return;
+            }
+            boolean removed = context.getSession().users()
+                    .removeFederatedIdentity(context.getRealm(), user, idpAlias);
+            if (removed) {
+                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Removed existing federated identity for re-issuance: user=%s, idp=%s",
+                        user.getUsername(), idpAlias);
+            }
+        } catch (Exception e) {
+            LOG.warnf(e, "[PID-CREDENTIAL-ISSUANCE] Error removing existing federated identity: %s", e.getMessage());
+        }
+    }
+
+    /**
      * Build the OID4VCI credential offer URI.
      */
     private String buildCredentialOfferUri(AuthenticationFlowContext context, String userId) {
@@ -174,7 +243,14 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
         }
         String issuer = baseUri + "realms/" + context.getRealm().getName();
 
-        String configId = getCredentialConfigurationId(context);
+        PidBindingIdentityProviderConfig config = getPidBindingIdpConfig(context);
+        String configId = (config != null && config.getCredentialConfigurationId() != null && !config.getCredentialConfigurationId().isBlank())
+                ? config.getCredentialConfigurationId()
+                : "user-binding-credential";
+        String clientId = (config != null && config.getOid4vciClientId() != null && !config.getOid4vciClientId().isBlank())
+                ? config.getOid4vciClientId()
+                : "pid-binding-wallet";
+
         String preAuthorizedCode = "urn:oid4vci:code:" + SecretGenerator.getInstance().randomString(64);
 
         CredentialsOffer credOffer = new CredentialsOffer()
@@ -185,7 +261,6 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
                 new PreAuthorizedCode().setPreAuthorizedCode(preAuthorizedCode)));
 
         int expiration = Time.currentTime() + DEFAULT_PRE_AUTHORIZED_CODE_LIFESPAN_S;
-        String clientId = getOid4vciClientId(context);
 
         CredentialOfferState offerState = new CredentialOfferState(credOffer, clientId, userId, expiration);
 
@@ -196,93 +271,6 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
         offerStorage.putOfferState(session, offerState);
 
         return issuer + "/protocol/oid4vc/credential-offer/" + offerState.getNonce();
-    }
-
-    private String getCredentialConfigurationId(AuthenticationFlowContext context) {
-        String idpAlias = context.getAuthenticationSession().getAuthNote(PidBindingIdentityProvider.SESSION_IDP_ALIAS);
-        if (idpAlias != null) {
-            var idp = context.getRealm().getIdentityProviderByAlias(idpAlias);
-            if (idp != null) {
-                PidBindingIdentityProviderConfig config = new PidBindingIdentityProviderConfig(idp);
-                String configId = config.getCredentialConfigurationId();
-                if (configId != null && !configId.isBlank()) {
-                    return configId;
-                }
-            }
-        }
-        return "user-binding-credential";
-    }
-
-    private String getOid4vciClientId(AuthenticationFlowContext context) {
-        String idpAlias = context.getAuthenticationSession().getAuthNote(PidBindingIdentityProvider.SESSION_IDP_ALIAS);
-        if (idpAlias != null) {
-            var idp = context.getRealm().getIdentityProviderByAlias(idpAlias);
-            if (idp != null) {
-                PidBindingIdentityProviderConfig config = new PidBindingIdentityProviderConfig(idp);
-                String clientId = config.getOid4vciClientId();
-                if (clientId != null && !clientId.isBlank()) {
-                    return clientId;
-                }
-            }
-        }
-        return "pid-binding-wallet";
-    }
-
-    private PidBindingIdentityProviderConfig getPidBindingIdpConfig(AuthenticationFlowContext context) {
-        // Try to get IDP alias from auth note first
-        String idpAlias = context.getAuthenticationSession().getAuthNote(PidBindingIdentityProvider.SESSION_IDP_ALIAS);
-        if (idpAlias != null) {
-            var idp = context.getRealm().getIdentityProviderByAlias(idpAlias);
-            if (idp != null) {
-                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Found IDP from auth note: %s", idpAlias);
-                return new PidBindingIdentityProviderConfig(idp);
-            }
-        }
-
-        // Fallback: find the first pid-binding IDP in the realm
-        for (var idp : context.getRealm().getIdentityProvidersStream().toList()) {
-            if (PidBindingIdentityProviderFactory.PROVIDER_ID.equals(idp.getProviderId())) {
-                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Found IDP by provider type: %s", idp.getAlias());
-                return new PidBindingIdentityProviderConfig(idp);
-            }
-        }
-
-        LOG.warnf("[PID-CREDENTIAL-ISSUANCE] No PID binding IDP found in realm");
-        return null;
-    }
-
-    private String getWalletUrl(AuthenticationFlowContext context) {
-        PidBindingIdentityProviderConfig config = getPidBindingIdpConfig(context);
-        return config != null ? config.getCredentialIssuanceWalletUrl() : null;
-    }
-
-    private boolean isNativeWalletMode(AuthenticationFlowContext context) {
-        PidBindingIdentityProviderConfig config = getPidBindingIdpConfig(context);
-        return config != null && config.isNativeWalletMode();
-    }
-
-    /**
-     * Remove existing federated identity if present (to handle re-issuance flow).
-     * This prevents duplicate key errors when Keycloak's afterFirstBrokerLogin
-     * tries to create a new federated identity.
-     */
-    private void removeExistingFederatedIdentityIfPresent(AuthenticationFlowContext context, UserModel user, String idpAlias) {
-        try {
-            if (idpAlias == null || idpAlias.isBlank()) {
-                idpAlias = "german-pid";
-            }
-
-            FederatedIdentityModel existingIdentity = context.getSession().users()
-                    .getFederatedIdentity(context.getRealm(), user, idpAlias);
-
-            if (existingIdentity != null) {
-                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Removing existing federated identity for re-issuance: user=%s, idp=%s",
-                        user.getUsername(), idpAlias);
-                context.getSession().users().removeFederatedIdentity(context.getRealm(), user, idpAlias);
-            }
-        } catch (Exception e) {
-            LOG.warnf(e, "[PID-CREDENTIAL-ISSUANCE] Error checking/removing existing federated identity: %s", e.getMessage());
-        }
     }
 
     @Override
@@ -307,11 +295,14 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
 
     /**
      * Update the BrokeredIdentityContext with the correct lookup key.
-     * Keycloak's afterFirstBrokerLogin() will use this to create the federated identity.
+     * <p>
+     * Keycloak's {@code afterFirstBrokerLogin()} reads this context and uses {@code context.getId()}
+     * as the federated user ID when calling {@code addFederatedIdentity()}. We replace the
+     * temporary ID (set during processFirstLogin) with the permanent lookup key based on the
+     * authenticated user's ID.
      */
     private void updateBrokeredIdentityContextWithCorrectLookupKey(AuthenticationFlowContext context, UserModel user) {
         try {
-            // Compute the correct lookup key using issuer, login credential type, and user ID
             String baseUri = context.getSession().getContext().getUri().getBaseUri().toString();
             if (!baseUri.endsWith("/")) {
                 baseUri = baseUri + "/";
@@ -323,21 +314,14 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
             LOG.infof("[PID-CREDENTIAL-ISSUANCE] Updating context: issuer=%s, type=%s, userId=%s, lookupKey=%s",
                     issuer, loginCredentialType, user.getId(), lookupKey);
 
-            // Update the BrokeredIdentityContext
             SerializedBrokeredIdentityContext serializedCtx = SerializedBrokeredIdentityContext.readFromAuthenticationSession(
                     context.getAuthenticationSession(), AbstractIdpAuthenticator.BROKERED_CONTEXT_NOTE);
 
             if (serializedCtx != null) {
-                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Found BrokeredIdentityContext, setting correct ID...");
-                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Old ID: %s", serializedCtx.getId());
-
-                // IMPORTANT: setId() sets the field that Keycloak uses for federated identity creation
-                // setBrokerUserId() is a different field and won't affect the lookup key
+                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Old ID: %s, setting to: %s", serializedCtx.getId(), lookupKey);
                 serializedCtx.setId(lookupKey);
                 serializedCtx.setBrokerUsername(user.getId());
                 serializedCtx.saveToAuthenticationSession(context.getAuthenticationSession(), AbstractIdpAuthenticator.BROKERED_CONTEXT_NOTE);
-
-                LOG.infof("[PID-CREDENTIAL-ISSUANCE] Set BrokeredIdentityContext ID to: %s", lookupKey);
             } else {
                 LOG.warnf("[PID-CREDENTIAL-ISSUANCE] No BrokeredIdentityContext found in session!");
             }
@@ -348,15 +332,11 @@ public class PidBindingCredentialIssuanceAuthenticator implements Authenticator 
     }
 
     private String getLoginCredentialType(AuthenticationFlowContext context) {
-        String idpAlias = context.getAuthenticationSession().getAuthNote(PidBindingIdentityProvider.SESSION_IDP_ALIAS);
-        if (idpAlias != null) {
-            var idp = context.getRealm().getIdentityProviderByAlias(idpAlias);
-            if (idp != null) {
-                PidBindingIdentityProviderConfig config = new PidBindingIdentityProviderConfig(idp);
-                String type = config.getLoginCredentialType();
-                if (type != null && !type.isBlank()) {
-                    return type;
-                }
+        PidBindingIdentityProviderConfig config = getPidBindingIdpConfig(context);
+        if (config != null) {
+            String type = config.getLoginCredentialType();
+            if (type != null && !type.isBlank()) {
+                return type;
             }
         }
         return "urn:arbeitsagentur:user_credential:1";
