@@ -1200,7 +1200,7 @@
         "clientId": "not-used",
         "clientSecret": "not-used",
         "enforceHaip": "true",
-        "skipTrustListVerification": "true",
+        "skipTrustListVerification": "false",
         "trustListUrl": "https://bmi.usercontent.opencode.de/eudi-wallet/test-trust-lists/pid-provider.jwt",
         "dcApiEnabled": "true",
         "sameDeviceEnabled": "true",

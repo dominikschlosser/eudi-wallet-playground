@@ -92,15 +92,24 @@ public class SdJwtVerifier {
                     "Parsed SD-JWT based presentation and prepared for signature/disclosure checks.",
                     "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
         }
-        if (!trustResolver.verify(jwt, trustListId)) {
-            LOG.debug("Signature verification failed against trust list");
-            throw new IllegalStateException("Credential signature not trusted");
-        }
-        LOG.debug("Signature verified successfully");
-        if (steps != null) {
-            steps.add("Signature verified against trust list",
-                    "Checked JWT/SD-JWT signature against trusted issuers in the trust list.",
-                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
+        if (trustResolver.isAllowAll(trustListId)) {
+            LOG.debug("Trust list is 'allow-all', skipping signature verification");
+            if (steps != null) {
+                steps.add("Signature verification skipped (allow-all trust list)",
+                        "Trust list set to allow-all; credential signature was not checked.",
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
+            }
+        } else {
+            if (!trustResolver.verify(jwt, trustListId)) {
+                LOG.debug("Signature verification failed against trust list");
+                throw new IllegalStateException("Credential signature not trusted");
+            }
+            LOG.debug("Signature verified successfully");
+            if (steps != null) {
+                steps.add("Signature verified against trust list",
+                        "Checked JWT/SD-JWT signature against trusted issuers in the trust list.",
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
+            }
         }
         // Check revocation status via Token Status List
         checkRevocationStatus(jwt, steps);

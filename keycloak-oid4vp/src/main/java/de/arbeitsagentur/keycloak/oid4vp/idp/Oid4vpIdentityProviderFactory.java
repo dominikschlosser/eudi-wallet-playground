@@ -71,8 +71,8 @@ public class Oid4vpIdentityProviderFactory extends AbstractIdentityProviderFacto
                 .property()
                     .name(Oid4vpIdentityProviderConfig.SKIP_TRUST_LIST_VERIFICATION)
                     .label("Skip Trust List Verification")
-                    .helpText("Skip trust list verification and auto-trust x5c certificates from credentials. " +
-                              "Use only for local testing when the trust list server is unavailable. " +
+                    .helpText("Skip trust list verification and accept all credential signatures. " +
+                              "Use only for local testing. " +
                               "Overrides HAIP enforcement for trust list checks.")
                     .type(ProviderConfigProperty.BOOLEAN_TYPE)
                     .defaultValue("false")
