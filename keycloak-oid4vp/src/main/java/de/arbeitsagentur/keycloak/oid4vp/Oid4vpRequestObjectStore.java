@@ -51,6 +51,7 @@ public class Oid4vpRequestObjectStore {
     private static final String KEY_REBUILD_X509_CERT_PEM = "rebuild.x509CertPem";
     private static final String KEY_REBUILD_X509_SIGNING_KEY_JWK = "rebuild.x509SigningKeyJwk";
     private static final String KEY_REBUILD_ENCRYPTION_PUBLIC_KEY_JSON = "rebuild.encryptionPublicKeyJson";
+    private static final String KEY_REBUILD_VERIFIER_INFO = "rebuild.verifierInfo";
 
     private final Duration ttl;
 
@@ -143,6 +144,7 @@ public class Oid4vpRequestObjectStore {
             putIfNotNull(notes, KEY_REBUILD_X509_CERT_PEM, rebuildParams.x509CertPem());
             putIfNotNull(notes, KEY_REBUILD_X509_SIGNING_KEY_JWK, rebuildParams.x509SigningKeyJwk());
             putIfNotNull(notes, KEY_REBUILD_ENCRYPTION_PUBLIC_KEY_JSON, rebuildParams.encryptionPublicKeyJson());
+            putIfNotNull(notes, KEY_REBUILD_VERIFIER_INFO, rebuildParams.verifierInfo());
         }
 
         // Store main entry
@@ -368,7 +370,8 @@ public class Oid4vpRequestObjectStore {
                     notes.get(KEY_REBUILD_DCQL_QUERY),
                     notes.get(KEY_REBUILD_X509_CERT_PEM),
                     notes.get(KEY_REBUILD_X509_SIGNING_KEY_JWK),
-                    notes.get(KEY_REBUILD_ENCRYPTION_PUBLIC_KEY_JSON)
+                    notes.get(KEY_REBUILD_ENCRYPTION_PUBLIC_KEY_JSON),
+                    notes.get(KEY_REBUILD_VERIFIER_INFO)
             );
         }
 
@@ -393,7 +396,8 @@ public class Oid4vpRequestObjectStore {
             String dcqlQuery,
             String x509CertPem,
             String x509SigningKeyJwk,
-            String encryptionPublicKeyJson
+            String encryptionPublicKeyJson,
+            String verifierInfo
     ) {}
 
     /**

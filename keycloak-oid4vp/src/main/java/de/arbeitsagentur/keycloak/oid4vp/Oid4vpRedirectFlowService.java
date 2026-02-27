@@ -235,6 +235,14 @@ public class Oid4vpRedirectFlowService {
             if (dcqlQuery != null && !dcqlQuery.isBlank()) {
                 claims.put("dcql_query", parseJsonClaim(dcqlQuery));
             }
+
+            String verifierInfo = config.verifierInfo();
+            if (verifierInfo != null && !verifierInfo.isBlank()) {
+                Object parsedVerifierInfo = parseJsonClaim(verifierInfo);
+                if (parsedVerifierInfo != null) {
+                    claims.put("verifier_info", parsedVerifierInfo);
+                }
+            }
         }
 
         try {
@@ -316,6 +324,7 @@ public class Oid4vpRedirectFlowService {
         String x509CertPem = rebuildParams.x509CertPem();
         String x509SigningKeyJwk = rebuildParams.x509SigningKeyJwk();
         String encryptionPublicKeyJson = rebuildParams.encryptionPublicKeyJson();
+        String verifierInfo = rebuildParams.verifierInfo();
 
         LOG.infof("[OID4VP-REDIRECT-FLOW] Rebuilding request object with wallet_nonce: %s", walletNonce);
 
@@ -373,6 +382,13 @@ public class Oid4vpRedirectFlowService {
         // DCQL query
         if (dcqlQuery != null && !dcqlQuery.isBlank()) {
             claims.put("dcql_query", parseJsonClaim(dcqlQuery));
+        }
+
+        if (verifierInfo != null && !verifierInfo.isBlank()) {
+            Object parsedVerifierInfo = parseJsonClaim(verifierInfo);
+            if (parsedVerifierInfo != null) {
+                claims.put("verifier_info", parsedVerifierInfo);
+            }
         }
 
         try {

@@ -83,7 +83,8 @@ class Oid4vpWalletNonceTest {
                 "{\"credentials\":[]}",
                 "-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----",
                 "{\"kty\":\"EC\"}",
-                "{\"kty\":\"EC\",\"crv\":\"P-256\"}"
+                "{\"kty\":\"EC\",\"crv\":\"P-256\"}",
+                null
         );
 
         String id = store.store(
@@ -152,7 +153,7 @@ class Oid4vpWalletNonceTest {
         Oid4vpRequestObjectStore store = new Oid4vpRequestObjectStore();
 
         Oid4vpRequestObjectStore.RebuildParams rebuildParams = new Oid4vpRequestObjectStore.RebuildParams(
-                "client-id", "plain", "response-uri", null, null, null, null
+                "client-id", "plain", "response-uri", null, null, null, null, null
         );
 
         store.store(session, "jwt1", "enc1", "state-A", "nonce1", null, null, rebuildParams);
@@ -180,7 +181,8 @@ class Oid4vpWalletNonceTest {
                 "{\"credentials\":[{\"id\":\"cred1\"}]}",
                 "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
                 "{\"kty\":\"EC\",\"d\":\"private\"}",
-                "{\"kty\":\"EC\",\"x\":\"public\"}"
+                "{\"kty\":\"EC\",\"x\":\"public\"}",
+                null
         );
 
         assertThat(params.effectiveClientId()).isEqualTo("effective-client-id");
@@ -202,7 +204,8 @@ class Oid4vpWalletNonceTest {
                 null,  // dcqlQuery optional
                 null,  // x509CertPem optional
                 null,  // x509SigningKeyJwk optional
-                null   // encryptionPublicKeyJson optional
+                null,  // encryptionPublicKeyJson optional
+                null   // verifierInfo optional
         );
 
         assertThat(params.effectiveClientId()).isEqualTo("client-id");

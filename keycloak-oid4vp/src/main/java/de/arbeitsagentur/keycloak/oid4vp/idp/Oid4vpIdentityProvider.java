@@ -332,7 +332,8 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         Oid4vpRequestObjectStore.RebuildParams rebuildParams = new Oid4vpRequestObjectStore.RebuildParams(
                 effectiveClientId, getConfig().getClientIdScheme(), responseUri,
                 legacyConfig != null ? legacyConfig.dcqlQuery() : null,
-                getConfig().getX509CertificatePem(), getConfig().getX509SigningKeyJwk(), encryptionPublicKeyJson);
+                getConfig().getX509CertificatePem(), getConfig().getX509SigningKeyJwk(), encryptionPublicKeyJson,
+                legacyConfig != null ? legacyConfig.verifierInfo() : null);
 
         String requestObjectId = REQUEST_OBJECT_STORE.store(session, signedRequest.jwt(), signedRequest.encryptionKeyJson(),
                 sessionState.state(), sessionState.nonce(), rootSessionId, clientIdForSession, rebuildParams, skipIndexes);

@@ -166,7 +166,8 @@ class Oid4vpRedirectFlowEncryptionTest {
                 "{\"credentials\":[]}",
                 null, // x509CertPem
                 null, // x509SigningKeyJwk
-                publicKeyJson // encryptionPublicKeyJson
+                publicKeyJson, // encryptionPublicKeyJson
+                null  // verifierInfo
         );
 
         // Assert: Public key is preserved in rebuild params
