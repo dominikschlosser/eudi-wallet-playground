@@ -192,6 +192,7 @@ public class Oid4vpIdentityProviderEndpoint {
 
         String state = queryState != null && !queryState.isBlank() ? queryState : formState;
         boolean hasError = error != null && !error.isBlank();
+        boolean hadEncryptedResponse = encryptedResponse != null && !encryptedResponse.isBlank();
 
         // When state is null but we have an encrypted response, the state is inside the JWE.
         // Real wallets using direct_post.jwt send response=<JWE> with no external state.
@@ -287,6 +288,18 @@ public class Oid4vpIdentityProviderEndpoint {
 
         if (hasError) {
             return handleError(state, error, errorDescription, authSession, isDirectPostFlow, isCrossDeviceFlow);
+        }
+
+        // Enforce encrypted response for direct_post.jwt response_mode.
+        // Redirect flows (same-device and cross-device) always use direct_post.jwt,
+        // so the wallet MUST send the "response" parameter (JWE), not a plain "vp_token".
+        if (isDirectPostFlow && !hadEncryptedResponse) {
+            LOG.warnf("[OID4VP-ENDPOINT] Rejecting plain vp_token in direct_post.jwt flow - " +
+                    "wallet must send encrypted 'response' parameter");
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("{\"error\":\"invalid_request\"," +
+                            "\"error_description\":\"response_mode is direct_post.jwt but no encrypted response was provided\"}")
+                    .type(MediaType.APPLICATION_JSON).build();
         }
 
         return processVpToken(authSession, state, vpToken, encryptedResponse, error, errorDescription,
