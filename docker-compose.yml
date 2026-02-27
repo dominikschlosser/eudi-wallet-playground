@@ -18,4 +18,4 @@ services:
     volumes:
       - ./keycloak-oid4vp/target/providers:/opt/keycloak/providers:ro
       - ./demo-app/config/keycloak:/opt/keycloak/data/import
-      - ./sandbox:/opt/keycloak/sandbox:ro
+      - ./sandbox:/sandbox:ro
