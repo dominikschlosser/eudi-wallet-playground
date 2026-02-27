@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.8.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.7...v1.8.0) (2026-02-27)
+
+
+### Features
+
+* integrate sandbox into keycloak idp ([e467bf1](https://github.com/ba-itsys/eudi-wallet-playground/commit/e467bf135aec8b804e33737f84826552a02c79b2))
+
+
+### Bug Fixes
+
+* mdoc sessiontranscript validation ([e4fc818](https://github.com/ba-itsys/eudi-wallet-playground/commit/e4fc818b545a3c812852d5395d356e07381f5cde))
+* ngrok with custom url ([9b69baf](https://github.com/ba-itsys/eudi-wallet-playground/commit/9b69bafb7fe2e3e2fa4f89be40820c3c38169a58))
+* request object ttl and allow all trust list mode ([a136490](https://github.com/ba-itsys/eudi-wallet-playground/commit/a136490fff2adad5a6e418bcecf26c52833c22b9))
+* send verifier_info in auth request ([8bd4974](https://github.com/ba-itsys/eudi-wallet-playground/commit/8bd4974c02a653a4dddcb38133e6cbc7b8e73fbb))
+* tests ([dd74bd8](https://github.com/ba-itsys/eudi-wallet-playground/commit/dd74bd86c60d6a2005fe9dd34ceeeed707da2ffb))
+
 ## [1.7.7](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.6...v1.7.7) (2026-02-23)
 
 
