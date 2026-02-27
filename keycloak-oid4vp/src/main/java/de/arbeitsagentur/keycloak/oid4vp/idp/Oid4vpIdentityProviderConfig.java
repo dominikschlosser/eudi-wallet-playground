@@ -68,6 +68,7 @@ public class Oid4vpIdentityProviderConfig extends IdentityProviderModel {
     public static final String CLIENT_ID_SCHEME = "clientIdScheme";
     public static final String X509_CERTIFICATE_PEM = "x509CertificatePem";
     public static final String X509_SIGNING_KEY_JWK = "x509SigningKeyJwk";
+    public static final String X509_CERTIFICATE_FILE = "x509CertificateFile";
 
     // Credential set mode: "optional" (any one credential) or "all" (all credentials required)
     public static final String CREDENTIAL_SET_MODE = "credentialSetMode";
@@ -83,6 +84,10 @@ public class Oid4vpIdentityProviderConfig extends IdentityProviderModel {
 
     // Verifier info: array of attestation objects about the verifier (e.g., registration certificates)
     public static final String VERIFIER_INFO = "verifierInfo";
+    public static final String VERIFIER_INFO_FILE = "verifierInfoFile";
+
+    // Skip trust list verification (for local testing when trust list server is unavailable)
+    public static final String SKIP_TRUST_LIST_VERIFICATION = "skipTrustListVerification";
 
     // HAIP compliance mode: when enabled, overrides config values with HAIP-compliant settings
     public static final String ENFORCE_HAIP = "enforceHaip";
@@ -389,6 +394,18 @@ public class Oid4vpIdentityProviderConfig extends IdentityProviderModel {
     }
 
     /**
+     * Get the file path to a combined PEM file containing both X.509 certificate chain and private key.
+     * When set, the certificate and signing key JWK are loaded from this file at provider creation time.
+     */
+    public String getX509CertificateFile() {
+        return getConfig().get(X509_CERTIFICATE_FILE);
+    }
+
+    public void setX509CertificateFile(String path) {
+        getConfig().put(X509_CERTIFICATE_FILE, path);
+    }
+
+    /**
      * Whether to trust x5c certificates embedded in credentials.
      * When enabled, credential signatures are verified against the x5c certificate in the credential itself,
      * rather than requiring the issuer to be in the trust list.
@@ -454,11 +471,12 @@ public class Oid4vpIdentityProviderConfig extends IdentityProviderModel {
      */
     public boolean isIssuerAllowed(String issuer) {
         String allowed = getAllowedIssuers();
-        if (allowed == null || allowed.isBlank()) {
+        if (allowed == null || allowed.isBlank() || "*".equals(allowed.trim())) {
             return true; // No restriction, defer to trust list
         }
         for (String entry : allowed.split("[,\\s]+")) {
-            if (entry.trim().equalsIgnoreCase(issuer)) {
+            String trimmed = entry.trim();
+            if (trimmed.equalsIgnoreCase(issuer) || "*".equals(trimmed)) {
                 return true;
             }
         }
@@ -471,11 +489,12 @@ public class Oid4vpIdentityProviderConfig extends IdentityProviderModel {
      */
     public boolean isCredentialTypeAllowed(String credentialType) {
         String allowed = getAllowedCredentialTypes();
-        if (allowed == null || allowed.isBlank()) {
+        if (allowed == null || allowed.isBlank() || "*".equals(allowed.trim())) {
             return true; // No restriction
         }
         for (String entry : allowed.split("[,\\s]+")) {
-            if (entry.trim().equals(credentialType)) {
+            String trimmed = entry.trim();
+            if (trimmed.equals(credentialType) || "*".equals(trimmed)) {
                 return true;
             }
         }
@@ -493,6 +512,10 @@ public class Oid4vpIdentityProviderConfig extends IdentityProviderModel {
 
     public void setVerifierInfo(String verifierInfo) {
         getConfig().put(VERIFIER_INFO, verifierInfo);
+    }
+
+    public String getVerifierInfoFile() {
+        return getConfig().get(VERIFIER_INFO_FILE);
     }
 
     // HAIP compliance mode
@@ -546,11 +569,29 @@ public class Oid4vpIdentityProviderConfig extends IdentityProviderModel {
     }
 
     /**
+     * Check if trust list verification should be skipped entirely.
+     * When enabled, credentials are accepted without trust list verification by
+     * auto-trusting x5c certificates from the credential (overrides HAIP enforcement).
+     * Use only for local testing when the trust list server is unavailable.
+     */
+    public boolean isSkipTrustListVerification() {
+        return "true".equalsIgnoreCase(getConfig().get(SKIP_TRUST_LIST_VERIFICATION));
+    }
+
+    public void setSkipTrustListVerification(boolean skip) {
+        getConfig().put(SKIP_TRUST_LIST_VERIFICATION, String.valueOf(skip));
+    }
+
+    /**
      * Check if trust from x5c is allowed.
+     * When skipTrustListVerification is enabled, always returns true (auto-trust x5c).
      * When HAIP is enforced, trusting arbitrary x5c certificates is disabled
      * (credentials must be verified against the configured trust list per Section 5-2.7).
      */
     public boolean getEffectiveTrustX5cFromCredential() {
+        if (isSkipTrustListVerification()) {
+            return true; // Skip trust list — auto-trust x5c from credential
+        }
         if (isEnforceHaip()) {
             return false; // HAIP requires trust anchor verification
         }

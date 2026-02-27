@@ -141,6 +141,33 @@ class SdJwtSelectiveDiscloserTest {
                 .doesNotContainKey("family_name");
     }
 
+    @Test
+    void filterDisclosuresKeepsArrayElementDisclosures() throws Exception {
+        // Array element disclosures have format ["salt", value] (2 elements, no claim name)
+        // They must survive filtering so the parent array can be reconstructed.
+        // The parent nationalities disclosure value references the element digests.
+        com.authlete.sd.Disclosure elem1 = new com.authlete.sd.Disclosure("DE");
+        com.authlete.sd.Disclosure elem2 = new com.authlete.sd.Disclosure("FR");
+        String arrayElement1 = elem1.getDisclosure();
+        String arrayElement2 = elem2.getDisclosure();
+        List<Map<String, Object>> arrayWithDigests = List.of(
+                elem1.toArrayElement(), elem2.toArrayElement());
+        String namedClaim = new com.authlete.sd.Disclosure("salt1", "nationalities", arrayWithDigests).getDisclosure();
+        String otherClaim = new com.authlete.sd.Disclosure("salt2", "given_name", "Alice").getDisclosure();
+
+        SdJwtParser parser = new SdJwtParser(new ObjectMapper());
+        SdJwtSelectiveDiscloser discloser = new SdJwtSelectiveDiscloser(parser);
+
+        List<String> filtered = discloser.filterDisclosures(
+                List.of(arrayElement1, arrayElement2, namedClaim, otherClaim),
+                List.of(new SdJwtSelectiveDiscloser.ClaimRequest("nationalities", null)),
+                Set.of("nationalities"));
+
+        // array elements referenced by nationalities + nationalities should be kept, given_name dropped
+        assertThat(filtered).contains(arrayElement1, arrayElement2, namedClaim);
+        assertThat(filtered).doesNotContain(otherClaim);
+    }
+
     /**
      * Tests parsing and filtering of a real BMI sandbox PID credential with recursive
      * selective disclosure. The address and place_of_birth claims use nested _sd arrays:
@@ -213,5 +240,17 @@ class SdJwtSelectiveDiscloserTest {
                 .containsEntry("birthdate", "1984-08-12")
                 .doesNotContainKey("address")
                 .doesNotContainKey("family_name");
+
+        // 4. Filter for nationalities — per-element array disclosures must survive
+        String filteredNationalities = discloser.filter(
+                bmiCredential,
+                List.of(new SdJwtSelectiveDiscloser.ClaimRequest("nationalities", null)),
+                Set.of("nationalities"));
+
+        Map<String, Object> natClaims = parser.extractDisclosedClaims(filteredNationalities);
+        assertThat(natClaims).containsKey("nationalities");
+        @SuppressWarnings("unchecked")
+        List<String> nationalities = (List<String>) natClaims.get("nationalities");
+        assertThat(nationalities).contains("DE");
     }
 }

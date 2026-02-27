@@ -188,10 +188,56 @@ public class PidBindingIdentityProviderFactory extends AbstractIdentityProviderF
                     .type(ProviderConfigProperty.TEXT_TYPE)
                     .add()
                 .property()
+                    .name(PidBindingIdentityProviderConfig.VERIFIER_INFO_FILE)
+                    .label("Verifier Info File")
+                    .helpText("Path to JSON file containing verifier attestations. Takes precedence over inline JSON.")
+                    .type(ProviderConfigProperty.STRING_TYPE)
+                    .add()
+                .property()
                     .name(PidBindingIdentityProviderConfig.VERIFIER_INFO)
                     .label("Verifier Info (JSON)")
                     .helpText("Optional: JSON array of verifier attestations (e.g., registration certificates for EUDI Wallet).")
                     .type(ProviderConfigProperty.TEXT_TYPE)
+                    .add()
+                // Client ID scheme and x509 certificate config
+                .property()
+                    .name(PidBindingIdentityProviderConfig.CLIENT_ID_SCHEME)
+                    .label("Client ID Scheme")
+                    .helpText("Scheme for client_id in redirect flows: plain (just client_id), x509_san_dns (DNS from cert SAN), x509_hash (cert hash).")
+                    .type(ProviderConfigProperty.LIST_TYPE)
+                    .defaultValue("plain")
+                    .options(List.of("plain", "x509_san_dns", "x509_hash"))
+                    .add()
+                .property()
+                    .name(PidBindingIdentityProviderConfig.X509_CERTIFICATE_PEM)
+                    .label("X.509 Certificate (PEM)")
+                    .helpText("PEM-encoded X.509 certificate chain for x509_san_dns or x509_hash client ID schemes. " +
+                              "May also include a PRIVATE KEY block — if present, the signing key JWK is auto-generated.")
+                    .type(ProviderConfigProperty.TEXT_TYPE)
+                    .add()
+                .property()
+                    .name(PidBindingIdentityProviderConfig.X509_CERTIFICATE_FILE)
+                    .label("X.509 Certificate File Path")
+                    .helpText("Alternative: path to a combined PEM file (cert chain + private key) on disk. " +
+                              "Takes precedence over inline PEM. Useful when secrets are mounted via Kubernetes.")
+                    .type(ProviderConfigProperty.STRING_TYPE)
+                    .add()
+                .property()
+                    .name(PidBindingIdentityProviderConfig.ALLOWED_CREDENTIAL_TYPES)
+                    .label("Allowed Credential Types")
+                    .helpText("Comma-separated list of allowed credential types (vct/docType). Empty allows all types.")
+                    .type(ProviderConfigProperty.STRING_TYPE)
+                    .add()
+                .property()
+                    .name(PidBindingIdentityProviderConfig.CREDENTIAL_SET_MODE)
+                    .label("Credential Set Mode")
+                    .helpText("When multiple credential types are configured via mappers: 'optional' requires any one credential, 'all' requires all credentials.")
+                    .type(ProviderConfigProperty.LIST_TYPE)
+                    .defaultValue(PidBindingIdentityProviderConfig.CREDENTIAL_SET_MODE_OPTIONAL)
+                    .options(List.of(
+                        PidBindingIdentityProviderConfig.CREDENTIAL_SET_MODE_OPTIONAL,
+                        PidBindingIdentityProviderConfig.CREDENTIAL_SET_MODE_ALL
+                    ))
                     .add()
                 .build();
     }
@@ -210,6 +256,10 @@ public class PidBindingIdentityProviderFactory extends AbstractIdentityProviderF
     public PidBindingIdentityProvider create(KeycloakSession session, IdentityProviderModel model) {
         PidBindingIdentityProviderConfig config = new PidBindingIdentityProviderConfig(model);
         ObjectMapper objectMapper = new ObjectMapper();
+
+        // Resolve x509 from file if configured
+        Oid4vpIdentityProviderFactory.resolveX509FromFile(config);
+        Oid4vpIdentityProviderFactory.resolveVerifierInfoFromFile(config);
 
         // Create trust list service: URL takes precedence over inline JWT
         String trustListJwt = Oid4vpIdentityProviderFactory.resolveTrustListJwt(session, config);

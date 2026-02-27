@@ -18,15 +18,21 @@ package de.arbeitsagentur.keycloak.oid4vp;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.JsonNode;
 import com.nimbusds.jose.EncryptionMethod;
+import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWEAlgorithm;
 import com.nimbusds.jose.JWEObject;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.crypto.ECDHDecrypter;
+import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.crypto.RSADecrypter;
 import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
 import org.keycloak.crypto.AsymmetricSignatureSignerContext;
 import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.KeyWrapper;
@@ -79,10 +85,17 @@ public final class Oid4vpDcApiRequestObjectService {
     }
 
     /**
+     * Result of decrypting an encrypted response, including the optional
+     * {@code mdoc_generated_nonce} extracted from the JWE {@code apu} header.
+     */
+    public record DecryptedResponse(JsonNode payload, String mdocGeneratedNonce) {}
+
+    /**
      * Decrypt an encrypted response JWT using the provided private key.
      * Supports both EC keys (ECDH-ES) and RSA keys (RSA-OAEP-256).
+     * Extracts the {@code mdoc_generated_nonce} from the JWE {@code apu} header if present.
      */
-    public JsonNode decryptEncryptedResponse(String encryptedResponseJwt, String responseEncryptionPrivateJwk) {
+    public DecryptedResponse decryptEncryptedResponse(String encryptedResponseJwt, String responseEncryptionPrivateJwk) {
         if (encryptedResponseJwt == null || encryptedResponseJwt.isBlank()) {
             throw new IllegalArgumentException("Missing encrypted response");
         }
@@ -100,10 +113,24 @@ public final class Oid4vpDcApiRequestObjectService {
                 RSAKey privateKey = RSAKey.parse(responseEncryptionPrivateJwk);
                 jwe.decrypt(new RSADecrypter(privateKey.toRSAPrivateKey()));
             }
-            return objectMapper.readTree(jwe.getPayload().toString());
+            String mdocGeneratedNonce = extractApuNonce(jwe);
+            JsonNode payload = objectMapper.readTree(jwe.getPayload().toString());
+            return new DecryptedResponse(payload, mdocGeneratedNonce);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to decrypt encrypted response", e);
         }
+    }
+
+    private String extractApuNonce(JWEObject jwe) {
+        try {
+            com.nimbusds.jose.util.Base64URL apu = jwe.getHeader().getAgreementPartyUInfo();
+            if (apu != null) {
+                return new String(apu.decode(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (Exception e) {
+            // apu extraction is best-effort
+        }
+        return null;
     }
 
     private DcApiRequestObject buildSignedRequestObject(Oid4vpConfig config, String origin, String clientId, String state, String nonce) {
@@ -119,8 +146,6 @@ public final class Oid4vpDcApiRequestObjectService {
         if (origin == null || origin.isBlank()) {
             throw new IllegalStateException("Unable to determine current origin for expected_origins");
         }
-
-        KeyWrapper signingKey = resolveSigningKey(config.dcApiSigningKeyId());
 
         ECKey responseEncryptionKey = createResponseEncryptionKey();
 
@@ -156,17 +181,38 @@ public final class Oid4vpDcApiRequestObjectService {
 
         String dcApiResponseUri = origin + "/";
         try {
-            JWSBuilder builder = new JWSBuilder()
-                    .type(REQUEST_OBJECT_TYP)
-                    .kid(signingKey.getKid());
-            if (signingKey.getCertificateChain() != null && !signingKey.getCertificateChain().isEmpty()) {
-                builder = builder.x5c(signingKey.getCertificateChain());
-            } else if (signingKey.getPublicKey() != null) {
-                builder = builder.jwk(toPublicJwk(signingKey));
+            String jwt;
+            // Use x509 signing key from PEM if available (HAIP-compliant ES256 signing)
+            if (config.x509SigningKeyJwk() != null && !config.x509SigningKeyJwk().isBlank()) {
+                ECKey ecSigningKey = ECKey.parse(config.x509SigningKeyJwk());
+                JWSHeader.Builder headerBuilder = new JWSHeader.Builder(JWSAlgorithm.ES256)
+                        .type(new JOSEObjectType(REQUEST_OBJECT_TYP))
+                        .keyID(ecSigningKey.getKeyID());
+                if (ecSigningKey.getX509CertChain() != null && !ecSigningKey.getX509CertChain().isEmpty()) {
+                    headerBuilder.x509CertChain(ecSigningKey.getX509CertChain());
+                }
+                JWTClaimsSet.Builder claimsSetBuilder = new JWTClaimsSet.Builder();
+                for (var entry : claims.entrySet()) {
+                    claimsSetBuilder.claim(entry.getKey(), entry.getValue());
+                }
+                SignedJWT signedJWT = new SignedJWT(headerBuilder.build(), claimsSetBuilder.build());
+                signedJWT.sign(new ECDSASigner(ecSigningKey));
+                jwt = signedJWT.serialize();
+            } else {
+                // Fallback to realm signing key
+                KeyWrapper signingKey = resolveSigningKey(config.dcApiSigningKeyId());
+                JWSBuilder builder = new JWSBuilder()
+                        .type(REQUEST_OBJECT_TYP)
+                        .kid(signingKey.getKid());
+                if (signingKey.getCertificateChain() != null && !signingKey.getCertificateChain().isEmpty()) {
+                    builder = builder.x5c(signingKey.getCertificateChain());
+                } else if (signingKey.getPublicKey() != null) {
+                    builder = builder.jwk(toPublicJwk(signingKey));
+                }
+                jwt = builder
+                        .jsonContent(claims)
+                        .sign(new AsymmetricSignatureSignerContext(signingKey));
             }
-            String jwt = builder
-                    .jsonContent(claims)
-                    .sign(new AsymmetricSignatureSignerContext(signingKey));
             return new DcApiRequestObject(jwt, responseEncryptionKey.toJSONString(), dcApiResponseUri);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to sign DC API request object", e);

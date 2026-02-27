@@ -50,6 +50,7 @@ public class VpTokenProcessor {
      * @param jwkThumbprint JWK thumbprint for key binding (optional)
      * @param trustX5c Whether to trust X.509 certificate chains
      * @param alternateResponseUri Alternative response URI for redirect flow retry (optional)
+     * @param mdocGeneratedNonce The mdoc_generated_nonce from JWE apu header (optional, for ISO 18013-7)
      * @return Verification result containing all credentials and merged claims
      * @throws IdentityBrokerException if verification fails
      */
@@ -61,26 +62,43 @@ public class VpTokenProcessor {
             String responseUri,
             byte[] jwkThumbprint,
             boolean trustX5c,
-            String alternateResponseUri) throws IdentityBrokerException {
+            String alternateResponseUri,
+            String mdocGeneratedNonce) throws IdentityBrokerException {
 
         VpTokenFormat.Type format = VpTokenFormat.detect(vpToken, objectMapper);
         LOG.debugf("VP token format: %s", format);
 
         if (format == VpTokenFormat.Type.MULTI_CREDENTIAL) {
             return processMultiCredential(vpToken, trustListId, clientId, expectedNonce,
-                    responseUri, jwkThumbprint, trustX5c, alternateResponseUri);
+                    responseUri, jwkThumbprint, trustX5c, alternateResponseUri, mdocGeneratedNonce);
         } else {
             return processSingleCredential(vpToken, trustListId, clientId, expectedNonce,
-                    responseUri, jwkThumbprint, trustX5c, alternateResponseUri);
+                    responseUri, jwkThumbprint, trustX5c, alternateResponseUri, mdocGeneratedNonce);
         }
+    }
+
+    /** Backwards-compatible overload without mdocGeneratedNonce. */
+    public VpTokenVerificationResult process(
+            String vpToken,
+            String trustListId,
+            String clientId,
+            String expectedNonce,
+            String responseUri,
+            byte[] jwkThumbprint,
+            boolean trustX5c,
+            String alternateResponseUri) throws IdentityBrokerException {
+        return process(vpToken, trustListId, clientId, expectedNonce, responseUri,
+                jwkThumbprint, trustX5c, alternateResponseUri, null);
     }
 
     private VpTokenVerificationResult processMultiCredential(
             String vpToken, String trustListId, String clientId, String expectedNonce,
-            String responseUri, byte[] jwkThumbprint, boolean trustX5c, String alternateResponseUri) {
+            String responseUri, byte[] jwkThumbprint, boolean trustX5c, String alternateResponseUri,
+            String mdocGeneratedNonce) {
 
         Map<String, Oid4vpVerifierService.VerifiedPresentation> verified = verifyMultiCredentialWithRetry(
-                vpToken, trustListId, clientId, expectedNonce, responseUri, jwkThumbprint, trustX5c, alternateResponseUri);
+                vpToken, trustListId, clientId, expectedNonce, responseUri, jwkThumbprint, trustX5c,
+                alternateResponseUri, mdocGeneratedNonce);
 
         Map<String, VpTokenVerificationResult.VerifiedCredential> credentials = new LinkedHashMap<>();
         Map<String, Object> mergedClaims = new LinkedHashMap<>();
@@ -109,10 +127,12 @@ public class VpTokenProcessor {
 
     private VpTokenVerificationResult processSingleCredential(
             String vpToken, String trustListId, String clientId, String expectedNonce,
-            String responseUri, byte[] jwkThumbprint, boolean trustX5c, String alternateResponseUri) {
+            String responseUri, byte[] jwkThumbprint, boolean trustX5c, String alternateResponseUri,
+            String mdocGeneratedNonce) {
 
         Oid4vpVerifierService.VerifiedPresentation verified = verifySingleCredentialWithRetry(
-                vpToken, trustListId, clientId, expectedNonce, responseUri, jwkThumbprint, trustX5c, alternateResponseUri);
+                vpToken, trustListId, clientId, expectedNonce, responseUri, jwkThumbprint, trustX5c,
+                alternateResponseUri, mdocGeneratedNonce);
 
         String issuer = CredentialClaimsExtractor.extractClaim(verified.claims(), "iss");
         String credentialType = CredentialClaimsExtractor.extractCredentialType(verified.claims(), verified.type());
@@ -137,17 +157,20 @@ public class VpTokenProcessor {
 
     private Map<String, Oid4vpVerifierService.VerifiedPresentation> verifyMultiCredentialWithRetry(
             String vpToken, String trustListId, String clientId, String expectedNonce,
-            String responseUri, byte[] jwkThumbprint, boolean trustX5c, String alternateResponseUri) {
+            String responseUri, byte[] jwkThumbprint, boolean trustX5c, String alternateResponseUri,
+            String mdocGeneratedNonce) {
 
         try {
             return verifierService.verifyMultiCredential(
-                    vpToken, trustListId, clientId, expectedNonce, responseUri, jwkThumbprint, trustX5c);
+                    vpToken, trustListId, clientId, expectedNonce, responseUri, jwkThumbprint, trustX5c,
+                    mdocGeneratedNonce);
         } catch (Exception e) {
             if (alternateResponseUri != null && !alternateResponseUri.equals(responseUri)) {
                 LOG.debugf("Retrying multi-credential verification with alternate response URI");
                 try {
                     return verifierService.verifyMultiCredential(
-                            vpToken, trustListId, clientId, expectedNonce, alternateResponseUri, jwkThumbprint, trustX5c);
+                            vpToken, trustListId, clientId, expectedNonce, alternateResponseUri, jwkThumbprint, trustX5c,
+                            mdocGeneratedNonce);
                 } catch (Exception e2) {
                     throw new IdentityBrokerException("VP verification failed: " + e2.getMessage(), e2);
                 }
@@ -158,20 +181,23 @@ public class VpTokenProcessor {
 
     private Oid4vpVerifierService.VerifiedPresentation verifySingleCredentialWithRetry(
             String vpToken, String trustListId, String clientId, String expectedNonce,
-            String responseUri, byte[] jwkThumbprint, boolean trustX5c, String alternateResponseUri) {
+            String responseUri, byte[] jwkThumbprint, boolean trustX5c, String alternateResponseUri,
+            String mdocGeneratedNonce) {
 
         // Extract credential from JSON wrapper if present (e.g., {"pid": ["eyJ..."]})
         String credential = VpTokenFormat.extractSingleCredential(vpToken, objectMapper);
 
         try {
             return verifierService.verify(
-                    credential, trustListId, clientId, expectedNonce, responseUri, jwkThumbprint, trustX5c);
+                    credential, trustListId, clientId, expectedNonce, responseUri, jwkThumbprint, trustX5c,
+                    mdocGeneratedNonce);
         } catch (Exception e) {
             if (isSessionTranscriptMismatch(e) && alternateResponseUri != null && !alternateResponseUri.equals(responseUri)) {
                 LOG.debugf("Retrying single-credential verification with alternate response URI");
                 try {
                     return verifierService.verify(
-                            credential, trustListId, clientId, expectedNonce, alternateResponseUri, jwkThumbprint, trustX5c);
+                            credential, trustListId, clientId, expectedNonce, alternateResponseUri, jwkThumbprint, trustX5c,
+                            mdocGeneratedNonce);
                 } catch (Exception e2) {
                     throw new IdentityBrokerException("VP verification failed: " + e2.getMessage(), e2);
                 }

@@ -49,12 +49,26 @@ public class SdJwtSelectiveDiscloser {
         if (disclosures == null || disclosures.isEmpty() || requestedClaims == null || requestedClaims.isEmpty()) {
             return disclosures == null ? List.of() : new ArrayList<>(disclosures);
         }
-        List<String> filtered = new ArrayList<>();
+        List<String> named = new ArrayList<>();
+        List<String> arrayElements = new ArrayList<>();
         for (String disclosure : disclosures) {
             String claimName = claimNameFromDisclosure(disclosure);
-            if (claimName != null && (requestedClaims.contains(claimName)
-                    || matchesAnyRequest(requests, claimName))) {
-                filtered.add(disclosure);
+            if (claimName == null) {
+                arrayElements.add(disclosure);
+            } else if (requestedClaims.contains(claimName)
+                    || matchesAnyRequest(requests, claimName)) {
+                named.add(disclosure);
+            }
+        }
+        // Only keep array element disclosures whose digest appears in a kept parent's value
+        Set<String> parentDigests = SdJwtUtils.collectAllDigestsFromRaw(named);
+        List<String> filtered = new ArrayList<>(named);
+        for (String ae : arrayElements) {
+            try {
+                if (parentDigests.contains(Disclosure.parse(ae).digest())) {
+                    filtered.add(ae);
+                }
+            } catch (Exception ignored) {
             }
         }
         return filtered;

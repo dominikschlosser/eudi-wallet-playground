@@ -24,6 +24,7 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.SignedJWT;
 import de.arbeitsagentur.keycloak.wallet.common.mdoc.MdocVerifier;
 import de.arbeitsagentur.keycloak.wallet.common.sdjwt.SdJwtVerifier;
+import de.arbeitsagentur.keycloak.wallet.common.credential.StatusListVerifier;
 import de.arbeitsagentur.keycloak.wallet.common.credential.TrustedIssuerResolver;
 import de.arbeitsagentur.keycloak.wallet.verification.config.VerifierProperties;
 import org.springframework.stereotype.Service;
@@ -47,6 +48,7 @@ public class PresentationVerificationService {
     private final VerifierKeyService verifierKeyService;
     private final SdJwtVerifier sdJwtVerifier;
     private final MdocVerifier mdocVerifier;
+    private final StatusListVerifier statusListVerifier;
 
     public PresentationVerificationService(TrustListService trustListService,
                                            VerifierProperties properties,
@@ -56,6 +58,7 @@ public class PresentationVerificationService {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.verifierKeyService = verifierKeyService;
+        this.statusListVerifier = new StatusListVerifier();
         this.sdJwtVerifier = new SdJwtVerifier(objectMapper, trustListService);
         this.mdocVerifier = new MdocVerifier(trustListService);
     }
@@ -181,19 +184,34 @@ public class PresentationVerificationService {
                 "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
 
         verifyJwtSignature(jwt, trustListId, steps);
+        checkPlainJwtRevocationStatus(jwt, steps);
         validateJwtTimestamps(jwt);
         validateJwtAudienceAndNonce(jwt, audience, expectedNonce);
 
         steps.add("Nonce and audience matched verifier session",
                 "Validated presentation audience and nonce against verifier session.",
-                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-14.1.2");
+                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
         steps.add("Credential timing rules validated",
                 "Checked exp/nbf timestamps to ensure presentation is currently valid.",
-                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-14.1.2");
+                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
 
         Map<String, Object> claims = new LinkedHashMap<>(jwt.getJWTClaimsSet().getClaims());
         verifyHolderBindingIfPresent(keyBindingJwt, token, audience, expectedNonce, sdJwtVerifier, claims, steps);
         return claims;
+    }
+
+    private void checkPlainJwtRevocationStatus(SignedJWT jwt, VerificationSteps steps) {
+        try {
+            statusListVerifier.checkRevocationStatus(jwt.getJWTClaimsSet().getClaims());
+            steps.add("Revocation status checked",
+                    "Verified credential has not been revoked via Token Status List.",
+                    "https://datatracker.ietf.org/doc/draft-ietf-oauth-status-list/");
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            org.slf4j.LoggerFactory.getLogger(PresentationVerificationService.class)
+                    .debug("Could not check revocation status: {}", e.getMessage());
+        }
     }
 
     private void verifyJwtSignature(SignedJWT jwt, String trustListId, VerificationSteps steps) {
@@ -202,7 +220,7 @@ public class PresentationVerificationService {
         }
         steps.add("Signature verified against trust list",
                 "Checked JWT/SD-JWT signature against trusted issuers in the trust list.",
-                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
+                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
     }
 
     private void validateJwtTimestamps(SignedJWT jwt) throws ParseException {
@@ -241,7 +259,7 @@ public class PresentationVerificationService {
         sdJwtVerifier.verifyHolderBinding(keyBindingJwt, token, audience, expectedNonce);
         steps.add("Validated holder binding",
                 "Validated KB-JWT holder binding: cnf key matches credential and signature verified.",
-                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.4");
+                "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
         claims.put("key_binding_jwt", keyBindingJwt);
     }
 

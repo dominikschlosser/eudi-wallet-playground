@@ -9,7 +9,7 @@
       "claims": [
         { "name": "given_name", "label": "Given name", "defaultValue": "Alice", "required": true },
         { "name": "family_name", "label": "Family name", "defaultValue": "Holder", "required": true },
-        { "name": "birth_date", "label": "Birth date", "defaultValue": "1990-01-01", "required": true },
+        { "name": "birthdate", "label": "Birth date", "defaultValue": "1990-01-01", "required": true },
         { "name": "address", "label": "Address", "defaultValue": "{\"street_address\":\"Heidestraße 17\",\"locality\":\"Berlin\",\"postal_code\":\"10557\",\"country\":\"DE\"}", "required": true },
         { "name": "document_number", "label": "Document number", "defaultValue": "DOC-MOCK-1234", "required": true },
         { "name": "nationalities", "label": "Nationalities", "defaultValue": "[\"DE\"]", "required": false }
@@ -25,9 +25,12 @@
         { "name": "given_name", "label": "Given name", "defaultValue": "Alice", "required": true },
         { "name": "family_name", "label": "Family name", "defaultValue": "Holder", "required": true },
         { "name": "birth_date", "label": "Birth date", "defaultValue": "1990-01-01", "required": true },
-        { "name": "address", "label": "Address", "defaultValue": "{\"street_address\":\"Heidestraße 17\",\"locality\":\"Berlin\",\"postal_code\":\"10557\",\"country\":\"DE\"}", "required": true },
+        { "name": "resident_street", "label": "Street", "defaultValue": "Heidestraße 17", "required": false },
+        { "name": "resident_city", "label": "City", "defaultValue": "Berlin", "required": false },
+        { "name": "resident_postal_code", "label": "Postal code", "defaultValue": "10557", "required": false },
+        { "name": "resident_country", "label": "Country", "defaultValue": "DE", "required": false },
         { "name": "document_number", "label": "Document number", "defaultValue": "DOC-MOCK-1234", "required": true },
-        { "name": "nationalities", "label": "Nationalities", "defaultValue": "[\"DE\"]", "required": false }
+        { "name": "nationality", "label": "Nationality", "defaultValue": "DE", "required": false }
       ]
     },
     {

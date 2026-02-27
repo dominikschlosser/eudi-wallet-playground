@@ -758,16 +758,19 @@ public class PresentationService {
     }
 
     private String jsonPathFromSegments(JsonNode pathNode) {
-        List<String> segments = new ArrayList<>();
+        StringBuilder sb = new StringBuilder("$");
+        boolean hasSegments = false;
         for (JsonNode p : pathNode) {
             if (p.isTextual()) {
-                segments.add(p.asText());
+                sb.append('.').append(p.asText());
+                hasSegments = true;
+            } else if (p.isNull()) {
+                sb.append("[*]");
+            } else if (p.isIntegralNumber()) {
+                sb.append('[').append(p.intValue()).append(']');
             }
         }
-        if (segments.isEmpty()) {
-            return null;
-        }
-        return "$." + String.join(".", segments);
+        return hasSegments ? sb.toString() : null;
     }
 
     private String claimFromSegments(JsonNode pathNode) {

@@ -24,21 +24,25 @@ import de.arbeitsagentur.keycloak.wallet.common.credential.CredentialBuildResult
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class SdJwtCredentialBuilderTest {
 
-    @Test
-    void buildsSdJwtWithDisclosuresAndClaims() throws Exception {
+    private SdJwtCredentialBuilder builder() throws Exception {
         ECKey signingKey = new ECKeyGenerator(Curve.P_256)
                 .keyUse(KeyUse.SIGNATURE)
                 .keyID("sdjwt-test")
                 .generate();
-        SdJwtCredentialBuilder builder = new SdJwtCredentialBuilder(new ObjectMapper(), signingKey, Duration.ofMinutes(5));
+        return new SdJwtCredentialBuilder(new ObjectMapper(), signingKey, Duration.ofMinutes(5));
+    }
 
-        CredentialBuildResult result = builder.build("cfg-id", "urn:example:vct", "https://issuer.example/mock",
+    @Test
+    void buildsSdJwtWithDisclosuresAndClaims() throws Exception {
+        CredentialBuildResult result = builder().build("cfg-id", "urn:example:vct", "https://issuer.example/mock",
                 Map.of("given_name", "Alice", "family_name", "Holder"), null);
 
         assertThat(result.format()).isEqualTo("dc+sd-jwt");
@@ -48,5 +52,81 @@ class SdJwtCredentialBuilderTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> claims = (Map<String, Object>) result.decoded().get("claims");
         assertThat(claims).containsEntry("given_name", "Alice");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void buildsPerElementArrayDisclosuresForListValues() throws Exception {
+        Map<String, Object> claims = new LinkedHashMap<>();
+        claims.put("given_name", "Alice");
+        claims.put("nationalities", List.of("DE", "FR"));
+
+        CredentialBuildResult result = builder().build("cfg-id", "urn:eudi:pid:1",
+                "https://issuer.example/mock", claims, null);
+
+        // Parse the SD-JWT and extract all disclosed claims
+        ObjectMapper mapper = new ObjectMapper();
+        SdJwtParser parser = new SdJwtParser(mapper);
+        Map<String, Object> disclosed = parser.extractDisclosedClaims(result.encoded());
+
+        assertThat(disclosed).containsEntry("given_name", "Alice");
+        assertThat(disclosed).containsKey("nationalities");
+        List<String> nationalities = (List<String>) disclosed.get("nationalities");
+        assertThat(nationalities).containsExactly("DE", "FR");
+
+        // Each array element should have its own disclosure (2 element + 1 parent = at least 3 for nationalities)
+        // Plus 1 for given_name = at least 4 total disclosures
+        assertThat(result.disclosures().size()).isGreaterThanOrEqualTo(4);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void arrayElementDisclosuresAreIndividuallyFilterable() throws Exception {
+        Map<String, Object> claims = new LinkedHashMap<>();
+        claims.put("given_name", "Alice");
+        claims.put("nationalities", List.of("DE"));
+
+        CredentialBuildResult result = builder().build("cfg-id", "urn:eudi:pid:1",
+                "https://issuer.example/mock", claims, null);
+
+        // Filter for only nationalities — given_name should be excluded
+        ObjectMapper mapper = new ObjectMapper();
+        SdJwtParser parser = new SdJwtParser(mapper);
+        SdJwtSelectiveDiscloser discloser = new SdJwtSelectiveDiscloser(parser);
+
+        String filtered = discloser.filter(
+                result.encoded(),
+                List.of(new SdJwtSelectiveDiscloser.ClaimRequest("nationalities", null)),
+                java.util.Set.of("nationalities"));
+
+        Map<String, Object> filteredClaims = parser.extractDisclosedClaims(filtered);
+        assertThat(filteredClaims).containsKey("nationalities");
+        assertThat((List<String>) filteredClaims.get("nationalities")).containsExactly("DE");
+        assertThat(filteredClaims).doesNotContainKey("given_name");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void nestedMapClaimsAreRecursivelyDisclosed() throws Exception {
+        Map<String, Object> address = new LinkedHashMap<>();
+        address.put("street_address", "Main St 1");
+        address.put("locality", "Berlin");
+
+        Map<String, Object> claims = new LinkedHashMap<>();
+        claims.put("given_name", "Alice");
+        claims.put("address", address);
+
+        CredentialBuildResult result = builder().build("cfg-id", "urn:eudi:pid:1",
+                "https://issuer.example/mock", claims, null);
+
+        ObjectMapper mapper = new ObjectMapper();
+        SdJwtParser parser = new SdJwtParser(mapper);
+        Map<String, Object> disclosed = parser.extractDisclosedClaims(result.encoded());
+
+        assertThat(disclosed).containsKey("address");
+        Map<String, Object> disclosedAddress = (Map<String, Object>) disclosed.get("address");
+        assertThat(disclosedAddress)
+                .containsEntry("street_address", "Main St 1")
+                .containsEntry("locality", "Berlin");
     }
 }

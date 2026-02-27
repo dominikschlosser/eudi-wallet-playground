@@ -71,9 +71,29 @@ spec:
               mountPath: /opt/keycloak/data/import/realm-pid-binding-export.json
               subPath: realm-pid-binding-export.json
             {{- end }}
+            {{- if .Values.wallet.files.sandboxCert }}
+            - name: sandbox-cert
+              mountPath: /sandbox/sandbox-combined.pem
+              subPath: sandbox-combined.pem
+            {{- end }}
+            {{- if .Values.wallet.files.sandboxVerifierInfo }}
+            - name: sandbox-verifier-info
+              mountPath: /sandbox/sandbox-verifier-info.json
+              subPath: sandbox-verifier-info.json
+            {{- end }}
       volumes:
         - name: keycloak-data
           emptyDir: {}
         - name: realm-import
           secret:
             secretName: wallet-demo-realm
+        {{- if .Values.wallet.files.sandboxCert }}
+        - name: sandbox-cert
+          secret:
+            secretName: wallet-demo-sandbox-cert
+        {{- end }}
+        {{- if .Values.wallet.files.sandboxVerifierInfo }}
+        - name: sandbox-verifier-info
+          secret:
+            secretName: wallet-demo-sandbox-verifier-info
+        {{- end }}

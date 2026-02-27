@@ -26,6 +26,21 @@ import org.keycloak.provider.ProviderConfigProperty;
 import org.keycloak.provider.ProviderConfigurationBuilder;
 import tools.jackson.databind.ObjectMapper;
 
+import com.nimbusds.jose.jwk.Curve;
+import com.nimbusds.jose.jwk.ECKey;
+
+import java.io.ByteArrayInputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.security.interfaces.ECPrivateKey;
+import java.security.interfaces.ECPublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 
 /**
@@ -51,6 +66,16 @@ public class Oid4vpIdentityProviderFactory extends AbstractIdentityProviderFacto
                               "and strict trust anchor verification.")
                     .type(ProviderConfigProperty.BOOLEAN_TYPE)
                     .defaultValue("true")
+                    .add()
+                // Skip trust list verification (for local testing)
+                .property()
+                    .name(Oid4vpIdentityProviderConfig.SKIP_TRUST_LIST_VERIFICATION)
+                    .label("Skip Trust List Verification")
+                    .helpText("Skip trust list verification and auto-trust x5c certificates from credentials. " +
+                              "Use only for local testing when the trust list server is unavailable. " +
+                              "Overrides HAIP enforcement for trust list checks.")
+                    .type(ProviderConfigProperty.BOOLEAN_TYPE)
+                    .defaultValue("false")
                     .add()
                 // Credential set mode for multi-credential requests
                 .property()
@@ -188,10 +213,24 @@ public class Oid4vpIdentityProviderFactory extends AbstractIdentityProviderFacto
                 .property()
                     .name(Oid4vpIdentityProviderConfig.X509_CERTIFICATE_PEM)
                     .label("X.509 Certificate (PEM)")
-                    .helpText("PEM-encoded X.509 certificate for x509_san_dns or x509_hash client ID schemes.")
+                    .helpText("PEM-encoded X.509 certificate chain for x509_san_dns or x509_hash client ID schemes. " +
+                              "May also include a PRIVATE KEY block — if present, the signing key JWK is auto-generated.")
                     .type(ProviderConfigProperty.TEXT_TYPE)
                     .add()
+                .property()
+                    .name(Oid4vpIdentityProviderConfig.X509_CERTIFICATE_FILE)
+                    .label("X.509 Certificate File Path")
+                    .helpText("Alternative: path to a combined PEM file (cert chain + private key) on disk. " +
+                              "Takes precedence over inline PEM. Useful when secrets are mounted via Kubernetes.")
+                    .type(ProviderConfigProperty.STRING_TYPE)
+                    .add()
                 // Verifier info for EUDI Wallet registration certificates
+                .property()
+                    .name(Oid4vpIdentityProviderConfig.VERIFIER_INFO_FILE)
+                    .label("Verifier Info File")
+                    .helpText("Path to JSON file containing verifier attestations. Takes precedence over inline JSON.")
+                    .type(ProviderConfigProperty.STRING_TYPE)
+                    .add()
                 .property()
                     .name(Oid4vpIdentityProviderConfig.VERIFIER_INFO)
                     .label("Verifier Info (JSON)")
@@ -216,6 +255,12 @@ public class Oid4vpIdentityProviderFactory extends AbstractIdentityProviderFacto
         Oid4vpIdentityProviderConfig config = new Oid4vpIdentityProviderConfig(model);
         ObjectMapper objectMapper = new ObjectMapper();
 
+        // Resolve x509 from file if configured
+        resolveX509FromFile(config);
+
+        // Resolve verifier info from file if configured (file takes precedence over inline)
+        resolveVerifierInfoFromFile(config);
+
         // Create trust list service: URL takes precedence over inline JWT
         String trustListJwt = resolveTrustListJwt(session, config);
         Oid4vpTrustListService trustListService = new Oid4vpTrustListService(trustListJwt);
@@ -235,13 +280,192 @@ public class Oid4vpIdentityProviderFactory extends AbstractIdentityProviderFacto
         if (trustListUrl != null && !trustListUrl.isBlank()) {
             try {
                 String jwtContent = SimpleHttp.doGet(trustListUrl, session).asString();
-                LOG.infof("Fetched ETSI trust list from %s (%d chars)", trustListUrl, jwtContent.length());
+                LOG.infof("[OID4VP-FACTORY] Fetched ETSI trust list from %s (%d chars, preview: %s)",
+                        trustListUrl, jwtContent.length(),
+                        jwtContent.substring(0, Math.min(100, jwtContent.length())));
                 return jwtContent.trim();
             } catch (Exception e) {
-                LOG.warnf("Failed to fetch ETSI trust list from %s: %s, falling back to inline JWT", trustListUrl, e.getMessage());
+                LOG.warnf("[OID4VP-FACTORY] Failed to fetch ETSI trust list from %s: %s, falling back to inline JWT",
+                        trustListUrl, e.getMessage());
             }
         }
-        return config.getTrustListJwt();
+        String inlineJwt = config.getTrustListJwt();
+        LOG.infof("[OID4VP-FACTORY] Using inline trust list JWT: %s",
+                inlineJwt != null ? "present (" + inlineJwt.length() + " chars, preview: " +
+                        inlineJwt.substring(0, Math.min(100, inlineJwt.length())) + ")" : "null");
+        return inlineJwt;
+    }
+
+    /**
+     * Resolve x509 certificate and signing key from either:
+     * 1. x509CertificateFile (combined PEM file on disk)
+     * 2. x509CertificatePem (inline combined PEM containing both cert chain and private key)
+     *
+     * If the PEM (from either source) contains a PRIVATE KEY block, an ECKey JWK is built
+     * with the x5c certificate chain and set on the config. This makes the config self-contained
+     * for signing request objects with x509_san_dns or x509_hash client ID schemes.
+     */
+    public static void resolveX509FromFile(Oid4vpIdentityProviderConfig config) {
+        // Already have a signing key JWK? Nothing to do.
+        String existingJwk = config.getX509SigningKeyJwk();
+        if (existingJwk != null && !existingJwk.isBlank()) {
+            return;
+        }
+
+        String pem = null;
+        String source = null;
+
+        // Priority 1: Load from file
+        String x509File = config.getX509CertificateFile();
+        if (x509File != null && !x509File.isBlank()) {
+            Path filePath = Path.of(x509File);
+            if (Files.exists(filePath)) {
+                try {
+                    pem = Files.readString(filePath);
+                    source = "file " + x509File;
+                } catch (Exception e) {
+                    LOG.warnf("Failed to read x509CertificateFile %s: %s", x509File, e.getMessage());
+                }
+            } else {
+                LOG.warnf("x509CertificateFile not found: %s", x509File);
+            }
+        }
+
+        // Priority 2: Check inline PEM for private key
+        if (pem == null) {
+            String inlinePem = config.getX509CertificatePem();
+            if (inlinePem != null && inlinePem.contains("-----BEGIN PRIVATE KEY-----")) {
+                pem = inlinePem;
+                source = "inline x509CertificatePem";
+            }
+        }
+
+        if (pem == null) {
+            return;
+        }
+
+        try {
+            // Extract certificate chain
+            List<X509Certificate> certChain = parseCertificateChain(pem);
+            if (certChain.isEmpty()) {
+                LOG.warnf("No certificates found in %s", source);
+                return;
+            }
+
+            // Set cert-only PEM (strip private key for the cert field)
+            List<String> certPemBlocks = extractPemBlocks(pem, "CERTIFICATE");
+            config.setX509CertificatePem(String.join("\n", certPemBlocks));
+
+            // Extract and parse private key
+            String privBody = extractPemBlockBody(pem, "PRIVATE KEY");
+            if (privBody == null) {
+                LOG.infof("No private key in %s (cert-only mode)", source);
+                return;
+            }
+
+            byte[] privBytes = Base64.getDecoder().decode(privBody);
+            PrivateKey privateKey = parsePrivateKey(privBytes);
+
+            // Build ECKey JWK with x5c chain
+            X509Certificate leafCert = certChain.get(0);
+            if (!(leafCert.getPublicKey() instanceof ECPublicKey ecPub)) {
+                LOG.warnf("Leaf certificate is not EC (got %s), cannot build signing key JWK",
+                        leafCert.getPublicKey().getAlgorithm());
+                return;
+            }
+
+            Curve curve = Curve.forECParameterSpec(ecPub.getParams());
+            List<com.nimbusds.jose.util.Base64> x5c = new ArrayList<>();
+            for (X509Certificate cert : certChain) {
+                x5c.add(com.nimbusds.jose.util.Base64.encode(cert.getEncoded()));
+            }
+
+            ECKey ecKey = new ECKey.Builder(curve, ecPub)
+                    .privateKey((ECPrivateKey) privateKey)
+                    .x509CertChain(x5c)
+                    .keyIDFromThumbprint()
+                    .build();
+
+            config.setX509SigningKeyJwk(ecKey.toJSONString());
+            LOG.infof("Resolved x509 signing key from %s (chain size=%d, kid=%s)",
+                    source, certChain.size(), ecKey.getKeyID());
+
+        } catch (Exception e) {
+            LOG.errorf(e, "Failed to resolve x509 from %s", source);
+        }
+    }
+
+    public static void resolveVerifierInfoFromFile(Oid4vpIdentityProviderConfig config) {
+        String file = config.getVerifierInfoFile();
+        if (file == null || file.isBlank()) {
+            return;
+        }
+        Path filePath = Path.of(file);
+        if (!Files.exists(filePath)) {
+            LOG.warnf("verifierInfoFile not found: %s", file);
+            return;
+        }
+        try {
+            String json = Files.readString(filePath).trim();
+            config.setVerifierInfo(json);
+            LOG.infof("Loaded verifier info from file %s (%d chars)", file, json.length());
+        } catch (Exception e) {
+            LOG.warnf("Failed to read verifierInfoFile %s: %s", file, e.getMessage());
+        }
+    }
+
+    private static List<X509Certificate> parseCertificateChain(String pem) throws Exception {
+        List<X509Certificate> chain = new ArrayList<>();
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        int idx = 0;
+        while (true) {
+            int start = pem.indexOf("-----BEGIN CERTIFICATE-----", idx);
+            if (start < 0) break;
+            int end = pem.indexOf("-----END CERTIFICATE-----", start);
+            if (end < 0) break;
+            String body = pem.substring(start + "-----BEGIN CERTIFICATE-----".length(), end)
+                    .replaceAll("\\s+", "");
+            byte[] der = Base64.getDecoder().decode(body);
+            chain.add((X509Certificate) cf.generateCertificate(new ByteArrayInputStream(der)));
+            idx = end + "-----END CERTIFICATE-----".length();
+        }
+        return chain;
+    }
+
+    private static List<String> extractPemBlocks(String pem, String type) {
+        List<String> blocks = new ArrayList<>();
+        String begin = "-----BEGIN " + type + "-----";
+        String end = "-----END " + type + "-----";
+        int idx = 0;
+        while (true) {
+            int start = pem.indexOf(begin, idx);
+            if (start < 0) break;
+            int stop = pem.indexOf(end, start);
+            if (stop < 0) break;
+            blocks.add(pem.substring(start, stop + end.length()));
+            idx = stop + end.length();
+        }
+        return blocks;
+    }
+
+    private static String extractPemBlockBody(String pem, String type) {
+        String begin = "-----BEGIN " + type + "-----";
+        String end = "-----END " + type + "-----";
+        int start = pem.indexOf(begin);
+        int stop = pem.indexOf(end);
+        if (start < 0 || stop < 0) return null;
+        return pem.substring(start + begin.length(), stop).replaceAll("\\s+", "");
+    }
+
+    private static PrivateKey parsePrivateKey(byte[] pkcs8Bytes) throws Exception {
+        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(pkcs8Bytes);
+        for (String alg : List.of("EC", "RSA")) {
+            try {
+                return KeyFactory.getInstance(alg).generatePrivate(spec);
+            } catch (Exception ignored) {
+            }
+        }
+        throw new IllegalStateException("Unsupported private key algorithm (tried EC, RSA)");
     }
 
     private void registerAdditionalCertificates(Oid4vpTrustListService trustListService,

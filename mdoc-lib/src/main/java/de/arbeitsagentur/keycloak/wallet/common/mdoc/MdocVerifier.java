@@ -28,6 +28,7 @@ import com.nimbusds.jose.util.Base64URL;
 import com.upokecenter.cbor.CBOREncodeOptions;
 import com.upokecenter.cbor.CBORObject;
 import com.upokecenter.cbor.CBORType;
+import de.arbeitsagentur.keycloak.wallet.common.credential.StatusListVerifier;
 import de.arbeitsagentur.keycloak.wallet.common.credential.TrustedIssuerResolver;
 import de.arbeitsagentur.keycloak.wallet.common.credential.VerificationStepSink;
 import de.arbeitsagentur.keycloak.wallet.mdoc.util.HexUtils;
@@ -61,9 +62,15 @@ public class MdocVerifier {
     private static final CBOREncodeOptions ENCODE_OPTIONS = CBOREncodeOptions.Default;
     private final MdocParser parser = new MdocParser();
     private final TrustedIssuerResolver trustResolver;
+    private final StatusListVerifier statusListVerifier;
 
     public MdocVerifier(TrustedIssuerResolver trustResolver) {
+        this(trustResolver, new StatusListVerifier());
+    }
+
+    public MdocVerifier(TrustedIssuerResolver trustResolver, StatusListVerifier statusListVerifier) {
         this.trustResolver = trustResolver;
+        this.statusListVerifier = statusListVerifier;
     }
 
     public boolean isMdoc(String token) {
@@ -118,22 +125,23 @@ public class MdocVerifier {
             if (steps != null) {
                 steps.add("Credential timing rules validated",
                         "Checked validityInfo timestamps to ensure credential is currently valid.",
-                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-14.1.2");
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
             }
+            checkMsoRevocationStatus(mso, steps);
 
             verifyDeviceAuth(document, mso, docType, expectedClientId, expectedNonce, expectedResponseUri, expectedJwkThumbprint, mdocGeneratedNonce);
             if (steps != null) {
                 steps.add("Validated holder binding (mdoc deviceAuth)",
                         "Validated deviceAuth signature and OpenID4VP SessionTranscript binding for the mDoc presentation.",
-                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#appendix-B.2.5");
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#appendix-B.2.6");
             }
             if (docType != null && !claims.containsKey("docType")) {
                 claims.put("docType", docType);
             }
             return claims;
         } catch (Exception e) {
-            LOG.info("[OID4VP-MDOC] Verification FAILED: {} - {}", e.getClass().getSimpleName(), e.getMessage());
-            LOG.debug("[OID4VP-MDOC] Full stack trace:", e);
+            LOG.info("mDoc verification failed: {}", e.getMessage());
+            LOG.debug("mDoc verification stack trace:", e);
             throw new IllegalStateException("Credential signature not trusted", e);
         }
     }
@@ -182,11 +190,11 @@ public class MdocVerifier {
 
     private void verifySignature(Sign1Message sign1, String trustListId, VerificationStepSink steps) throws Exception {
         if (trustResolver.isAllowAll(trustListId)) {
-            LOG.info("[OID4VP-MDOC] Trust list is 'allow-all', skipping signature verification");
+            LOG.debug("Trust list is 'allow-all', skipping signature verification");
             if (steps != null) {
                 steps.add("Signature verification skipped (allow-all trust list)",
                         "Trust list set to allow-all; credential signature was not checked.",
-                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
             }
             return;
         }
@@ -194,7 +202,7 @@ public class MdocVerifier {
         if (keys == null) {
             keys = List.of();
         }
-        LOG.info("[OID4VP-MDOC] verifySignature() checking {} trust list keys for trustListId: {}", keys.size(), trustListId);
+        LOG.debug("verifySignature() checking {} trust list keys for trustListId: {}", keys.size(), trustListId);
 
         logX5ChainInfo(sign1);
 
@@ -249,7 +257,7 @@ public class MdocVerifier {
         }
         PublicKey leafKey = TrustedIssuerResolver.verifyX5cChain(x5cChain, trustAnchors);
         if (leafKey == null) {
-            LOG.info("[OID4VP-MDOC] x5c chain validation failed against trust list '{}'", trustListId);
+            LOG.debug("x5c chain validation failed against trust list '{}'", trustListId);
             return false;
         }
         OneKey coseKey = OneKeyFromPublicKey.build(leafKey);
@@ -259,16 +267,16 @@ public class MdocVerifier {
         try {
             boolean valid = sign1.validate(coseKey);
             if (valid) {
-                LOG.info("[OID4VP-MDOC] Verified mDoc signature via x5c chain validation against trust list '{}'", trustListId);
+                LOG.debug("Verified mDoc signature via x5c chain validation against trust list '{}'", trustListId);
                 if (steps != null) {
                     steps.add("Signature verified via x5c chain against trust list",
                             "Validated mDoc issuerAuth x5c certificate chain against trusted CA certificates, then verified signature with leaf key.",
-                            "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
+                            "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
                 }
             }
             return valid;
         } catch (Exception e) {
-            LOG.info("[OID4VP-MDOC] x5c chain signature validation exception: {}", e.getMessage());
+            LOG.debug("x5c chain signature validation exception: {}", e.getMessage());
             return false;
         }
     }
@@ -280,7 +288,7 @@ public class MdocVerifier {
 
             OneKey coseKey = OneKeyFromPublicKey.build(key);
             if (coseKey == null) {
-                LOG.info("[OID4VP-MDOC] Trust list key[{}] could not be converted to OneKey", i);
+                LOG.debug("Trust list key[{}] could not be converted to OneKey", i);
                 continue;
             }
 
@@ -294,15 +302,15 @@ public class MdocVerifier {
     private boolean tryValidateSignature(Sign1Message sign1, OneKey coseKey, int keyIndex, VerificationStepSink steps) {
         try {
             boolean valid = sign1.validate(coseKey);
-            LOG.info("[OID4VP-MDOC] Trust list key[{}] validation result: {}", keyIndex, valid);
+            LOG.debug("Trust list key[{}] validation result: {}", keyIndex, valid);
             if (valid && steps != null) {
                 steps.add("Signature verified against trust list",
                         "Checked mDoc issuerAuth signature against trusted issuers in the trust list.",
-                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
             }
             return valid;
         } catch (Exception e) {
-            LOG.info("[OID4VP-MDOC] Trust list key[{}] validation exception: {}", keyIndex, e.getMessage());
+            LOG.debug("Trust list key[{}] validation exception: {}", keyIndex, e.getMessage());
             return false;
         }
     }
@@ -443,7 +451,7 @@ public class MdocVerifier {
                 sign1.SetContent(oid4vpPayload);
                 deviceAuthValid = sign1.validate(coseKey);
                 if (deviceAuthValid) {
-                    LOG.info("[OID4VP-MDOC] deviceAuth verified with OID4VP 1.0 SessionTranscript format (fallback)");
+                    LOG.debug("deviceAuth verified with OID4VP 1.0 SessionTranscript format (fallback)");
                     effectivePayloadBytes = oid4vpPayload;
                     expectedTranscript = oid4vpTranscript;
                 }
@@ -456,7 +464,7 @@ public class MdocVerifier {
         }
 
         if (!deviceAuthValid) {
-            LOG.info("[OID4VP-MDOC] deviceAuth validation FAILED with all transcript formats. coseKey null={}", coseKey == null);
+            LOG.debug("deviceAuth validation FAILED with all transcript formats. coseKey null={}", coseKey == null);
             throw new IllegalStateException("deviceAuth signature invalid");
         }
 
@@ -655,6 +663,31 @@ public class MdocVerifier {
         Long notAfter = toEpochSecond(validityInfo.get("validUntil"));
         if (notAfter != null && Instant.ofEpochSecond(notAfter).isBefore(now)) {
             throw new IllegalStateException("Credential presentation expired");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void checkMsoRevocationStatus(CBORObject mso, VerificationStepSink steps) {
+        try {
+            CBORObject statusCbor = mso.get("status");
+            if (statusCbor == null || statusCbor.getType() != CBORType.Map) {
+                LOG.debug("No status field in MSO — skipping revocation check");
+                return;
+            }
+            Map<String, Object> statusMap = (Map<String, Object>) convertToJava(statusCbor);
+            // Wrap in a map matching the SD-JWT structure: {"status": {...}}
+            Map<String, Object> payload = Map.of("status", statusMap);
+            statusListVerifier.checkRevocationStatus(payload);
+            if (steps != null) {
+                steps.add("Revocation status checked",
+                        "Verified credential has not been revoked via Token Status List.",
+                        "https://datatracker.ietf.org/doc/draft-ietf-oauth-status-list/");
+            }
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            LOG.debug("Could not check mDoc revocation status (non-fatal): {}", e.getMessage());
+            LOG.debug("[OID4VP-MDOC] Revocation check error details:", e);
         }
     }
 

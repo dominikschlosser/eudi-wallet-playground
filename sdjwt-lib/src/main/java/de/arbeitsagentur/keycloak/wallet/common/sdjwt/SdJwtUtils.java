@@ -251,6 +251,34 @@ public final class SdJwtUtils {
         }
     }
 
+    /**
+     * Collects all {@code "..."} digests referenced inside the given disclosures' values.
+     */
+    static Set<String> collectAllDigests(List<Disclosure> disclosures) {
+        Set<String> digests = new HashSet<>();
+        for (Disclosure d : disclosures) {
+            Object value = d.getClaimValue();
+            if (value != null) {
+                collectDigestsRecursive(value, digests);
+            }
+        }
+        return digests;
+    }
+
+    /**
+     * Collects all {@code "..."} digests from raw disclosure strings' values.
+     */
+    static Set<String> collectAllDigestsFromRaw(List<String> disclosures) {
+        List<Disclosure> parsed = new ArrayList<>();
+        for (String raw : disclosures) {
+            try {
+                parsed.add(Disclosure.parse(raw));
+            } catch (Exception ignored) {
+            }
+        }
+        return collectAllDigests(parsed);
+    }
+
     private static Set<String> collectDigests(Object node) {
         if (node == null) {
             return Set.of();

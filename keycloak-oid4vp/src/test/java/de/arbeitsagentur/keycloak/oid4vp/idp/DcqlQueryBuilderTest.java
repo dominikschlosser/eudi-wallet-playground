@@ -91,10 +91,10 @@ class DcqlQueryBuilderTest {
         assertThat(cred.get("meta").has("vct_values")).isFalse();
 
         // mdoc claim paths must have exactly 2 elements: [namespace, element_identifier]
-        // Namespace derived from doctype: "org.iso.18013.5.1.mDL" → "org.iso.18013.5.1"
+        // Namespace equals the doctype (e.g., "org.iso.18013.5.1.mDL")
         JsonNode claims = cred.get("claims");
         assertThat(claims.get(0).get("path").size()).isEqualTo(2);
-        assertThat(claims.get(0).get("path").get(0).asText()).isEqualTo("org.iso.18013.5.1");
+        assertThat(claims.get(0).get("path").get(0).asText()).isEqualTo("org.iso.18013.5.1.mDL");
         assertThat(claims.get(0).get("path").get(1).asText()).isEqualTo("driving_privileges");
     }
 
@@ -415,6 +415,99 @@ class DcqlQueryBuilderTest {
         assertThat(claimSets.size()).isEqualTo(2);
         assertThat(claimSets.get(0).size()).isEqualTo(3); // all claims
         assertThat(claimSets.get(1).size()).isEqualTo(2); // required only
+    }
+
+    @Test
+    void buildWithArrayWildcardPath() throws Exception {
+        // "nationalities/null" should produce ["nationalities", null] (JSON null, not the string "null")
+        String dcql = new DcqlQueryBuilder(OBJECT_MAPPER)
+                .addCredentialTypeWithPaths(
+                        Oid4vpIdentityProviderConfig.FORMAT_SD_JWT_VC,
+                        "eu.europa.ec.eudi.pid.1",
+                        List.of("given_name", "nationalities/null")
+                )
+                .build();
+
+        JsonNode node = OBJECT_MAPPER.readTree(dcql);
+        JsonNode claims = node.get("credentials").get(0).get("claims");
+
+        // given_name: simple path
+        assertThat(claims.get(0).get("path").get(0).asText()).isEqualTo("given_name");
+
+        // nationalities: path with null wildcard for array elements
+        JsonNode natPath = claims.get(1).get("path");
+        assertThat(natPath.size()).isEqualTo(2);
+        assertThat(natPath.get(0).asText()).isEqualTo("nationalities");
+        assertThat(natPath.get(1).isNull()).isTrue();
+    }
+
+    @Test
+    void buildWithArrayIndexPath() throws Exception {
+        // "nationalities/0" should produce ["nationalities", 0] (JSON number, not the string "0")
+        String dcql = new DcqlQueryBuilder(OBJECT_MAPPER)
+                .addCredentialTypeWithPaths(
+                        Oid4vpIdentityProviderConfig.FORMAT_SD_JWT_VC,
+                        "eu.europa.ec.eudi.pid.1",
+                        List.of("given_name", "nationalities/0")
+                )
+                .build();
+
+        JsonNode node = OBJECT_MAPPER.readTree(dcql);
+        JsonNode claims = node.get("credentials").get(0).get("claims");
+
+        // nationalities: path with numeric index
+        JsonNode natPath = claims.get(1).get("path");
+        assertThat(natPath.size()).isEqualTo(2);
+        assertThat(natPath.get(0).asText()).isEqualTo("nationalities");
+        assertThat(natPath.get(1).isNumber()).isTrue();
+        assertThat(natPath.get(1).intValue()).isEqualTo(0);
+    }
+
+    @Test
+    void buildEuPidMdocUsesFullDoctypeAsNamespace() throws Exception {
+        // EU PID doctype "eu.europa.ec.eudi.pid.1" must be used as-is for the namespace
+        // (not stripped to "eu.europa.ec.eudi.pid")
+        String dcql = new DcqlQueryBuilder(OBJECT_MAPPER)
+                .addCredentialTypeWithPaths(
+                        Oid4vpIdentityProviderConfig.FORMAT_MSO_MDOC,
+                        "eu.europa.ec.eudi.pid.1",
+                        List.of("given_name", "family_name", "birth_date")
+                )
+                .build();
+
+        JsonNode node = OBJECT_MAPPER.readTree(dcql);
+        JsonNode claims = node.get("credentials").get(0).get("claims");
+
+        // All claims should have the full doctype as namespace
+        for (int i = 0; i < claims.size(); i++) {
+            JsonNode path = claims.get(i).get("path");
+            assertThat(path.size()).isEqualTo(2);
+            assertThat(path.get(0).asText()).isEqualTo("eu.europa.ec.eudi.pid.1");
+        }
+        assertThat(claims.get(0).get("path").get(1).asText()).isEqualTo("given_name");
+        assertThat(claims.get(1).get("path").get(1).asText()).isEqualTo("family_name");
+        assertThat(claims.get(2).get("path").get(1).asText()).isEqualTo("birth_date");
+    }
+
+    @Test
+    void buildMdocArrayWildcardPathUsesNamespacePrefixAndNull() throws Exception {
+        // For mDoc, "nationalities/null" should produce [doctype, "nationalities", null]
+        // but since mDoc paths only have 2 elements, the /null is for SD-JWT only
+        // mDoc should just use [doctype, "nationalities"]
+        String dcql = new DcqlQueryBuilder(OBJECT_MAPPER)
+                .addCredentialTypeWithPaths(
+                        Oid4vpIdentityProviderConfig.FORMAT_MSO_MDOC,
+                        "eu.europa.ec.eudi.pid.1",
+                        List.of("nationality")
+                )
+                .build();
+
+        JsonNode node = OBJECT_MAPPER.readTree(dcql);
+        JsonNode claims = node.get("credentials").get(0).get("claims");
+
+        assertThat(claims.get(0).get("path").size()).isEqualTo(2);
+        assertThat(claims.get(0).get("path").get(0).asText()).isEqualTo("eu.europa.ec.eudi.pid.1");
+        assertThat(claims.get(0).get("path").get(1).asText()).isEqualTo("nationality");
     }
 
     @Test

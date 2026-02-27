@@ -24,6 +24,8 @@ public record Oid4vpConfig(
         String dcApiRequestMode,
         String dcApiClientId,
         String dcApiSigningKeyId,
-        String verifierInfo
+        String verifierInfo,
+        String x509SigningKeyJwk,
+        String x509CertificatePem
 ) {
 }

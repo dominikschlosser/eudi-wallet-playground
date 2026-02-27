@@ -518,7 +518,7 @@
           "birth_family_name",
           "birthdate",
           "place_of_birth",
-          "nationalities",
+          "nationalities/null",
           "address/street_address",
           "address/locality",
           "address/postal_code",
@@ -557,6 +557,12 @@
         let descriptorCounter = 1;
         let savedClientMetadata = clientMetadataField ? clientMetadataField.value : "";
         let encryptionEnabled = false;
+
+        function parsePathSegment(s) {
+          if (s === "null") return null;
+          if (/^\d+$/.test(s)) return Number(s);
+          return s;
+        }
 
         function defaultClaims() {
           return [
@@ -758,7 +764,7 @@
                   segments = [ns, elem];
                 } else {
                   const name = claim.name.trim();
-                  segments = name.includes("/") ? name.split("/").filter(Boolean) : [name];
+                  segments = name.includes("/") ? name.split("/").map(parsePathSegment) : [name];
                 }
                 const entry = { path: segments };
                 if (claim.constValue && claim.constValue.trim()) {
@@ -777,7 +783,7 @@
             if (claimSets.length) {
               base.claim_set = claimSets.map((set) => {
                 const names = set.split(",").map((s) => s.trim()).filter(Boolean);
-                const claimsForSet = names.map((name) => ({ path: name.includes("/") ? name.split("/").filter(Boolean) : [name] }));
+                const claimsForSet = names.map((name) => ({ path: name.includes("/") ? name.split("/").map(parsePathSegment) : [name] }));
                 return { claims: claimsForSet };
               });
             }
@@ -1173,7 +1179,7 @@
                   const fmt = c.format || "all";
                   const claims = (Array.isArray(c.claims) ? c.claims : []).map(cl => {
                     const path = Array.isArray(cl.path) ? cl.path : [];
-                    const claim = { name: path.join("/"), constValue: typeof cl.value !== "undefined" ? String(cl.value) : "", originalPath: path.length ? [...path] : null };
+                    const claim = { name: path.map(s => s === null ? "null" : String(s)).join("/"), constValue: typeof cl.value !== "undefined" ? String(cl.value) : "", originalPath: path.length ? [...path] : null };
                     if (fmt === "mso_mdoc" && path.length === 2) {
                       claim.namespace = path[0];
                       claim.element = path[1];

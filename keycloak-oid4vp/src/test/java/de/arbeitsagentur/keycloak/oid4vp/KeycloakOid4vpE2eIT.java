@@ -39,12 +39,16 @@ import org.testcontainers.utility.MountableFile;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -120,12 +124,8 @@ class KeycloakOid4vpE2eIT {
                 .waitingFor(Wait.forHttp("/realms/wallet-demo").forPort(8080).withStartupTimeout(Duration.ofSeconds(180)))
                 .withLogConsumer(frame -> {
                     String log = frame.getUtf8String();
-                    // Log all OID4VP related logs and errors
-                    if (log.contains("OID4VP") || log.contains("Oid4vp") ||
-                            log.contains("[OID4VP") || log.contains("identity") ||
-                            log.contains("broker") || log.contains("MdocVerifier") ||
-                            log.contains("mDoc") || log.contains("trust") ||
-                            log.contains("ERROR") || log.contains("WARN")) {
+                    if (log.contains("OID4VP") || log.contains("REQUEST-STORE") || log.contains("REDIRECT-FLOW")
+                            || log.contains("ERROR") || log.contains("WARN")) {
                         LOG.info("[KC] {}", log.stripTrailing());
                     }
                 });
@@ -204,10 +204,10 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Wait for login page to load
-        page.waitForSelector("#username, a[href*='oid4vp']", new Page.WaitForSelectorOptions().setTimeout(30000));
+        page.waitForSelector("#username, a#social-oid4vp", new Page.WaitForSelectorOptions().setTimeout(30000));
 
         // Verify the IdP link is present
-        assertThat(page.locator("a[href*='broker/oid4vp']").count())
+        assertThat(page.locator("a#social-oid4vp").count())
                 .as("Expected OID4VP IdP link on login page")
                 .isGreaterThan(0);
     }
@@ -228,7 +228,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
 
         // Wait for wallet login page
         waitForOid4vpStartButton();
@@ -315,7 +315,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
 
         // Wait for wallet login page
         waitForOid4vpStartButton();
@@ -345,7 +345,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
 
         // Wait for wallet login page
         waitForOid4vpStartButton();
@@ -399,7 +399,7 @@ class KeycloakOid4vpE2eIT {
             page.waitForLoadState(LoadState.NETWORKIDLE);
 
             // Click the IdP link
-            Locator idpLink = page.locator("a[href*='broker/oid4vp']");
+            Locator idpLink = page.locator("a#social-oid4vp");
             assertThat(idpLink.count()).as("IdP link should be present").isGreaterThan(0);
             idpLink.click();
             waitForOid4vpStartButton();
@@ -503,7 +503,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
 
         // Wait for wallet login page
         waitForOid4vpStartButton();
@@ -575,7 +575,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
 
         // Wait for wallet login page - look for the same-device link
         page.waitForSelector("a:has-text('Open Wallet App')", new Page.WaitForSelectorOptions()
@@ -680,7 +680,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
 
         // Wait for wallet login page - look for the same-device link
         page.waitForSelector("a:has-text('Open Wallet App')", new Page.WaitForSelectorOptions()
@@ -707,7 +707,10 @@ class KeycloakOid4vpE2eIT {
                 currentUrl = page.url();
                 bodyText = page.locator("body").textContent();
             } catch (Exception ignored) {}
-            throw new AssertionError("Unexpected state after same-device mDoc wallet login. URL: " + currentUrl + ", Body: " + bodyText, e);
+            throw new AssertionError("Unexpected state after same-device mDoc wallet login. URL: " + currentUrl
+                    + ", Body: " + bodyText
+                    + ", WalletPostResponseCode: " + wallet.getLastPostResponseCode()
+                    + ", WalletPostResponseBody: " + wallet.getLastPostResponseBody(), e);
         }
 
         // If at first broker login, complete the profile form
@@ -760,7 +763,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
 
         // Wait for wallet login page - look for the same-device link
         page.waitForSelector("a:has-text('Open Wallet App')", new Page.WaitForSelectorOptions()
@@ -784,7 +787,8 @@ class KeycloakOid4vpE2eIT {
         // Wait for the page to load
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
-        // Check the page content
+        // Check the page content — user denial in same-device flow redirects back to
+        // the IdP login page where the user can retry (auth session is preserved for retry)
         String bodyText = page.locator("body").textContent().toLowerCase();
 
         // Should NOT show internal server error
@@ -793,14 +797,19 @@ class KeycloakOid4vpE2eIT {
                 bodyText.contains("nullpointerexception");
         assertThat(internalError).as("Should not show internal server error").isFalse();
 
-        // Should show user-friendly error message
-        boolean errorFound = bodyText.contains("error") ||
+        // Should show the login page (IdP login or Keycloak login) — not an empty page
+        // In same-device flow, user denial redirects back to the IdP login page for retry.
+        // The page should show either the wallet login options or an error/retry message.
+        boolean isLoginPage = bodyText.contains("wallet") ||
+                bodyText.contains("login") ||
+                bodyText.contains("sign in") ||
+                bodyText.contains("open wallet") ||
+                bodyText.contains("error") ||
                 bodyText.contains("denied") ||
-                bodyText.contains("cancelled") ||
-                bodyText.contains("access_denied");
-        assertThat(errorFound).as("Expected error message to appear on page").isTrue();
+                bodyText.contains("cancelled");
+        assertThat(isLoginPage).as("Expected login page or error message, got: " + bodyText.substring(0, Math.min(200, bodyText.length()))).isTrue();
 
-        // Should stay on Keycloak error page, not redirect to callback
+        // Should stay on Keycloak, not redirect to callback
         assertThat(page.url()).doesNotStartWith(callbackUrl);
 
         // Disable same-device flow after test
@@ -823,7 +832,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
 
         // Wait for wallet login page
         waitForOid4vpStartButton();
@@ -928,7 +937,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
         waitForOid4vpStartButton();
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
@@ -968,7 +977,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
         waitForOid4vpStartButton();
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
@@ -1053,7 +1062,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
         waitForOid4vpStartButton();
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
@@ -1139,7 +1148,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
         waitForOid4vpStartButton();
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
@@ -1241,7 +1250,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
         waitForOid4vpStartButton();
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
@@ -1348,7 +1357,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
         waitForOid4vpStartButton();
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
@@ -1431,7 +1440,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
         waitForOid4vpStartButton();
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
@@ -1496,7 +1505,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
         waitForOid4vpStartButton();
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
@@ -1570,7 +1579,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
         waitForOid4vpStartButton();
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
@@ -1655,7 +1664,7 @@ class KeycloakOid4vpE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/oid4vp']").click();
+        page.locator("a#social-oid4vp").click();
         waitForOid4vpStartButton();
         configureWalletBridgeEndpoint();
         assertThat(waitForBridgeInstalled(Duration.ofSeconds(5))).isTrue();
@@ -1695,6 +1704,467 @@ class KeycloakOid4vpE2eIT {
         LOG.info("  - Phase 2: Verifier credential issuance simulated (OID4VCI)");
         LOG.info("  - Phase 3: User authenticated with German PID + verifier credential");
         LOG.info("  - User matching via user_id claim in verifier credential: SUCCESS");
+    }
+
+    /**
+     * Test same-device flow simulating a real native wallet app:
+     * 1. Browser navigates to login page (establishing AUTH_SESSION_ID cookie)
+     * 2. Extract wallet URL from "Open Wallet App" link
+     * 3. Call wallet mock via HTTP (simulating native wallet app opening request_uri)
+     * 4. Parse wallet's response to get the form action URL and VP token
+     * 5. POST VP token to Keycloak WITHOUT cookies (simulating native wallet HTTP client)
+     * 6. Parse JSON response to get redirect_uri
+     * 7. Navigate browser to redirect_uri (browser has cookies from step 1)
+     * 8. Verify first-broker-login form appears with pre-filled credential data
+     */
+    @Test
+    @Order(19)
+    void sameDeviceNativeWalletFirstLogin() throws Exception {
+        callback.reset();
+        clearBrowserSession();
+
+        // Reset wallet state from previous tests (e.g. German PID mode from test 18)
+        wallet.setUseGermanPid(false);
+        wallet.clearSimulatedCredentials();
+
+        // Ensure default DCQL query and enable same-device flow
+        Oid4vpTestKeycloakSetup.configureDcqlQuery(adminClient, "wallet-demo", Oid4vpTestKeycloakSetup.DEFAULT_DCQL_QUERY);
+        Oid4vpTestKeycloakSetup.configureSameDeviceFlow(adminClient, "wallet-demo", true, walletAuthEndpoint);
+
+        // Delete all OID4VP-linked users so this is a true first login
+        Oid4vpTestKeycloakSetup.deleteAllOid4vpUsers(adminClient, "wallet-demo");
+
+        // Step 1: Browser navigates to login page (sets AUTH_SESSION_ID cookie)
+        page.navigate(buildAuthRequestUri(browserBaseUrl, callbackUrl).toString());
+        page.waitForLoadState(LoadState.NETWORKIDLE);
+
+        // Click the IdP link to get to the OID4VP login page
+        page.locator("a#social-oid4vp").click();
+        page.waitForSelector("a:has-text('Open Wallet App')", new Page.WaitForSelectorOptions()
+                .setState(WaitForSelectorState.VISIBLE)
+                .setTimeout(30000));
+
+        // Step 2: Extract wallet URL from the link (don't click — simulating native app)
+        String walletUrl = page.locator("a:has-text('Open Wallet App')").getAttribute("href");
+        assertThat(walletUrl)
+                .as("Wallet URL should not be empty. Page URL: %s", page.url())
+                .isNotEmpty();
+
+        // Step 3: Call wallet mock via HTTP (simulating native wallet opening the deep link).
+        // The mock wallet now simulates native wallet behavior: it POSTs the VP token server-side
+        // and returns a 302 redirect to the complete-auth URL. Don't follow redirects —
+        // we need to extract the redirect_uri and have the BROWSER navigate to it (with cookies).
+        HttpClient httpClient = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+
+        HttpRequest walletRequest = HttpRequest.newBuilder()
+                .uri(URI.create(walletUrl))
+                .GET()
+                .build();
+
+        HttpResponse<String> walletResponse = httpClient.send(walletRequest, HttpResponse.BodyHandlers.ofString());
+        LOG.info("[Test] Wallet response status: {}, body length: {}", walletResponse.statusCode(), walletResponse.body().length());
+
+        // Step 4: Extract redirect_uri from wallet response.
+        // The mock wallet POSTs VP token server-side and returns 302 with complete-auth URL.
+        String redirectUri;
+        if (walletResponse.statusCode() == 302 || walletResponse.statusCode() == 303) {
+            redirectUri = walletResponse.headers().firstValue("Location").orElse(null);
+            LOG.info("[Test] Wallet returned redirect to: {}", redirectUri);
+        } else {
+            // Fallback: try parsing as JSON or HTML
+            LOG.warn("[Test] Unexpected wallet response status: {}, body: {}",
+                    walletResponse.statusCode(), walletResponse.body().substring(0, Math.min(500, walletResponse.body().length())));
+            redirectUri = null;
+        }
+
+        LOG.info("[Test] redirect_uri: {}", redirectUri);
+
+        assertThat(redirectUri)
+                .as("Wallet should return redirect to complete-auth URL. Wallet status: %d, endpoint response code: %d, endpoint response body: %s",
+                        walletResponse.statusCode(), wallet.getLastPostResponseCode(), wallet.getLastPostResponseBody())
+                .isNotNull()
+                .isNotEmpty();
+
+        // redirect_uri should be the complete-auth URL (deferred auth in browser context)
+        assertThat(redirectUri)
+                .as("Redirect should go through the complete-auth endpoint. Endpoint response code: %d, body: %s",
+                        wallet.getLastPostResponseCode(),
+                        wallet.getLastPostResponseBody() != null ? wallet.getLastPostResponseBody().substring(0, Math.min(1000, wallet.getLastPostResponseBody().length())) : "null")
+                .contains("complete-auth?state=");
+
+        // Step 7: Browser opens the complete-auth URL (wallet would do this via intent)
+        // The browser has AUTH_SESSION_ID cookie, so complete-auth can find the auth session,
+        // deserialize the identity, and call callback.authenticated() in the browser context.
+        page.navigate(redirectUri);
+        page.waitForLoadState(LoadState.NETWORKIDLE);
+
+        LOG.info("[Test] After complete-auth, URL: {}", page.url());
+
+        // Step 8: Verify first-broker-login form appears
+        assertThat(page.locator("input[name='firstName']").count())
+                .as("First-broker-login form should be visible. Current URL: " + page.url())
+                .isGreaterThan(0);
+
+        String firstName = page.locator("input[name='firstName']").first().inputValue();
+        String lastName = page.locator("input[name='lastName']").first().inputValue();
+        LOG.info("[Test] Pre-filled firstName='{}', lastName='{}'", firstName, lastName);
+
+        assertThat(firstName)
+                .as("firstName should be pre-filled from credential")
+                .isNotEmpty();
+        assertThat(lastName)
+                .as("lastName should be pre-filled from credential")
+                .isNotEmpty();
+
+        // Complete the form and finish login
+        Locator usernameFields = page.locator("input[name='username']");
+        if (usernameFields.count() > 0 && usernameFields.first().inputValue().isEmpty()) {
+            usernameFields.first().fill("same-device-native-" + System.currentTimeMillis());
+        }
+        Locator emailFields = page.locator("input[name='email']");
+        if (emailFields.count() > 0 && emailFields.first().inputValue().isEmpty()) {
+            emailFields.first().fill("same-device-native@example.com");
+        }
+
+        page.locator("input[type='submit'], button[type='submit']").first().click();
+        page.waitForURL(url -> url.startsWith(callbackUrl), new Page.WaitForURLOptions().setTimeout(30000));
+
+        assertThat(page.url()).contains("code=");
+        LOG.info("[Test] Same-device native wallet first login completed successfully");
+
+        // Don't disable same-device — next test needs it
+    }
+
+    /**
+     * Test same-device flow: second login (existing user) with native wallet.
+     * Same as above but user already exists → redirect goes straight to callback.
+     * <p>
+     * This test verifies that SSE does NOT race with the wallet redirect for same-device:
+     * after the wallet POSTs the VP token, we wait 3 seconds (longer than SSE poll interval)
+     * to verify that SSE does NOT navigate the browser away from the login page.
+     * Then we navigate the browser to the complete-auth URL (simulating the wallet opening
+     * the URL in the system browser).
+     */
+    @Test
+    @Order(20)
+    void sameDeviceNativeWalletSecondLogin() throws Exception {
+        callback.reset();
+        clearBrowserSession();
+
+        // Same-device should still be enabled from the previous test
+
+        // Step 1: Browser navigates to login page (sets AUTH_SESSION_ID cookie)
+        page.navigate(buildAuthRequestUri(browserBaseUrl, callbackUrl).toString());
+        page.waitForLoadState(LoadState.NETWORKIDLE);
+
+        page.locator("a#social-oid4vp").click();
+        page.waitForSelector("a:has-text('Open Wallet App')", new Page.WaitForSelectorOptions()
+                .setState(WaitForSelectorState.VISIBLE)
+                .setTimeout(30000));
+
+        // Step 2: Extract wallet URL
+        String walletUrl = page.locator("a:has-text('Open Wallet App')").getAttribute("href");
+        LOG.info("[Test] Wallet URL: {}", walletUrl);
+
+        // Capture the login page URL before wallet interaction
+        String loginPageUrl = page.url();
+        LOG.info("[Test] Login page URL before wallet: {}", loginPageUrl);
+
+        // Step 3: Call wallet mock via HTTP (don't follow redirects — need redirect_uri for browser)
+        HttpClient httpClient = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+
+        HttpResponse<String> walletResponse = httpClient.send(
+                HttpRequest.newBuilder().uri(URI.create(walletUrl)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        // Step 4: Extract redirect_uri from wallet's 302 response
+        LOG.info("[Test] Wallet response status: {}", walletResponse.statusCode());
+        assertThat(walletResponse.statusCode())
+                .as("Wallet should return 302 redirect. Body: " + walletResponse.body().substring(0, Math.min(500, walletResponse.body().length())))
+                .isIn(302, 303);
+
+        String redirectUri = walletResponse.headers().firstValue("Location").orElse(null);
+        LOG.info("[Test] redirect_uri from wallet redirect: {}", redirectUri);
+
+        assertThat(redirectUri)
+                .as("Wallet redirect should contain complete-auth URL")
+                .isNotNull()
+                .isNotEmpty();
+
+        // Step 5: Wait 3 seconds to verify SSE does NOT navigate the browser.
+        // SSE polls every 1 second. If the SSE signal were stored for same-device,
+        // SSE would navigate the browser to /complete-auth, causing a race with the
+        // wallet's redirect. With the fix, no SSE signal is stored for same-device.
+        Thread.sleep(3000);
+        LOG.info("[Test] After 3s wait, browser URL: {}", page.url());
+        assertThat(page.url())
+                .as("SSE should NOT navigate the browser for same-device flow. " +
+                        "If URL changed, SSE raced with wallet redirect.")
+                .isEqualTo(loginPageUrl);
+
+        // Step 6: Browser opens the complete-auth URL — completes auth in browser context
+        page.navigate(redirectUri);
+        page.waitForLoadState(LoadState.NETWORKIDLE);
+
+        // Should reach the callback with an auth code (bridge sets SSO cookies and redirects)
+        try {
+            page.waitForURL(url -> url.startsWith(callbackUrl) || url.contains("code="),
+                    new Page.WaitForURLOptions().setTimeout(30000));
+        } catch (Exception e) {
+            LOG.warn("[Test] Did not reach callback URL. Current URL: {}, Body: {}",
+                    page.url(), page.locator("body").textContent());
+        }
+
+        LOG.info("[Test] Final URL after second login: {}", page.url());
+
+        assertThat(page.url())
+                .as("Second login should reach callback with auth code. Current URL: " + page.url())
+                .satisfiesAnyOf(
+                        url -> assertThat(url).contains("code="),
+                        url -> assertThat(url).startsWith(callbackUrl)
+                );
+
+        // Disable same-device flow after tests
+        Oid4vpTestKeycloakSetup.configureSameDeviceFlow(adminClient, "wallet-demo", false, null);
+        LOG.info("[Test] Same-device native wallet second login completed successfully");
+    }
+
+    /**
+     * Test cross-device flow: first login (new user) via QR code.
+     * Simulates: desktop browser shows QR code → phone wallet scans → POSTs VP token
+     * with flow=cross_device → gets {} → SSE in desktop browser detects completion →
+     * auto-navigates to /complete-auth → first-broker-login.
+     */
+    @Test
+    @Order(21)
+    void crossDeviceFirstLogin() throws Exception {
+        callback.reset();
+        clearBrowserSession();
+
+        // Reset wallet state
+        wallet.setUseGermanPid(false);
+        wallet.clearSimulatedCredentials();
+
+        // Enable both same-device and cross-device (same-device provides the wallet endpoint)
+        Oid4vpTestKeycloakSetup.configureDcqlQuery(adminClient, "wallet-demo", Oid4vpTestKeycloakSetup.DEFAULT_DCQL_QUERY);
+        Oid4vpTestKeycloakSetup.configureSameDeviceFlow(adminClient, "wallet-demo", true, walletAuthEndpoint);
+        Oid4vpTestKeycloakSetup.configureCrossDeviceFlow(adminClient, "wallet-demo", true);
+
+        // Delete all OID4VP-linked users so this is a true first login
+        Oid4vpTestKeycloakSetup.deleteAllOid4vpUsers(adminClient, "wallet-demo");
+
+        // Step 1: Browser navigates to login page (SSE starts listening)
+        page.navigate(buildAuthRequestUri(browserBaseUrl, callbackUrl).toString());
+        page.waitForLoadState(LoadState.NETWORKIDLE);
+
+        page.locator("a#social-oid4vp").click();
+
+        // Wait for QR code to appear (confirms cross-device is enabled)
+        page.waitForSelector("img[alt='QR Code for wallet login']", new Page.WaitForSelectorOptions()
+                .setState(WaitForSelectorState.VISIBLE)
+                .setTimeout(30000));
+
+        // Step 2: Extract the cross-device wallet URL from the QR code image's data attribute.
+        // The FTL template exposes the wallet URL as a data-wallet-url attribute on the QR image.
+        String crossDeviceWalletUrl = (String) page.evaluate(
+                "() => document.querySelector('img[alt=\"QR Code for wallet login\"]').getAttribute('data-wallet-url')");
+        LOG.info("[Test-CrossDevice] Cross-device wallet URL: {}", crossDeviceWalletUrl);
+        assertThat(crossDeviceWalletUrl).as("Cross-device wallet URL should be present").isNotEmpty();
+
+        // The wallet URL is openid4vp://... — rewrite to use our mock wallet's HTTP endpoint
+        String walletQuery = crossDeviceWalletUrl.contains("?")
+                ? crossDeviceWalletUrl.substring(crossDeviceWalletUrl.indexOf("?"))
+                : "";
+        String mockWalletUrl = wallet.localBaseUrl() + "/oid4vp/auth" + walletQuery;
+        LOG.info("[Test-CrossDevice] Mock wallet URL: {}", mockWalletUrl);
+
+        // Step 3: Call mock wallet via HTTP (simulating phone wallet scanning QR code).
+        // The mock wallet will: fetch request_uri → parse JWT → detect flow=cross_device
+        // in response_uri → POST VP token to endpoint → expect {} → return 200
+        HttpClient httpClient = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+
+        HttpResponse<String> walletResponse = httpClient.send(
+                HttpRequest.newBuilder().uri(URI.create(mockWalletUrl)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        LOG.info("[Test-CrossDevice] Wallet response: status={}, body={}",
+                walletResponse.statusCode(),
+                walletResponse.body().substring(0, Math.min(500, walletResponse.body().length())));
+
+        assertThat(walletResponse.statusCode())
+                .as("Cross-device wallet should return 200. Body: " + walletResponse.body())
+                .isEqualTo(200);
+
+        // Step 4: Wait for SSE to detect completion and navigate the browser
+        // The SSE in the desktop browser should detect the completion signal and auto-navigate
+        // to /complete-auth?state=... which then completes auth.
+        try {
+            page.waitForURL(url ->
+                            url.contains("/complete-auth") ||
+                                    url.contains("/first-broker-login") ||
+                                    url.contains("/login-actions/") ||
+                                    page.locator("input[name='username']").count() > 0 ||
+                                    url.startsWith(callbackUrl),
+                    new Page.WaitForURLOptions().setTimeout(30000));
+        } catch (Exception e) {
+            String currentUrl = "(unavailable)";
+            String bodyText = "(unavailable)";
+            try {
+                currentUrl = page.url();
+                bodyText = page.locator("body").textContent();
+            } catch (Exception ignored) {}
+            throw new AssertionError("Cross-device: SSE did not navigate browser. URL: " + currentUrl +
+                    ", Body: " + bodyText, e);
+        }
+
+        LOG.info("[Test-CrossDevice] After SSE navigation, URL: {}", page.url());
+
+        // Step 5: Verify first-broker-login form appears (new user)
+        page.waitForLoadState(LoadState.NETWORKIDLE);
+
+        if (page.locator("input[name='username']").count() > 0) {
+            // Complete first broker login form
+            String uniqueUsername = "cross-device-user-" + System.currentTimeMillis();
+            Locator usernameFields = page.locator("input[name='username']");
+            if (usernameFields.count() > 0 && usernameFields.first().inputValue().isEmpty()) {
+                usernameFields.first().fill(uniqueUsername);
+            }
+            Locator emailFields = page.locator("input[name='email']");
+            if (emailFields.count() > 0 && emailFields.first().inputValue().isEmpty()) {
+                emailFields.first().fill(uniqueUsername + "@example.com");
+            }
+            Locator firstNameFields = page.locator("input[name='firstName']");
+            if (firstNameFields.count() > 0 && firstNameFields.first().inputValue().isEmpty()) {
+                firstNameFields.first().fill("CrossDevice");
+            }
+            Locator lastNameFields = page.locator("input[name='lastName']");
+            if (lastNameFields.count() > 0 && lastNameFields.first().inputValue().isEmpty()) {
+                lastNameFields.first().fill("User");
+            }
+
+            page.locator("input[type='submit'], button[type='submit']").first().click();
+            page.waitForURL(url -> url.startsWith(callbackUrl), new Page.WaitForURLOptions().setTimeout(30000));
+        }
+
+        assertThat(page.url()).contains("code=");
+        LOG.info("[Test-CrossDevice] Cross-device first login completed successfully");
+
+        // Don't disable flows — next test needs them
+    }
+
+    /**
+     * Test cross-device flow: second login (existing user).
+     * Same flow but user already exists → redirect goes straight to callback.
+     */
+    @Test
+    @Order(22)
+    void crossDeviceSecondLogin() throws Exception {
+        callback.reset();
+        clearBrowserSession();
+
+        // Cross-device and same-device should still be enabled from previous test
+
+        // Step 1: Browser navigates to login page (SSE starts listening)
+        page.navigate(buildAuthRequestUri(browserBaseUrl, callbackUrl).toString());
+        page.waitForLoadState(LoadState.NETWORKIDLE);
+
+        page.locator("a#social-oid4vp").click();
+        page.waitForSelector("img[alt='QR Code for wallet login']", new Page.WaitForSelectorOptions()
+                .setState(WaitForSelectorState.VISIBLE)
+                .setTimeout(30000));
+
+        // Step 2: Extract cross-device wallet URL and call mock wallet
+        String crossDeviceWalletUrl2 = (String) page.evaluate(
+                "() => document.querySelector('img[alt=\"QR Code for wallet login\"]').getAttribute('data-wallet-url')");
+        LOG.info("[Test-CrossDevice2] Cross-device wallet URL: {}", crossDeviceWalletUrl2);
+
+        String walletQuery2 = crossDeviceWalletUrl2.contains("?")
+                ? crossDeviceWalletUrl2.substring(crossDeviceWalletUrl2.indexOf("?"))
+                : "";
+        String mockWalletUrl2 = wallet.localBaseUrl() + "/oid4vp/auth" + walletQuery2;
+
+        HttpClient httpClient2 = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build();
+
+        HttpResponse<String> walletResponse2 = httpClient2.send(
+                HttpRequest.newBuilder().uri(URI.create(mockWalletUrl2)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        LOG.info("[Test-CrossDevice2] Wallet response: status={}, body={}",
+                walletResponse2.statusCode(), walletResponse2.body());
+        assertThat(walletResponse2.statusCode())
+                .as("Cross-device wallet should return 200")
+                .isEqualTo(200);
+
+        // Step 3: Wait for SSE to navigate browser → should go directly to callback (existing user)
+        try {
+            page.waitForURL(url -> url.startsWith(callbackUrl) || url.contains("code="),
+                    new Page.WaitForURLOptions().setTimeout(30000));
+        } catch (Exception e) {
+            String currentUrl = "(unavailable)";
+            String bodyText = "(unavailable)";
+            try {
+                currentUrl = page.url();
+                bodyText = page.locator("body").textContent();
+            } catch (Exception ignored) {}
+            throw new AssertionError("Cross-device second login: SSE did not navigate to callback. URL: " +
+                    currentUrl + ", Body: " + bodyText, e);
+        }
+
+        LOG.info("[Test-CrossDevice2] Final URL: {}", page.url());
+
+        assertThat(page.url())
+                .as("Second cross-device login should reach callback with auth code")
+                .satisfiesAnyOf(
+                        url -> assertThat(url).contains("code="),
+                        url -> assertThat(url).startsWith(callbackUrl)
+                );
+
+        // Disable both flows after tests
+        Oid4vpTestKeycloakSetup.configureSameDeviceFlow(adminClient, "wallet-demo", false, null);
+        Oid4vpTestKeycloakSetup.configureCrossDeviceFlow(adminClient, "wallet-demo", false);
+        LOG.info("[Test-CrossDevice2] Cross-device second login completed successfully");
+    }
+
+    /**
+     * Extract form action URL from wallet HTML response.
+     */
+    private static String extractFormAction(String html) {
+        // Match: action="<url>"
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("action=\"([^\"]+)\"")
+                .matcher(html);
+        if (matcher.find()) {
+            return matcher.group(1).replace("&amp;", "&");
+        }
+        throw new AssertionError("Could not find form action in wallet HTML: " + html.substring(0, Math.min(500, html.length())));
+    }
+
+    /**
+     * Extract hidden form fields from wallet HTML response.
+     */
+    private static Map<String, String> extractHiddenFields(String html) {
+        Map<String, String> fields = new java.util.LinkedHashMap<>();
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("<input[^>]+type=[\"']hidden[\"'][^>]*name=[\"']([^\"']+)[\"'][^>]*value=[\"']([^\"']*)[\"'][^>]*/?>")
+                .matcher(html);
+        while (matcher.find()) {
+            fields.put(matcher.group(1), matcher.group(2));
+        }
+        // Also try reverse order: value before name
+        matcher = java.util.regex.Pattern
+                .compile("<input[^>]+value=[\"']([^\"']*)[\"'][^>]*name=[\"']([^\"']+)[\"'][^>]*/?>")
+                .matcher(html);
+        while (matcher.find()) {
+            fields.putIfAbsent(matcher.group(2), matcher.group(1));
+        }
+        return fields;
     }
 
     /**
