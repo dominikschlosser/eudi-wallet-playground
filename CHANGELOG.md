@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.8.0...v1.8.1) (2026-02-27)
+
+
+### Bug Fixes
+
+* enfore encrypted responses with response_mode direct_post.jwt ([076228b](https://github.com/ba-itsys/eudi-wallet-playground/commit/076228b0659ca8367252ec277951a79ed6bb9e1e))
+
 ## [1.8.0](https://github.com/ba-itsys/eudi-wallet-playground/compare/v1.7.7...v1.8.0) (2026-02-27)
 
 
