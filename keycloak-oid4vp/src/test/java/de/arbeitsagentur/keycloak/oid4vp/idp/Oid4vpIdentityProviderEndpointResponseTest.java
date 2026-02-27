@@ -193,6 +193,8 @@ class Oid4vpIdentityProviderEndpointResponseTest {
         @DisplayName("returns JSON error when no auth session found")
         void returnsJsonErrorWhenNoAuthSession() {
             when(uriInfo.getRequestUri()).thenReturn(URI.create("https://kc/realms/test/broker/oid4vp/endpoint?state=missing"));
+            when(uriInfo.getBaseUri()).thenReturn(URI.create("https://kc/"));
+            when(singleUseObjects.get("oid4vp_deferred:missing:completed")).thenReturn(null);
 
             Response response = endpoint.handlePost(
                     "missing", null, null, null, null,
