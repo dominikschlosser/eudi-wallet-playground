@@ -225,14 +225,18 @@ final class Oid4vpTestKeycloakSetup {
      * Configure same-device (redirect) flow for the OID4VP Identity Provider.
      */
     static void configureSameDeviceFlow(KeycloakAdminClient admin, String realm, boolean enabled, String walletAuthEndpoint) throws Exception {
-        Map<String, Object> idp = admin.getJson("/admin/realms/" + realm + "/identity-provider/instances/oid4vp");
+        configureSameDeviceFlow(admin, realm, "oid4vp", enabled, walletAuthEndpoint);
+    }
+
+    static void configureSameDeviceFlow(KeycloakAdminClient admin, String realm, String idpAlias, boolean enabled, String walletAuthEndpoint) throws Exception {
+        Map<String, Object> idp = admin.getJson("/admin/realms/" + realm + "/identity-provider/instances/" + idpAlias);
         @SuppressWarnings("unchecked")
         Map<String, String> config = (Map<String, String>) idp.get("config");
         config.put(Oid4vpIdentityProviderConfig.SAME_DEVICE_ENABLED, String.valueOf(enabled));
         if (walletAuthEndpoint != null) {
             config.put(Oid4vpIdentityProviderConfig.SAME_DEVICE_WALLET_URL, walletAuthEndpoint);
         }
-        admin.putJson("/admin/realms/" + realm + "/identity-provider/instances/oid4vp", idp);
+        admin.putJson("/admin/realms/" + realm + "/identity-provider/instances/" + idpAlias, idp);
     }
 
     /**
