@@ -258,12 +258,15 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
         String clientId = effectiveClientId != null ? effectiveClientId : computeClientId(authSession);
         byte[] jwkThumbprint = computeJwkThumbprint(authSession.getAuthNote(SESSION_ENCRYPTION_KEY));
 
-        LOG.infof("[PID-BINDING] Verification params - nonce: %s, responseUri: %s, clientId: %s",
-                expectedNonce, responseUri, clientId);
+        String effectiveTrustListId = getConfig().isSkipTrustListVerification()
+                ? de.arbeitsagentur.keycloak.wallet.common.credential.TrustedIssuerResolver.ALLOW_ALL_ID
+                : getConfig().getTrustListId();
+        LOG.infof("[PID-BINDING] Verification params - nonce: %s, responseUri: %s, clientId: %s, trustListId: %s",
+                expectedNonce, responseUri, clientId, effectiveTrustListId);
 
         VpTokenVerificationResult result = vpTokenProcessor.process(
                 vpToken,
-                getConfig().getTrustListId(),
+                effectiveTrustListId,
                 clientId,
                 expectedNonce,
                 responseUri,

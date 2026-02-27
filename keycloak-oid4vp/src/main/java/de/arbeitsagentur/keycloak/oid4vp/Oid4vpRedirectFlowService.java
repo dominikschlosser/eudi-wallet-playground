@@ -136,7 +136,20 @@ public class Oid4vpRedirectFlowService {
             String nonce,
             String x509CertPem,
             String x509SigningKeyJwk) {
-        return buildSignedRequestObject(config, clientId, clientIdScheme, responseUri, state, nonce, x509CertPem, x509SigningKeyJwk, null);
+        return buildSignedRequestObject(config, clientId, clientIdScheme, responseUri, state, nonce, x509CertPem, x509SigningKeyJwk, null, 600);
+    }
+
+    public SignedRequestObject buildSignedRequestObject(
+            Oid4vpConfig config,
+            String clientId,
+            String clientIdScheme,
+            String responseUri,
+            String state,
+            String nonce,
+            String x509CertPem,
+            String x509SigningKeyJwk,
+            String existingEncryptionKeyJson) {
+        return buildSignedRequestObject(config, clientId, clientIdScheme, responseUri, state, nonce, x509CertPem, x509SigningKeyJwk, existingEncryptionKeyJson, 600);
     }
 
     /**
@@ -153,6 +166,7 @@ public class Oid4vpRedirectFlowService {
      * @param existingEncryptionKeyJson Optional existing encryption key JWK (private key) to reuse.
      *                                   If provided, this key will be used instead of generating a new one.
      *                                   This is used when DC API is enabled to share the same encryption key.
+     * @param lifespanSeconds Lifetime of the request object JWT in seconds
      * @return Signed request object with encryption key
      */
     public SignedRequestObject buildSignedRequestObject(
@@ -164,7 +178,8 @@ public class Oid4vpRedirectFlowService {
             String nonce,
             String x509CertPem,
             String x509SigningKeyJwk,
-            String existingEncryptionKeyJson) {
+            String existingEncryptionKeyJson,
+            int lifespanSeconds) {
 
         // Use the clientId directly - the caller is responsible for providing the correct client_id
         // (including any scheme prefix like x509_san_dns:hostname for x509 schemes)
@@ -208,7 +223,7 @@ public class Oid4vpRedirectFlowService {
         }
 
         long issuedAt = Instant.now().getEpochSecond();
-        long expiresAt = Instant.now().plusSeconds(600).getEpochSecond();
+        long expiresAt = Instant.now().plusSeconds(lifespanSeconds).getEpochSecond();
 
         var claims = new LinkedHashMap<String, Object>();
         claims.put("jti", UUID.randomUUID().toString());
@@ -308,7 +323,8 @@ public class Oid4vpRedirectFlowService {
             Oid4vpRequestObjectStore.RebuildParams rebuildParams,
             String state,
             String nonce,
-            String walletNonce) {
+            String walletNonce,
+            int lifespanSeconds) {
 
         if (rebuildParams == null) {
             throw new IllegalArgumentException("rebuildParams is required");
@@ -354,7 +370,7 @@ public class Oid4vpRedirectFlowService {
         }
 
         long issuedAt = Instant.now().getEpochSecond();
-        long expiresAt = Instant.now().plusSeconds(600).getEpochSecond();
+        long expiresAt = Instant.now().plusSeconds(lifespanSeconds).getEpochSecond();
 
         var claims = new LinkedHashMap<String, Object>();
         claims.put("jti", UUID.randomUUID().toString());

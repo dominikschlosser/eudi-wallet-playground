@@ -76,9 +76,13 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
     private final Oid4vpQrCodeService qrCodeService;
     private final Oid4vpTrustListService trustListService;
 
-    // Shared request object store for redirect flows (same-device and cross-device)
-    // Uses Keycloak's SingleUseObjectProvider for cluster-aware storage
-    private static final Oid4vpRequestObjectStore REQUEST_OBJECT_STORE = new Oid4vpRequestObjectStore();
+    // Request object store for redirect flows (same-device and cross-device)
+    // Uses Keycloak's SingleUseObjectProvider for cluster-aware storage.
+    // TTL is derived from the realm's login timeout (accessCodeLifespanLogin).
+    private final Oid4vpRequestObjectStore requestObjectStore;
+
+    // Login timeout in seconds from realm config — used for request object JWT exp and store TTL
+    private final int loginTimeoutSeconds;
 
     public Oid4vpIdentityProvider(KeycloakSession session,
                                    Oid4vpIdentityProviderConfig config,
@@ -92,6 +96,12 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         this.dcApiRequestObjectService = new Oid4vpDcApiRequestObjectService(session, objectMapper);
         this.redirectFlowService = new Oid4vpRedirectFlowService(session, objectMapper);
         this.qrCodeService = new Oid4vpQrCodeService();
+
+        // Sync request object lifetime with the realm's login timeout
+        RealmModel realm = session.getContext().getRealm();
+        this.loginTimeoutSeconds = realm != null ? realm.getAccessCodeLifespanLogin() : 1800;
+        this.requestObjectStore = new Oid4vpRequestObjectStore(java.time.Duration.ofSeconds(loginTimeoutSeconds));
+        LOG.infof("[OID4VP-IDP] Request object TTL synced to realm login timeout: %d seconds", loginTimeoutSeconds);
     }
 
     Oid4vpDcApiRequestObjectService getDcApiRequestObjectService() {
@@ -197,7 +207,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
 
         Oid4vpDcApiRequestObjectService.DcApiRequestObject requestObject =
                 dcApiRequestObjectService.buildRequestObject(legacyConfig, origin,
-                        sessionState.clientId(), sessionState.state(), sessionState.nonce());
+                        sessionState.clientId(), sessionState.state(), sessionState.nonce(), loginTimeoutSeconds);
 
         if (requestObject == null) {
             return null;
@@ -313,7 +323,8 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         Oid4vpRedirectFlowService.SignedRequestObject signedRequest = redirectFlowService.buildSignedRequestObject(
                 legacyConfig, effectiveClientId, getConfig().getClientIdScheme(),
                 responseUri, sessionState.state(), sessionState.nonce(),
-                getConfig().getX509CertificatePem(), getConfig().getX509SigningKeyJwk(), dcApiEncryptionKey);
+                getConfig().getX509CertificatePem(), getConfig().getX509SigningKeyJwk(), dcApiEncryptionKey,
+                loginTimeoutSeconds);
 
         // Store response_uri and encryption key in auth session for VP token verification.
         // Note: if both same-device and cross-device are enabled, the second call overwrites
@@ -335,7 +346,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
                 getConfig().getX509CertificatePem(), getConfig().getX509SigningKeyJwk(), encryptionPublicKeyJson,
                 legacyConfig != null ? legacyConfig.verifierInfo() : null);
 
-        String requestObjectId = REQUEST_OBJECT_STORE.store(session, signedRequest.jwt(), signedRequest.encryptionKeyJson(),
+        String requestObjectId = requestObjectStore.store(session, signedRequest.jwt(), signedRequest.encryptionKeyJson(),
                 sessionState.state(), sessionState.nonce(), rootSessionId, clientIdForSession, rebuildParams, skipIndexes);
 
         return request.getUriInfo().getBaseUriBuilder()
@@ -413,7 +424,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
 
     @Override
     public Object callback(RealmModel realm, AuthenticationCallback callback, EventBuilder event) {
-        return new Oid4vpIdentityProviderEndpoint(session, realm, this, callback, event, REQUEST_OBJECT_STORE);
+        return new Oid4vpIdentityProviderEndpoint(session, realm, this, callback, event, requestObjectStore);
     }
 
     /** Provides access to redirect flow service for endpoint. */
@@ -543,15 +554,20 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         // Verify the VP token using VpTokenProcessor (handles format detection and retry)
         boolean trustX5c = getConfig().getEffectiveTrustX5cFromCredential();
         String redirectFlowResponseUri = authSession.getAuthNote(SESSION_REDIRECT_FLOW_RESPONSE_URI);
+        // When skipTrustListVerification is enabled, use the "allow-all" trust list ID
+        // to skip credential signature verification entirely (for testing).
+        String effectiveTrustListId = getConfig().isSkipTrustListVerification()
+                ? de.arbeitsagentur.keycloak.wallet.common.credential.TrustedIssuerResolver.ALLOW_ALL_ID
+                : getConfig().getTrustListId();
         if (getConfig().isSkipTrustListVerification()) {
-            LOG.warnf("[OID4VP-IDP] Trust list verification SKIPPED (skipTrustListVerification=true), auto-trusting x5c");
+            LOG.warnf("[OID4VP-IDP] Trust list verification SKIPPED (skipTrustListVerification=true), accepting all credential signatures");
         }
         LOG.infof("[OID4VP-IDP] Verifying VP token with trustListId: %s, trustX5c: %b",
-                getConfig().getTrustListId(), trustX5c);
+                effectiveTrustListId, trustX5c);
 
         VpTokenVerificationResult result = vpTokenProcessor.process(
                 vpToken,
-                getConfig().getTrustListId(),
+                effectiveTrustListId,
                 clientId,
                 expectedNonce,
                 responseUri,

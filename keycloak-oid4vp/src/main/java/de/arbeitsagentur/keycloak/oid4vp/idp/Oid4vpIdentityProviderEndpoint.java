@@ -1298,15 +1298,6 @@ public class Oid4vpIdentityProviderEndpoint {
             boolean isUserCancellation = errorMessage != null &&
                     (errorMessage.contains("access_denied") || errorMessage.contains("user_cancelled"));
             String errorCode = isUserCancellation ? "access_denied" : "server_error";
-            if (!isCrossDeviceFlow) {
-                // Same-device: include redirect_uri so the wallet can redirect the user's
-                // browser back to the IdP login page for retry.
-                String idpLoginUrl = buildIdpLoginPageUrl(authSession);
-                if (idpLoginUrl != null) {
-                    LOG.infof("[OID4VP-ENDPOINT] Same-device broker error: returning redirect_uri to IdP login page: %s", idpLoginUrl);
-                    return buildDirectPostErrorWithRedirectResponse(errorCode, errorMessage, idpLoginUrl);
-                }
-            }
             return buildDirectPostErrorResponse(errorCode, errorMessage, state);
         }
 
@@ -1335,13 +1326,6 @@ public class Oid4vpIdentityProviderEndpoint {
 
         // For direct_post flows, return proper error JSON to the wallet
         if (isDirectPostFlow) {
-            if (!isCrossDeviceFlow) {
-                String idpLoginUrl = buildIdpLoginPageUrl(authSession);
-                if (idpLoginUrl != null) {
-                    return buildDirectPostErrorWithRedirectResponse("server_error",
-                            "Authentication failed: " + e.getMessage(), idpLoginUrl);
-                }
-            }
             return buildDirectPostErrorResponse("server_error",
                     "Authentication failed: " + e.getMessage(), state);
         }
@@ -1366,20 +1350,6 @@ public class Oid4vpIdentityProviderEndpoint {
         // Always return proper JSON error to the wallet (never HTML)
         String json = "{\"error\":\"" + jsonEscape(errorCode) + "\""
                 + (errorDescription != null ? ",\"error_description\":\"" + jsonEscape(errorDescription) + "\"" : "")
-                + "}";
-        return Response.status(Response.Status.BAD_REQUEST)
-                .entity(json)
-                .type(MediaType.APPLICATION_JSON)
-                .build();
-    }
-
-    private Response buildDirectPostErrorWithRedirectResponse(String errorCode, String errorDescription,
-                                                              String redirectUri) {
-        LOG.warnf("[OID4VP-ENDPOINT] Direct post error with redirect: %s - %s -> %s",
-                errorCode, errorDescription, redirectUri);
-        String json = "{\"error\":\"" + jsonEscape(errorCode) + "\""
-                + (errorDescription != null ? ",\"error_description\":\"" + jsonEscape(errorDescription) + "\"" : "")
-                + ",\"redirect_uri\":\"" + jsonEscape(redirectUri) + "\""
                 + "}";
         return Response.status(Response.Status.BAD_REQUEST)
                 .entity(json)
@@ -1476,7 +1446,8 @@ public class Oid4vpIdentityProviderEndpoint {
                     stored.rebuildParams(),
                     stored.state(),
                     stored.nonce(),
-                    walletNonce
+                    walletNonce,
+                    realm.getAccessCodeLifespanLogin()
             );
             LOG.infof("[OID4VP-ENDPOINT] Returning rebuilt request object with wallet_nonce, JWT length: %d",
                     rebuilt.jwt().length());
@@ -1521,15 +1492,9 @@ public class Oid4vpIdentityProviderEndpoint {
         if (isDirectPostFlow) {
             // For direct_post (wallet app POST without cookies), return proper error JSON.
             // Don't call callback.cancelled()/error() — they may invalidate the auth session.
-            if (!isCrossDeviceFlow) {
-                // Same-device: include redirect_uri so the wallet can redirect the user's
-                // browser back to the IdP login page for retry.
-                String idpLoginUrl = buildIdpLoginPageUrl(authSession);
-                if (idpLoginUrl != null) {
-                    LOG.infof("[OID4VP-ENDPOINT] Same-device error: returning redirect_uri to IdP login page: %s", idpLoginUrl);
-                    return buildDirectPostErrorWithRedirectResponse(error, errorDescription, idpLoginUrl);
-                }
-            }
+            // Never include redirect_uri in error responses — the OID4VP spec only defines
+            // redirect_uri for successful responses. Including it on errors could cause the
+            // wallet to redirect the user to an unexpected page.
             return buildDirectPostErrorResponse(error, errorDescription, state);
         }
 

@@ -60,14 +60,14 @@ public final class Oid4vpDcApiRequestObjectService {
         this.objectMapper = Objects.requireNonNull(objectMapper);
     }
 
-    public DcApiRequestObject buildRequestObject(Oid4vpConfig config, String origin, String clientId, String state, String nonce) {
+    public DcApiRequestObject buildRequestObject(Oid4vpConfig config, String origin, String clientId, String state, String nonce, int lifespanSeconds) {
         if (config == null) {
             return null;
         }
         String mode = config.dcApiRequestMode();
         if (mode == null || mode.isBlank() || "auto".equalsIgnoreCase(mode)) {
             try {
-                return buildSignedRequestObject(config, origin, clientId, state, nonce);
+                return buildSignedRequestObject(config, origin, clientId, state, nonce, lifespanSeconds);
             } catch (Exception e) {
                 return null;
             }
@@ -76,7 +76,7 @@ public final class Oid4vpDcApiRequestObjectService {
             return null;
         }
         if ("signed".equalsIgnoreCase(mode)) {
-            return buildSignedRequestObject(config, origin, clientId, state, nonce);
+            return buildSignedRequestObject(config, origin, clientId, state, nonce, lifespanSeconds);
         }
         throw new IllegalArgumentException("Unsupported dcApiRequestMode: " + mode);
     }
@@ -133,7 +133,7 @@ public final class Oid4vpDcApiRequestObjectService {
         return null;
     }
 
-    private DcApiRequestObject buildSignedRequestObject(Oid4vpConfig config, String origin, String clientId, String state, String nonce) {
+    private DcApiRequestObject buildSignedRequestObject(Oid4vpConfig config, String origin, String clientId, String state, String nonce, int lifespanSeconds) {
         if (config == null) {
             throw new IllegalArgumentException("config must not be null");
         }
@@ -150,7 +150,7 @@ public final class Oid4vpDcApiRequestObjectService {
         ECKey responseEncryptionKey = createResponseEncryptionKey();
 
         long issuedAt = Instant.now().getEpochSecond();
-        long expiresAt = Instant.now().plusSeconds(300).getEpochSecond();
+        long expiresAt = Instant.now().plusSeconds(lifespanSeconds).getEpochSecond();
         var claims = new LinkedHashMap<String, Object>();
         claims.put("jti", UUID.randomUUID().toString());
         claims.put("iat", issuedAt);
