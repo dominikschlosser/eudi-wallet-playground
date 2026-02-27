@@ -145,6 +145,11 @@ public final class Oid4vpTrustListService implements TrustedIssuerResolver {
 
     private TrustListData loadDataFromJwt(String jwtString) {
         try {
+            LOG.infof("[OID4VP-TRUSTLIST] Parsing ETSI trust list JWT (length: %d, preview: %s)",
+                    jwtString.length(),
+                    jwtString.substring(0, Math.min(100, jwtString.length())));
+            int dotCount = jwtString.length() - jwtString.replace(".", "").length();
+            LOG.infof("[OID4VP-TRUSTLIST] JWT dot-separated parts: %d", dotCount + 1);
             EtsiTrustList parsed = EtsiTrustListParser.parse(jwtString);
             List<PublicKey> keys = parsed.allPublicKeys();
             List<X509Certificate> certs = parsed.allCertificates();
@@ -152,6 +157,10 @@ public final class Oid4vpTrustListService implements TrustedIssuerResolver {
                     keys.size(), certs.size(), parsed.label());
             return new TrustListData(true, List.copyOf(keys), List.copyOf(certs));
         } catch (Exception e) {
+            LOG.errorf(e, "[OID4VP-TRUSTLIST] Failed to parse ETSI trust list JWT (length: %d, preview: %s). Cause: %s",
+                    jwtString != null ? jwtString.length() : 0,
+                    jwtString != null ? jwtString.substring(0, Math.min(200, jwtString.length())) : "null",
+                    e.getMessage());
             throw new IllegalStateException("Failed to parse ETSI trust list JWT", e);
         }
     }

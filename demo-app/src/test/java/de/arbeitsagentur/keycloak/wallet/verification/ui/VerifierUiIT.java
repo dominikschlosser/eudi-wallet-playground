@@ -224,21 +224,21 @@ class VerifierUiIT {
             var sdJwt = credentials.get(0);
             assertThat(sdJwt.get("format").asText()).isEqualTo("dc+sd-jwt");
             assertThat(sdJwt.get("meta").get("vct_values").get(0).asText()).isEqualTo("urn:eudi:pid:de:1");
-            // SD-JWT address claims: street_address and locality as individual claims
+            // SD-JWT address claims: nested paths like ["address", "street_address"]
             var sdJwtClaims = sdJwt.get("claims");
             boolean foundSdJwtStreetAddress = false;
             boolean foundSdJwtLocality = false;
             for (var claim : sdJwtClaims) {
                 var path = claim.get("path");
-                if (path.size() == 1 && "street_address".equals(path.get(0).asText())) {
+                if (path.size() == 2 && "address".equals(path.get(0).asText()) && "street_address".equals(path.get(1).asText())) {
                     foundSdJwtStreetAddress = true;
                 }
-                if (path.size() == 1 && "locality".equals(path.get(0).asText())) {
+                if (path.size() == 2 && "address".equals(path.get(0).asText()) && "locality".equals(path.get(1).asText())) {
                     foundSdJwtLocality = true;
                 }
             }
-            assertThat(foundSdJwtStreetAddress).as("SD-JWT should have ['street_address'] path").isTrue();
-            assertThat(foundSdJwtLocality).as("SD-JWT should have ['locality'] path").isTrue();
+            assertThat(foundSdJwtStreetAddress).as("SD-JWT should have ['address', 'street_address'] path").isTrue();
+            assertThat(foundSdJwtLocality).as("SD-JWT should have ['address', 'locality'] path").isTrue();
 
             // mDoc credential: meta.doctype_value present, paths match registration cert
             var mdoc = credentials.get(1);
@@ -258,18 +258,18 @@ class VerifierUiIT {
                 }
                 if (path.size() == 2
                         && "eu.europa.ec.eudi.pid.1".equals(path.get(0).asText())
-                        && "street_address".equals(path.get(1).asText())) {
+                        && "resident_street".equals(path.get(1).asText())) {
                     foundMdocStreetAddress = true;
                 }
                 if (path.size() == 2
                         && "eu.europa.ec.eudi.pid.1".equals(path.get(0).asText())
-                        && "locality".equals(path.get(1).asText())) {
+                        && "resident_city".equals(path.get(1).asText())) {
                     foundMdocLocality = true;
                 }
             }
             assertThat(foundMdocGivenName).as("mDoc should have 2-element path ['eu.europa.ec.eudi.pid.1','given_name']").isTrue();
-            assertThat(foundMdocStreetAddress).as("mDoc should have 2-element path ['eu.europa.ec.eudi.pid.1','street_address']").isTrue();
-            assertThat(foundMdocLocality).as("mDoc should have 2-element path ['eu.europa.ec.eudi.pid.1','locality']").isTrue();
+            assertThat(foundMdocStreetAddress).as("mDoc should have 2-element path ['eu.europa.ec.eudi.pid.1','resident_street']").isTrue();
+            assertThat(foundMdocLocality).as("mDoc should have 2-element path ['eu.europa.ec.eudi.pid.1','resident_city']").isTrue();
 
             // credential_sets panel should be visible in builder mode
             assertThat(page.locator("#credential-sets-panel").isVisible())

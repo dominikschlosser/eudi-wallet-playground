@@ -138,19 +138,26 @@ public class SdJwtParser {
                                             Set<String> requestedClaims) {
         try {
             SDJWT parsed = SDJWT.parse(sdJwt);
-            List<Disclosure> filtered = parsed.getDisclosures().stream()
-                    .filter(d -> {
-                        if (requestedClaims == null || requestedClaims.isEmpty()) {
-                            return true;
-                        }
-                        String claimName = d.getClaimName();
-                        if (claimName == null) {
-                            return false;
-                        }
-                        return requestedClaims.contains(claimName)
-                                || requests.stream().anyMatch(r -> matchesClaimName(r, claimName));
-                    })
-                    .toList();
+            List<Disclosure> named = new ArrayList<>();
+            List<Disclosure> arrayElements = new ArrayList<>();
+            for (Disclosure d : parsed.getDisclosures()) {
+                if (requestedClaims == null || requestedClaims.isEmpty()) {
+                    named.add(d);
+                } else if (d.getClaimName() == null) {
+                    arrayElements.add(d);
+                } else if (requestedClaims.contains(d.getClaimName())
+                        || requests.stream().anyMatch(r -> matchesClaimName(r, d.getClaimName()))) {
+                    named.add(d);
+                }
+            }
+            // Only keep array element disclosures whose digest appears in a kept parent's value
+            Set<String> parentDigests = SdJwtUtils.collectAllDigests(named);
+            List<Disclosure> filtered = new ArrayList<>(named);
+            for (Disclosure ae : arrayElements) {
+                if (parentDigests.contains(ae.digest())) {
+                    filtered.add(ae);
+                }
+            }
             return new SDJWT(parsed.getCredentialJwt(), filtered, parsed.getBindingJwt()).toString();
         } catch (Exception e) {
             return sdJwt;

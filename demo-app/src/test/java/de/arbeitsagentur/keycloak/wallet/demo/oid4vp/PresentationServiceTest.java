@@ -1425,9 +1425,10 @@ class PresentationServiceTest {
                         { "path": ["given_name"] },
                         { "path": ["family_name"] },
                         { "path": ["birthdate"] },
+                        { "path": ["nationalities", null] },
                         { "path": ["address"] },
-                        { "path": ["street_address"] },
-                        { "path": ["locality"] }
+                        { "path": ["address", "street_address"] },
+                        { "path": ["address", "locality"] }
                       ]
                     },
                     {
@@ -1438,8 +1439,11 @@ class PresentationServiceTest {
                         { "path": ["eu.europa.ec.eudi.pid.1", "given_name"] },
                         { "path": ["eu.europa.ec.eudi.pid.1", "family_name"] },
                         { "path": ["eu.europa.ec.eudi.pid.1", "birth_date"] },
-                        { "path": ["eu.europa.ec.eudi.pid.1", "street_address"] },
-                        { "path": ["eu.europa.ec.eudi.pid.1", "locality"] }
+                        { "path": ["eu.europa.ec.eudi.pid.1", "nationality"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "resident_street"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "resident_city"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "resident_postal_code"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "resident_country"] }
                       ]
                     }
                   ],
@@ -1483,9 +1487,10 @@ class PresentationServiceTest {
                         { "path": ["given_name"] },
                         { "path": ["family_name"] },
                         { "path": ["birthdate"] },
+                        { "path": ["nationalities", null] },
                         { "path": ["address"] },
-                        { "path": ["street_address"] },
-                        { "path": ["locality"] }
+                        { "path": ["address", "street_address"] },
+                        { "path": ["address", "locality"] }
                       ]
                     },
                     {
@@ -1496,8 +1501,11 @@ class PresentationServiceTest {
                         { "path": ["eu.europa.ec.eudi.pid.1", "given_name"] },
                         { "path": ["eu.europa.ec.eudi.pid.1", "family_name"] },
                         { "path": ["eu.europa.ec.eudi.pid.1", "birth_date"] },
-                        { "path": ["eu.europa.ec.eudi.pid.1", "street_address"] },
-                        { "path": ["eu.europa.ec.eudi.pid.1", "locality"] }
+                        { "path": ["eu.europa.ec.eudi.pid.1", "nationality"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "resident_street"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "resident_city"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "resident_postal_code"] },
+                        { "path": ["eu.europa.ec.eudi.pid.1", "resident_country"] }
                       ]
                     }
                   ],
@@ -1512,6 +1520,89 @@ class PresentationServiceTest {
         assertThat(bundle.get().matches().get(0).disclosedClaims())
                 .containsEntry("given_name", "Bob")
                 .containsEntry("family_name", "Smith");
+    }
+
+    // ============================================================================
+    // Array path (null wildcard / integer index) tests
+    // ============================================================================
+
+    @Test
+    void dcqlNullWildcardPathMatchesArrayClaim() throws Exception {
+        saveCredential("user", Map.of(
+                "credentialSubject", Map.of(
+                        "given_name", "Alice",
+                        "nationalities", List.of("DE", "FR")
+                ),
+                "rawCredential", "aaa.bbb.ccc~disc"
+        ));
+        // ["nationalities", null] should match any element in the nationalities array
+        String dcql = """
+                {
+                  "credentials": [{
+                    "id": "pid",
+                    "format": "dc+sd-jwt",
+                    "claims": [
+                      { "path": ["given_name"] },
+                      { "path": ["nationalities", null] }
+                    ]
+                  }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isPresent();
+        assertThat(bundle.get().matches()).hasSize(1);
+        assertThat(bundle.get().matches().get(0).disclosedClaims())
+                .containsEntry("given_name", "Alice");
+    }
+
+    @Test
+    void dcqlIntegerIndexPathMatchesArrayClaim() throws Exception {
+        saveCredential("user", Map.of(
+                "credentialSubject", Map.of(
+                        "nationalities", List.of("DE", "FR")
+                ),
+                "rawCredential", "aaa.bbb.ccc~disc"
+        ));
+        // ["nationalities", 0] should match the first element in the nationalities array
+        String dcql = """
+                {
+                  "credentials": [{
+                    "id": "pid",
+                    "format": "dc+sd-jwt",
+                    "claims": [
+                      { "path": ["nationalities", 0] }
+                    ]
+                  }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isPresent();
+        assertThat(bundle.get().matches()).hasSize(1);
+    }
+
+    @Test
+    void dcqlNullWildcardPathFailsWhenArrayAbsent() throws Exception {
+        saveCredential("user", Map.of(
+                "credentialSubject", Map.of("given_name", "Alice"),
+                "rawCredential", "aaa.bbb.ccc~disc"
+        ));
+        // ["nationalities", null] should not match when nationalities is missing
+        String dcql = """
+                {
+                  "credentials": [{
+                    "id": "pid",
+                    "format": "dc+sd-jwt",
+                    "claims": [
+                      { "path": ["nationalities", null] }
+                    ]
+                  }]
+                }
+                """;
+
+        Optional<PresentationService.PresentationBundle> bundle = presentationService.preparePresentations("user", dcql);
+        assertThat(bundle).isEmpty();
     }
 
     private void saveCredential(String userId, Map<String, Object> credential) throws Exception {

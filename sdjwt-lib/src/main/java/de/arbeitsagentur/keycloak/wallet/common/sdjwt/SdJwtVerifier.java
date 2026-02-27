@@ -24,6 +24,7 @@ import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.SignedJWT;
+import de.arbeitsagentur.keycloak.wallet.common.credential.StatusListVerifier;
 import de.arbeitsagentur.keycloak.wallet.common.credential.TrustedIssuerResolver;
 import de.arbeitsagentur.keycloak.wallet.common.credential.VerificationStepSink;
 
@@ -52,16 +53,23 @@ public class SdJwtVerifier {
     private final ObjectMapper objectMapper;
     private final TrustedIssuerResolver trustResolver;
     private final Duration kbJwtMaxAge;
+    private final StatusListVerifier statusListVerifier;
 
     public SdJwtVerifier(ObjectMapper objectMapper, TrustedIssuerResolver trustResolver) {
         this(objectMapper, trustResolver, DEFAULT_KB_JWT_MAX_AGE);
     }
 
     public SdJwtVerifier(ObjectMapper objectMapper, TrustedIssuerResolver trustResolver, Duration kbJwtMaxAge) {
+        this(objectMapper, trustResolver, kbJwtMaxAge, new StatusListVerifier());
+    }
+
+    public SdJwtVerifier(ObjectMapper objectMapper, TrustedIssuerResolver trustResolver, Duration kbJwtMaxAge,
+                          StatusListVerifier statusListVerifier) {
         this.sdJwtParser = new SdJwtParser(objectMapper);
         this.objectMapper = objectMapper;
         this.trustResolver = trustResolver;
         this.kbJwtMaxAge = kbJwtMaxAge != null ? kbJwtMaxAge : DEFAULT_KB_JWT_MAX_AGE;
+        this.statusListVerifier = statusListVerifier;
     }
 
     public boolean isSdJwt(String token) {
@@ -92,8 +100,10 @@ public class SdJwtVerifier {
         if (steps != null) {
             steps.add("Signature verified against trust list",
                     "Checked JWT/SD-JWT signature against trusted issuers in the trust list.",
-                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
+                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
         }
+        // Check revocation status via Token Status List
+        checkRevocationStatus(jwt, steps);
         validateTimestamps(jwt);
         validateAudienceAndNonceLenient(jwt, expectedAudience, expectedNonce);
         boolean disclosuresValid = SdJwtUtils.verifyDisclosures(jwt, parts, objectMapper);
@@ -103,7 +113,7 @@ public class SdJwtVerifier {
         if (steps != null) {
             steps.add("Disclosures validated",
                     "Validated selective disclosure digests against presented disclosures.",
-                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.1");
+                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
         }
         Map<String, Object> claims = new LinkedHashMap<>(SdJwtUtils.extractDisclosedClaims(parts, objectMapper));
         String embeddedKeyBinding = parts.keyBindingJwt();
@@ -121,7 +131,7 @@ public class SdJwtVerifier {
             if (steps != null) {
                 steps.add("Validated holder binding",
                         "Validated KB-JWT holder binding: cnf key matches credential and signature verified.",
-                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6-2.2.2.4");
+                        "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.6");
             }
             claims.put("key_binding_jwt", effectiveKeyBinding);
         }
@@ -252,6 +262,25 @@ public class SdJwtVerifier {
         PublicKey keyToUse = credentialKey != null ? credentialKey : kbKey;
         if (keyToUse == null || !TrustedIssuerResolver.verifyWithKey(holderBinding, keyToUse)) {
             throw new IllegalStateException("Holder binding signature invalid");
+        }
+    }
+
+    private void checkRevocationStatus(SignedJWT jwt, VerificationStepSink steps) {
+        try {
+            byte[] payload = Base64.getUrlDecoder().decode(jwt.getParsedString().split("\\.")[1]);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> claims = (Map<String, Object>) objectMapper.readValue(payload, Map.class);
+            statusListVerifier.checkRevocationStatus(claims);
+            if (steps != null) {
+                steps.add("Revocation status checked",
+                        "Verified credential has not been revoked via Token Status List.",
+                        "https://datatracker.ietf.org/doc/draft-ietf-oauth-status-list/");
+            }
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            LOG.info("[SD-JWT] Could not check revocation status (non-fatal): {}", e.getMessage());
+            LOG.debug("[SD-JWT] Revocation check error details:", e);
         }
     }
 

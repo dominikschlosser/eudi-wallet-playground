@@ -247,6 +247,32 @@ final class Oid4vpTestKeycloakSetup {
     }
 
     /**
+     * Delete ALL users that have an OID4VP federated identity from the realm.
+     * This ensures a clean state for first-broker-login tests by removing both
+     * the federated identity link AND the user itself.
+     */
+    static void deleteAllOid4vpUsers(KeycloakAdminClient admin, String realm) throws Exception {
+        List<Map<String, Object>> users = admin.getJsonList(
+                "/admin/realms/" + realm + "/users?max=100");
+        for (Map<String, Object> user : users) {
+            String userId = String.valueOf(user.get("id"));
+            String username = String.valueOf(user.get("username"));
+            // Skip built-in admin users
+            if ("admin".equals(username) || "test".equals(username)) continue;
+            try {
+                List<Map<String, Object>> identities = admin.getJsonList(
+                        "/admin/realms/" + realm + "/users/" + userId + "/federated-identity");
+                boolean hasOid4vp = identities.stream()
+                        .anyMatch(id -> "oid4vp".equals(id.get("identityProvider")));
+                if (hasOid4vp) {
+                    admin.delete("/admin/realms/" + realm + "/users/" + userId);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /**
      * Remove all federated identities for a user (for testing clean state).
      */
     static void removeAllFederatedIdentities(KeycloakAdminClient admin, String realm, String username) throws Exception {

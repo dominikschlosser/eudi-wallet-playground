@@ -228,7 +228,8 @@ public class PidBindingIdentityProvider extends Oid4vpIdentityProvider {
         LOG.infof("[PID-BINDING] Decrypting encrypted response...");
         String encryptionKey = authSession.getAuthNote(SESSION_ENCRYPTION_KEY);
         try {
-            JsonNode node = dcApiRequestObjectService.decryptEncryptedResponse(encryptedResponse, encryptionKey);
+            var decrypted = dcApiRequestObjectService.decryptEncryptedResponse(encryptedResponse, encryptionKey);
+            JsonNode node = decrypted.payload();
             if (node.hasNonNull("error")) {
                 String err = node.get("error").asText("");
                 String desc = node.hasNonNull("error_description") ? node.get("error_description").asText("") : "";

@@ -113,6 +113,8 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
     private final AtomicReference<String> nextFormat = new AtomicReference<>(); // Force specific format: "dc+sd-jwt" or "mso_mdoc"
     private final AtomicReference<String> nextVerifierUserId = new AtomicReference<>(); // User ID for verifier credential
     private volatile boolean useGermanPid = false; // Use German PID (no identifiers) instead of default PID
+    private volatile String lastPostResponseBody; // Diagnostic: last VP token POST response body
+    private volatile int lastPostResponseCode; // Diagnostic: last VP token POST response code
 
     Oid4vpTestDcApiMockWalletServer(ObjectMapper objectMapper, String containerHost) throws Exception {
         this.objectMapper = objectMapper;
@@ -121,7 +123,8 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
 
         this.issuerKey = loadIssuerKey();
         this.sdJwtCredentialBuilder = new SdJwtCredentialBuilder(objectMapper, issuerKey, Duration.ofMinutes(5));
-        this.mdocCredentialBuilder = new MdocCredentialBuilder(issuerKey, Duration.ofMinutes(5));
+        this.mdocCredentialBuilder = new MdocCredentialBuilder(issuerKey, Duration.ofMinutes(5))
+                .issuerCertificateChain(List.of(loadIssuerCertificate()));
         this.mdocDeviceResponseBuilder = new MdocDeviceResponseBuilder();
         this.holderKey = new ECKeyGenerator(Curve.P_256).keyID("holder").generate();
 
@@ -201,6 +204,16 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
      */
     void setUseGermanPid(boolean useGermanPid) {
         this.useGermanPid = useGermanPid;
+    }
+
+    /** Diagnostic: get the last VP token POST response body from the endpoint. */
+    String getLastPostResponseBody() {
+        return lastPostResponseBody;
+    }
+
+    /** Diagnostic: get the last VP token POST response code from the endpoint. */
+    int getLastPostResponseCode() {
+        return lastPostResponseCode;
     }
 
     /**
@@ -429,21 +442,90 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
         }
 
         // Use formActionUri for the actual form submission, not responseUri (which is for SessionTranscript)
-        // Real wallets typically append state to the query string (like EUDI Reference Wallet)
-        // This ensures our tests catch issues with query string handling in the verifier
         String actualFormAction = (formActionUri != null && !formActionUri.isBlank()) ? formActionUri : responseUri;
-        if (state != null && !state.isBlank()) {
+        boolean isNativeWalletFlow = requestUri != null && !requestUri.isBlank();
+        if (encrypted && isNativeWalletFlow) {
+            // Real wallets using direct_post.jwt do NOT send state externally.
+            // State is only inside the encrypted JWE payload.
+            fields.remove("state");
+            LOG.info("[MockWallet] Encrypted native wallet flow: state only inside JWE, not sent externally");
+        } else if (state != null && !state.isBlank()) {
             // Append state to query string like real wallets do
             String encodedState = URLEncoder.encode(state, StandardCharsets.UTF_8);
             actualFormAction = actualFormAction + (actualFormAction.contains("?") ? "&" : "?") + "state=" + encodedState;
             // Remove state from form body since it's now in URL
             fields.remove("state");
         }
-        LOG.info("[MockWallet] Building response HTML, formAction={}", actualFormAction);
-        LOG.info("[MockWallet] responseMode={}, encrypted={}", responseMode, encrypted);
+        LOG.info("[MockWallet] formAction={}, responseMode={}, encrypted={}", actualFormAction, responseMode, encrypted);
         LOG.info("[MockWallet] state={}, nonce={}", state, nonce);
-        String html = buildDirectPostHtml(actualFormAction, fields);
 
+        // Native wallet flow: both same-device and cross-device use request_uri,
+        // meaning the wallet fetches the request object JWT and POSTs the VP token server-side.
+        // Distinguish by checking if response_uri contains flow=cross_device.
+        boolean isCrossDeviceFlow = actualFormAction.contains("flow=cross_device");
+        if (isNativeWalletFlow) {
+            if (isCrossDeviceFlow) {
+                // Cross-device: POST VP token server-side, expect {} response (no redirect_uri).
+                LOG.info("[MockWallet] Cross-device flow: POSTing VP token server-side to {}", actualFormAction);
+                try {
+                    String responseBody = postVpTokenRaw(actualFormAction, fields);
+                    LOG.info("[MockWallet] Cross-device response: {}", responseBody);
+                    // Verify the endpoint returned empty JSON (no redirect_uri for cross-device)
+                    if (responseBody != null && responseBody.contains("redirect_uri")) {
+                        throw new IOException("Cross-device flow received redirect_uri, expected empty JSON: " + responseBody);
+                    }
+                    // Return 200 OK to the test (nothing more for cross-device wallet to do)
+                    byte[] okBytes = "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
+                    exchange.sendResponseHeaders(200, okBytes.length);
+                    try (OutputStream os = exchange.getResponseBody()) {
+                        os.write(okBytes);
+                    }
+                } catch (Exception e) {
+                    LOG.error("[MockWallet] Cross-device POST failed: {}", e.getMessage(), e);
+                    byte[] errBytes = ("{\"error\":\"post_failed\",\"detail\":\"" + htmlAttr(e.getMessage()) + "\"}")
+                            .getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
+                    exchange.sendResponseHeaders(500, errBytes.length);
+                    try (OutputStream os = exchange.getResponseBody()) {
+                        os.write(errBytes);
+                    }
+                }
+            } else {
+                // Same-device: POST VP token server-side, expect redirect_uri in response.
+                LOG.info("[MockWallet] Same-device flow: POSTing VP token server-side to {}", actualFormAction);
+                try {
+                    String redirectUri = postVpTokenAndGetRedirect(actualFormAction, fields);
+                    if (redirectUri != null && !redirectUri.isBlank()) {
+                        LOG.info("[MockWallet] Same-device: opening redirect_uri in browser: {}", redirectUri);
+                        exchange.getResponseHeaders().add("Location", redirectUri);
+                        exchange.sendResponseHeaders(302, -1);
+                    } else {
+                        LOG.error("[MockWallet] Same-device: no redirect_uri in response! Body: {}", lastPostResponseBody);
+                        byte[] errBytes = ("{\"error\":\"no_redirect_uri\",\"detail\":\"" + htmlAttr(lastPostResponseBody) + "\"}")
+                                .getBytes(StandardCharsets.UTF_8);
+                        exchange.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
+                        exchange.sendResponseHeaders(400, errBytes.length);
+                        try (OutputStream os = exchange.getResponseBody()) {
+                            os.write(errBytes);
+                        }
+                    }
+                } catch (Exception e) {
+                    LOG.error("[MockWallet] Same-device POST failed: {}", e.getMessage(), e);
+                    byte[] errBytes = ("{\"error\":\"post_failed\",\"detail\":\"" + htmlAttr(e.getMessage()) + "\"}")
+                            .getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
+                    exchange.sendResponseHeaders(500, errBytes.length);
+                    try (OutputStream os = exchange.getResponseBody()) {
+                        os.write(errBytes);
+                    }
+                }
+            }
+            return;
+        }
+
+        // DC API / popup flow: return HTML with auto-submit form (browser submits with cookies)
+        String html = buildDirectPostHtml(actualFormAction, fields);
         byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
         // Allow the popup to access window.opener (cross-origin)
@@ -687,6 +769,94 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
         }
     }
 
+    /**
+     * POST VP token to the Keycloak endpoint server-side (simulating a native wallet app).
+     * Enforces real wallet behavior:
+     * - Does NOT send any cookies (native wallet app has no browser session)
+     * - Rejects non-JSON responses (real wallets crash on HTML)
+     * - For same-device: expects JSON with redirect_uri
+     * Returns the redirect_uri from the JSON response, or null if not present.
+     */
+    private String postVpTokenAndGetRedirect(String formAction, Map<String, String> fields) throws IOException {
+        String responseBody = postVpTokenRaw(formAction, fields);
+
+        if (responseBody != null && !responseBody.isBlank()) {
+            JsonNode json = objectMapper.readTree(responseBody);
+            if (json.has("redirect_uri")) {
+                return json.get("redirect_uri").asText();
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Low-level POST to Keycloak endpoint, simulating a native wallet app.
+     * Enforces real wallet constraints:
+     * - No cookies sent
+     * - Response must be JSON (rejects HTML, redirects)
+     * Returns the raw JSON response body.
+     */
+    private String postVpTokenRaw(String formAction, Map<String, String> fields) throws IOException {
+        StringBuilder body = new StringBuilder();
+        for (Map.Entry<String, String> entry : fields.entrySet()) {
+            if (!body.isEmpty()) body.append("&");
+            body.append(URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8))
+                .append("=")
+                .append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
+        }
+
+        java.net.URL url = new java.net.URL(formAction);
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+        // Real wallet: explicitly do NOT send cookies
+        conn.setRequestProperty("Cookie", "");
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(10000);
+        conn.setReadTimeout(10000);
+        conn.setInstanceFollowRedirects(false);
+
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(body.toString().getBytes(StandardCharsets.UTF_8));
+        }
+
+        int responseCode = conn.getResponseCode();
+        lastPostResponseCode = responseCode;
+        String contentType = conn.getContentType();
+        LOG.info("[MockWallet] POST {} → status={}, content-type={}", formAction, responseCode, contentType);
+
+        // Real wallet enforcement: reject redirects (wallet is not a browser)
+        if (responseCode == 302 || responseCode == 303) {
+            String location = conn.getHeaderField("Location");
+            lastPostResponseBody = "REDIRECT: " + location;
+            throw new IOException("Wallet received redirect (status " + responseCode + ") instead of JSON. " +
+                    "Location: " + location + ". Endpoints MUST return JSON to wallets, never redirects.");
+        }
+
+        // Read response body
+        String responseBody;
+        java.io.InputStream stream = (responseCode >= 200 && responseCode < 300)
+                ? conn.getInputStream() : conn.getErrorStream();
+        if (stream != null) {
+            responseBody = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        } else {
+            responseBody = "";
+        }
+        lastPostResponseBody = responseBody;
+        LOG.info("[MockWallet] POST response body (first 500): {}",
+                responseBody.substring(0, Math.min(500, responseBody.length())));
+
+        // Real wallet enforcement: reject HTML responses
+        if (contentType != null && contentType.contains("text/html")) {
+            throw new IOException("Wallet received HTML instead of JSON. Status: " + responseCode +
+                    ", Body: " + responseBody.substring(0, Math.min(200, responseBody.length())) +
+                    ". Endpoints MUST return JSON to wallets, never HTML.");
+        }
+
+        return responseBody;
+    }
+
     private String buildPresentation(String format, String nonce, String audience, String responseUri, JWK handoverJwk, String dcqlQuery) {
         Set<String> requestedClaims = extractRequestedClaims(dcqlQuery, format);
         if ("mso_mdoc".equalsIgnoreCase(format)) {
@@ -827,6 +997,27 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
             LOG.info("[MockWallet] Loaded issuer key: x={}, y={}", key.getX(), key.getY());
             return key;
         }
+    }
+
+    /**
+     * Load the issuer X.509 certificate matching the mock-issuer key.
+     * This certificate is the same one in the test trust list.
+     */
+    private static java.security.cert.X509Certificate loadIssuerCertificate() throws Exception {
+        // This is the mock-issuer self-signed certificate from the test trust list.
+        String certBase64 = "MIIBgTCCASegAwIBAgIUBjEaIhGcW5pPX7vCtXbqMyql7ewwCgYIKoZIzj0EAwIw"
+                + "FjEUMBIGA1UEAwwLbW9jay1pc3N1ZXIwHhcNMjUxMjAxMDkzOTI2WhcNMzUxMTI5"
+                + "MDkzOTI2WjAWMRQwEgYDVQQDDAttb2NrLWlzc3VlcjBZMBMGByqGSM49AgEGCCqG"
+                + "SM49AwEHA0IABCSGo02fNJ4ilyIJVsnR90UMvBEhbDxpvIN/X+Rq4y9qjCA35Inb"
+                + "wm5jF0toypoov4aagJGaRkwzmvOy1JMlamKjUzBRMB0GA1UdDgQWBBR2mOx26507"
+                + "8nBXsMCf07e99RBlDDAfBgNVHSMEGDAWgBR2mOx265078nBXsRCf07e99RBlDDAP"
+                + "BgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQDc1Evb58VWAGTNgiad"
+                + "stQmCL6YL3ChASt/VLhgA/ogbAIgK5DjLQuY0dVDTaDccEC9s/uaKu+z5u28ZtQj"
+                + "VK65zFU=";
+        byte[] certBytes = java.util.Base64.getDecoder().decode(certBase64);
+        java.security.cert.CertificateFactory cf = java.security.cert.CertificateFactory.getInstance("X.509");
+        return (java.security.cert.X509Certificate) cf.generateCertificate(
+                new java.io.ByteArrayInputStream(certBytes));
     }
 
     /**
@@ -1227,6 +1418,46 @@ final class Oid4vpTestDcApiMockWalletServer implements AutoCloseable {
         payload = payload + "=".repeat(padding);
         byte[] decoded = Base64.getUrlDecoder().decode(payload);
         return objectMapper.readTree(new String(decoded, StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Build the Keycloak IdP login page URL from the form action URL (response_uri).
+     * The formActionUri looks like: http://HOST/realms/REALM/broker/ALIAS/endpoint?tab_id=...&session_code=...&client_data=...
+     * The login page URL is: http://HOST/realms/REALM/broker/ALIAS/login?tab_id=...&session_code=...&client_data=...
+     */
+    private String buildKeycloakLoginPageUrl(String formActionUri) {
+        try {
+            java.net.URI uri = java.net.URI.create(formActionUri);
+            String path = uri.getPath();
+            // Replace /endpoint with /login in the path
+            int endpointIdx = path.indexOf("/endpoint");
+            if (endpointIdx < 0) return null;
+            String loginPath = path.substring(0, endpointIdx) + "/login";
+            // Build URL with tab_id, session_code, client_data from query params
+            String query = uri.getQuery();
+            if (query == null) return null;
+            // Extract tab_id, session_code, client_data from query
+            Map<String, String> params = new LinkedHashMap<>();
+            for (String param : query.split("&")) {
+                String[] kv = param.split("=", 2);
+                if (kv.length == 2) {
+                    params.put(kv[0], kv[1]);
+                }
+            }
+            StringBuilder url = new StringBuilder();
+            url.append(uri.getScheme()).append("://").append(uri.getAuthority()).append(loginPath);
+            url.append("?tab_id=").append(params.getOrDefault("tab_id", ""));
+            if (params.containsKey("client_data")) {
+                url.append("&client_data=").append(params.get("client_data"));
+            }
+            if (params.containsKey("session_code")) {
+                url.append("&session_code=").append(params.get("session_code"));
+            }
+            return url.toString();
+        } catch (Exception e) {
+            LOG.warn("[MockWallet] Failed to build login page URL from {}: {}", formActionUri, e.getMessage());
+            return null;
+        }
     }
 
     private static String htmlAttr(String value) {

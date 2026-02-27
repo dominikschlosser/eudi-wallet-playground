@@ -222,7 +222,7 @@ class PidBindingE2eIT {
 
         page.waitForSelector("#username, a[href*='german-pid']", new Page.WaitForSelectorOptions().setTimeout(30000));
 
-        assertThat(page.locator("a[href*='broker/german-pid']").count())
+        assertThat(page.locator("a#social-german-pid").count())
                 .as("Expected German PID IdP link on login page")
                 .isGreaterThan(0);
     }
@@ -243,7 +243,7 @@ class PidBindingE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/german-pid']").click();
+        page.locator("a#social-german-pid").click();
 
         // Wait for wallet login page
         waitForOid4vpStartButton();
@@ -490,7 +490,7 @@ class PidBindingE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/german-pid']").click();
+        page.locator("a#social-german-pid").click();
 
         // Wait for wallet login page
         waitForOid4vpStartButton();
@@ -615,7 +615,7 @@ class PidBindingE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/german-pid']").click();
+        page.locator("a#social-german-pid").click();
 
         // Wait for wallet login page
         waitForOid4vpStartButton();
@@ -658,7 +658,7 @@ class PidBindingE2eIT {
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         // Click the IdP link
-        page.locator("a[href*='broker/german-pid']").click();
+        page.locator("a#social-german-pid").click();
 
         // Wait for wallet login page
         waitForOid4vpStartButton();

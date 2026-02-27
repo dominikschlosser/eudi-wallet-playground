@@ -628,13 +628,47 @@
         "trustListJwt": "eyJhbGciOiAibm9uZSJ9.eyJMaXN0QW5kU2NoZW1lSW5mb3JtYXRpb24iOnsiU2NoZW1lT3BlcmF0b3JOYW1lIjpbeyJsYW5nIjoiZW4iLCJ2YWx1ZSI6IktleWNsb2FrIFJlYWxtIChsb2NhbCkifV0sIkxvVEVUeXBlIjoiaHR0cDovL3VyaS5ldHNpLm9yZy8xOTYwMi9Mb1RFVHlwZS9sb2NhbCJ9LCJUcnVzdGVkRW50aXRpZXNMaXN0IjpbeyJUcnVzdGVkRW50aXR5SW5mb3JtYXRpb24iOnsiVEVOYW1lIjpbeyJsYW5nIjoiZW4iLCJ2YWx1ZSI6IndhbGxldC1kZW1vLWtleWNsb2FrLWVzMjU2In1dfSwiVHJ1c3RlZEVudGl0eVNlcnZpY2VzIjpbeyJTZXJ2aWNlSW5mb3JtYXRpb24iOnsiU2VydmljZVR5cGVJZGVudGlmaWVyIjoiaHR0cDovL3VyaS5ldHNpLm9yZy8xOTYwMi9TdmNUeXBlL0lzc3VhbmNlIiwiU2VydmljZURpZ2l0YWxJZGVudGl0eSI6eyJYNTA5Q2VydGlmaWNhdGVzIjpbeyJ2YWwiOiJNSUlCS0RDQjBBSUpBTVd5ZmYySFNmQnFNQW9HQ0NxR1NNNDlCQU1DTUIweEd6QVpCZ05WQkFNTUVsZGhiR3hsZEMxTFpYbGpiRzloYXkxRlV6QWVGdzB5TlRFeE1qQXlNVE0yTURsYUZ3MHpOVEV4TVRneU1UTTJNRGxhTUIweEd6QVpCZ05WQkFNTUVsZGhiR3hsZEMxTFpYbGpiRzloYXkxRlV6QlpNQk1HQnlxR1NNNDlBZ0VHQ0NxR1NNNDlBd0VIQTBJQUJDbmQycDNpRDIxSWx6YkpNVlVVVlR5RTJGRFhRYTNleXhZVENTYWsvaEV0YmRCZGJXbUgwbktrZDlZa2xWcUlVVkQ0VnBrTERiWGpodXVFMzhCOHBRUXdDZ1lJS29aSXpqMEVBd0lEUndBd1JBSWdMZDNCN1Z3Mk9xWkppUnpXYzNTQTUyZkNGWm1ETHFBdUs0cUovT09CTUVFQ0lEWEQzUmx5bnVtTERUUG0rWVF0djZrcHNOb1RQY2NvTUg3aTUwK1R2bWRGIn1dfX19XX0seyJUcnVzdGVkRW50aXR5SW5mb3JtYXRpb24iOnsiVEVOYW1lIjpbeyJsYW5nIjoiZW4iLCJ2YWx1ZSI6IndhbGxldC1kZW1vLWtleWNsb2FrLXJzYSJ9XX0sIlRydXN0ZWRFbnRpdHlTZXJ2aWNlcyI6W3siU2VydmljZUluZm9ybWF0aW9uIjp7IlNlcnZpY2VUeXBlSWRlbnRpZmllciI6Imh0dHA6Ly91cmkuZXRzaS5vcmcvMTk2MDIvU3ZjVHlwZS9Jc3N1YW5jZSIsIlNlcnZpY2VEaWdpdGFsSWRlbnRpdHkiOnsiWDUwOUNlcnRpZmljYXRlcyI6W3sidmFsIjoiTUlJQ3NEQ0NBWmdDQ1FEalFRVFBqYVlXbURBTkJna3Foa2lHOXcwQkFRc0ZBREFhTVJnd0ZnWURWUVFEREE5WFlXeHNaWFF0UzJWNVkyeHZZV3N3SGhjTk1qVXhNVEl3TVRJME9USTJXaGNOTXpVeE1URTRNVEkwT1RJMldqQWFNUmd3RmdZRFZRUUREQTlYWVd4c1pYUXRTMlY1WTJ4dllXc3dnZ0VpTUEwR0NTcUdTSWIzRFFFQkFRVUFBNElCRHdBd2dnRUtBb0lCQVFER3YxNmRjNzdxVDhhajVlc3BvWTIvR3NhOG5ZTnlmdmJ3ZGRhRm9OemJZVmNDMkZwRVBxWFRsc2RCc0hVQW5nc3owYThFYjhIMWcvN0s1cFhXc05rdVlsMk1RT0l6ZFpaOWxsMTZXZHBLOHROY1VxSm05enhtR1FxMjJzSVlpdE9XZy9DQkVVTDBTQXppam5rNWdyOGhOTTFJY2hFeDRJMTNJeE44ZEFZSVAxSlJwOTlhNzhHQW1PMGQwcEN6ci9jTVhIS0xzUXdidnFjNDBZbXhVMUdjOUFVRW1hRUNuVXlWMVJqb0xqa3ZjdzhKZVc2cXhSK1M2dEdhbk1KbkdaQyttNlJkUE1WaUM1Q1Q1QzVjS3R6TTBnVUhZRGd3QVhwSnVPdTRuMjh2Q1dZZ3FEUFBTcmRRY1grY1crYVk3enRCdFBubnBEMFNCdHlaZm9xY0JtM3pBZ01CQUFFd0RRWUpLb1pJaHZjTkFRRUxCUUFEZ2dFQkFJdGxRMS9jek9mN254b0RTb2FVVHR2dCtYTVdQNmRzOEI4SVlsUE14OFgwdnhDSDZpdmRQdUxBUEVIcHE5SEpTYVo2aG1KbHI0NHlualB2YVZmUHFVSDFGZnZ2c1pSYlVCZzdPZVZrOWF5c2FVZnRjdzg1eVJkL0FXZ28zdDBEK2hKN0lLSWV0RTZyazJQSjkwamZkdS9oeHJIbVBTNTljTVRVeXk3U25LSCtOT3pILzhiQ1lMVkpLU0cwM0ZLbHpQZVoyN04xMjB1Ym1UVDg2ZVllUU1GL2ZDZG5KRXBLY0xFY3dRbisyYXN4RTdnbm9ZTGsxN2RIVGhVYStWbFV5dUljVkc4MDJ6TjJYdGVONDB2TnBZWWlndlBrMDRscG1leXg4ckw5QmdJMkpCT0s1a1hiWkppemt5TXptYmdMK3ZBNXNYRTRJNnJEZDVnekVzV1BQQTg9In1dfX19XX0seyJUcnVzdGVkRW50aXR5SW5mb3JtYXRpb24iOnsiVEVOYW1lIjpbeyJsYW5nIjoiZW4iLCJ2YWx1ZSI6Im1vY2staXNzdWVyLWVzMjU2In1dfSwiVHJ1c3RlZEVudGl0eVNlcnZpY2VzIjpbeyJTZXJ2aWNlSW5mb3JtYXRpb24iOnsiU2VydmljZVR5cGVJZGVudGlmaWVyIjoiaHR0cDovL3VyaS5ldHNpLm9yZy8xOTYwMi9TdmNUeXBlL0lzc3VhbmNlIiwiU2VydmljZURpZ2l0YWxJZGVudGl0eSI6eyJYNTA5Q2VydGlmaWNhdGVzIjpbeyJ2YWwiOiJNSUlCZ1RDQ0FTZWdBd0lCQWdJVUJqRWFJaEdjVzVwUFg3dkN0WGJxTXlxbDdld3dDZ1lJS29aSXpqMEVBd0l3RmpFVU1CSUdBMVVFQXd3TGJXOWpheTFwYzNOMVpYSXdIaGNOTWpVeE1qQXhNRGt6T1RJMldoY05NelV4TVRJNU1Ea3pPVEkyV2pBV01SUXdFZ1lEVlFRRERBdHRiMk5yTFdsemMzVmxjakJaTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEEwSUFCQ1NHbzAyZk5KNGlseUlKVnNuUjkwVU12QkVoYkR4cHZJTi9YK1JxNHk5cWpDQTM1SW5id201akYwdG95cG9vdjRhYWdKR2FSa3d6bXZPeTFKTWxhbUtqVXpCUk1CMEdBMVVkRGdRV0JCUjJtT3gyNjUwNzhuQlhzUkNmMDdlOTlSQmxEREFmQmdOVkhTTUVHREFXZ0JSMm1PeDI2NTA3OG5CWHNTQ2YwN2U5OVJCbEREQVBCZ05WSFJNQkFmOEVCVEFEQVFIL01Bb0dDQ3FHU000OUJBTUNBMGdBTUVVQ0lRRGMxRXZiNThWV0FHVE5naWFkc3RRbUNMNllMM0NoQVN0L1ZMaGdBL29nYkFJZ0s1RGpMUXVZMGRWRFRhRGNjRUM5cy91YUt1K3o1dTI4WnRRalZLNjV6RlU9In1dfX19XX1dfQ.",
         "pidCredentialType": "urn:eudi:pid:de:1",
         "loginCredentialType": "urn:arbeitsagentur:user_credential:1",
-        "pidRequestedClaims": "given_name,family_name,birthdate,address,street_address,locality",
+        "pidRequestedClaims": "given_name,family_name,birthdate,address,address/street_address,address/locality",
         "credentialIssuerUrl": "",
         "credentialConfigurationId": "user-binding-credential",
         "credentialIssuanceWalletUrl": "http://localhost:3000/wallet",
         "dcApiRequestMode": "signed",
         "sameDeviceWalletUrl": "http://localhost:3000/oid4vp/auth",
         "clientIdScheme": "plain",
+        "allowedCredentialTypes": "urn:eudi:pid:de:1,urn:arbeitsagentur:user_credential:1"
+      }
+    },
+    {
+      "alias": "german-pid-sandbox",
+      "displayName": "Sign in with German eID (Sandbox)",
+      "providerId": "pid-binding",
+      "enabled": true,
+      "trustEmail": false,
+      "storeToken": false,
+      "addReadTokenRoleOnCreate": false,
+      "authenticateByDefault": false,
+      "linkOnly": false,
+      "firstBrokerLoginFlowAlias": "PID Binding First Broker Login",
+      "config": {
+        "clientId": "not-used",
+        "clientSecret": "not-used",
+        "enforceHaip": "true",
+        "skipTrustListVerification": "true",
+        "trustListUrl": "https://bmi.usercontent.opencode.de/eudi-wallet/test-trust-lists/pid-provider.jwt",
+        "dcApiEnabled": "true",
+        "sameDeviceEnabled": "true",
+        "crossDeviceEnabled": "true",
+        "sameDeviceWalletScheme": "openid4vp://",
+        "clientIdScheme": "x509_san_dns",
+        "x509CertificateFile": "sandbox/sandbox-combined.pem",
+        "verifierInfoFile": "sandbox/sandbox-verifier-info.json",
+        "dcApiRequestMode": "signed",
+        "credentialSetMode": "optional",
+        "pidCredentialType": "urn:eudi:pid:de:1",
+        "loginCredentialType": "urn:arbeitsagentur:user_credential:1",
+        "credentialIssuanceWalletUrl": "native",
+        "credentialConfigurationId": "user-binding-credential",
+        "pidRequestedClaims": "given_name,family_name,birthdate,address,address/street_address,address/locality",
         "allowedCredentialTypes": "urn:eudi:pid:de:1,urn:arbeitsagentur:user_credential:1"
       }
     }
@@ -700,6 +734,66 @@
         "claim": "issuing_country",
         "user.attribute": "issuing_country",
         "optional": "true"
+      }
+    },
+    {
+      "name": "sandbox-pid-family_name-to-lastName",
+      "identityProviderAlias": "german-pid-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "family_name",
+        "user.attribute": "lastName"
+      }
+    },
+    {
+      "name": "sandbox-pid-given_name-to-firstName",
+      "identityProviderAlias": "german-pid-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "given_name",
+        "user.attribute": "firstName"
+      }
+    },
+    {
+      "name": "sandbox-pid-birthdate-to-attribute",
+      "identityProviderAlias": "german-pid-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "birthdate",
+        "user.attribute": "birthdate"
+      }
+    },
+    {
+      "name": "sandbox-pid-nationalities-to-attribute",
+      "identityProviderAlias": "german-pid-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "nationalities",
+        "user.attribute": "nationalities"
+      }
+    },
+    {
+      "name": "sandbox-pid-issuing_country-to-attribute",
+      "identityProviderAlias": "german-pid-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "issuing_country",
+        "user.attribute": "issuing_country"
       }
     }
   ],

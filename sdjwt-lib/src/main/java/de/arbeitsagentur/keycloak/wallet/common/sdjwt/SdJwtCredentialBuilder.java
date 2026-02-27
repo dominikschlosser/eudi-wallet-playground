@@ -95,6 +95,15 @@ public class SdJwtCredentialBuilder {
                         }
                     }
                     value = inner.build();
+                } else if (value instanceof List<?> listValue) {
+                    // Create per-element array disclosures (like real PID credentials)
+                    List<Map<String, Object>> arrayWithDigests = new ArrayList<>();
+                    for (Object element : listValue) {
+                        Disclosure elementDisclosure = new Disclosure(element);
+                        disclosures.add(elementDisclosure);
+                        arrayWithDigests.add(elementDisclosure.toArrayElement());
+                    }
+                    value = arrayWithDigests;
                 }
                 Disclosure disclosure = builder.putSDClaim(entry.getKey(), value);
                 if (disclosure != null) {

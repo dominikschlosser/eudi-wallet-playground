@@ -1184,6 +1184,37 @@
         "clientIdScheme": "plain",
         "credentialSetMode": "optional"
       }
+    },
+    {
+      "alias": "oid4vp-sandbox",
+      "displayName": "Sign in with Wallet (Sandbox)",
+      "providerId": "oid4vp",
+      "enabled": true,
+      "trustEmail": false,
+      "storeToken": false,
+      "addReadTokenRoleOnCreate": false,
+      "authenticateByDefault": false,
+      "linkOnly": false,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "clientId": "not-used",
+        "clientSecret": "not-used",
+        "enforceHaip": "true",
+        "skipTrustListVerification": "true",
+        "trustListUrl": "https://bmi.usercontent.opencode.de/eudi-wallet/test-trust-lists/pid-provider.jwt",
+        "dcApiEnabled": "true",
+        "sameDeviceEnabled": "true",
+        "crossDeviceEnabled": "true",
+        "sameDeviceWalletScheme": "openid4vp://",
+        "clientIdScheme": "x509_san_dns",
+        "x509CertificateFile": "sandbox/sandbox-combined.pem",
+        "verifierInfoFile": "sandbox/sandbox-verifier-info.json",
+        "dcApiRequestMode": "signed",
+        "credentialSetMode": "optional",
+        "userMappingClaim": "family_name",
+        "userMappingClaimMdoc": "family_name",
+        "allowedCredentialTypes": "urn:eudi:pid:de:1,eu.europa.ec.eudi.pid.1"
+      }
     }
   ],
   "identityProviderMappers": [
@@ -1280,7 +1311,7 @@
         "syncMode": "INHERIT",
         "credential.format": "dc+sd-jwt",
         "credential.type": "urn:eudi:pid:1",
-        "claim": "street_address",
+        "claim": "address/street_address",
         "user.attribute": "address.street_address",
         "optional": "true"
       }
@@ -1293,7 +1324,7 @@
         "syncMode": "INHERIT",
         "credential.format": "dc+sd-jwt",
         "credential.type": "urn:eudi:pid:1",
-        "claim": "locality",
+        "claim": "address/locality",
         "user.attribute": "address.locality",
         "optional": "true"
       }
@@ -1306,7 +1337,7 @@
         "syncMode": "INHERIT",
         "credential.format": "dc+sd-jwt",
         "credential.type": "urn:eudi:pid:1",
-        "claim": "nationalities",
+        "claim": "nationalities/null",
         "user.attribute": "nationalities",
         "optional": "true"
       }
@@ -1322,6 +1353,162 @@
         "claim": "nationality",
         "user.attribute": "nationality",
         "optional": "true"
+      }
+    },
+    {
+      "name": "sandbox-sd-jwt-family_name-to-lastName",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "family_name",
+        "user.attribute": "lastName"
+      }
+    },
+    {
+      "name": "sandbox-sd-jwt-given_name-to-firstName",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "given_name",
+        "user.attribute": "firstName"
+      }
+    },
+    {
+      "name": "sandbox-sd-jwt-birthdate-to-attribute",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "birthdate",
+        "user.attribute": "birthdate"
+      }
+    },
+    {
+      "name": "sandbox-sd-jwt-nationalities",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "nationalities/null",
+        "user.attribute": "nationalities"
+      }
+    },
+    {
+      "name": "sandbox-sd-jwt-address",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "address",
+        "user.attribute": "address"
+      }
+    },
+    {
+      "name": "sandbox-sd-jwt-street_address",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "address/street_address",
+        "user.attribute": "address.street_address"
+      }
+    },
+    {
+      "name": "sandbox-sd-jwt-locality",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "dc+sd-jwt",
+        "credential.type": "urn:eudi:pid:de:1",
+        "claim": "address/locality",
+        "user.attribute": "address.locality"
+      }
+    },
+    {
+      "name": "sandbox-mdoc-family_name-to-lastName",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "mso_mdoc",
+        "credential.type": "eu.europa.ec.eudi.pid.1",
+        "claim": "family_name",
+        "user.attribute": "lastName"
+      }
+    },
+    {
+      "name": "sandbox-mdoc-given_name-to-firstName",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "mso_mdoc",
+        "credential.type": "eu.europa.ec.eudi.pid.1",
+        "claim": "given_name",
+        "user.attribute": "firstName"
+      }
+    },
+    {
+      "name": "sandbox-mdoc-birth_date-to-attribute",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "mso_mdoc",
+        "credential.type": "eu.europa.ec.eudi.pid.1",
+        "claim": "birth_date",
+        "user.attribute": "birthdate"
+      }
+    },
+    {
+      "name": "sandbox-mdoc-nationality",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "mso_mdoc",
+        "credential.type": "eu.europa.ec.eudi.pid.1",
+        "claim": "nationality",
+        "user.attribute": "nationality"
+      }
+    },
+    {
+      "name": "sandbox-mdoc-resident_street",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "mso_mdoc",
+        "credential.type": "eu.europa.ec.eudi.pid.1",
+        "claim": "resident_street",
+        "user.attribute": "resident_street"
+      }
+    },
+    {
+      "name": "sandbox-mdoc-resident_city",
+      "identityProviderAlias": "oid4vp-sandbox",
+      "identityProviderMapper": "oid4vp-user-attribute-mapper",
+      "config": {
+        "syncMode": "INHERIT",
+        "credential.format": "mso_mdoc",
+        "credential.type": "eu.europa.ec.eudi.pid.1",
+        "claim": "resident_city",
+        "user.attribute": "resident_city"
       }
     }
   ],

@@ -66,6 +66,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
     static final String SESSION_CLIENT_ID = "oid4vp_client_id";
     static final String SESSION_REQUEST_OBJECT = "oid4vp_request_object";
     static final String SESSION_EFFECTIVE_CLIENT_ID = "oid4vp_effective_client_id";
+    static final String SESSION_MDOC_GENERATED_NONCE = "oid4vp_mdoc_generated_nonce";
 
     protected final ObjectMapper objectMapper;
     protected final Oid4vpVerifierService verifierService;
@@ -91,6 +92,10 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         this.dcApiRequestObjectService = new Oid4vpDcApiRequestObjectService(session, objectMapper);
         this.redirectFlowService = new Oid4vpRedirectFlowService(session, objectMapper);
         this.qrCodeService = new Oid4vpQrCodeService();
+    }
+
+    Oid4vpDcApiRequestObjectService getDcApiRequestObjectService() {
+        return dcApiRequestObjectService;
     }
 
     @Override
@@ -142,8 +147,8 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
 
         LOG.infof("[OID4VP-IDP] Generated state: %s, nonce: %s, clientId: %s", state, nonce, clientId);
 
-        // Store in session
-        authSession.setClientNote("state", state);
+        // Store OID4VP state in auth notes only — do NOT overwrite clientNote("state")
+        // which holds the OIDC state from the client app (needed for redirect verification)
         authSession.setAuthNote(SESSION_STATE, state);
         authSession.setAuthNote(SESSION_NONCE, nonce);
         authSession.setAuthNote(SESSION_CLIENT_ID, clientId);
@@ -170,7 +175,8 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         return new Oid4vpSessionState(state, nonce, clientId, formActionUrl, redirectUri);
     }
 
-    private String buildFormActionUrl(String redirectUri, String state, String tabId, String sessionCode, String clientData) {
+    private String buildFormActionUrl(String redirectUri, String state, String tabId, String sessionCode,
+                                      String clientData) {
         UriBuilder builder = UriBuilder.fromUri(stripQueryParams(redirectUri));
         builder.queryParam("state", state);
         if (tabId != null && !tabId.isEmpty()) {
@@ -223,35 +229,119 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
             return RedirectFlowData.EMPTY;
         }
 
-        try {
-            String effectiveClientId = computeEffectiveClientId(sessionState.clientId());
-            authSession.setAuthNote(SESSION_EFFECTIVE_CLIENT_ID, effectiveClientId);
+        String effectiveClientId = computeEffectiveClientId(sessionState.clientId());
+        authSession.setAuthNote(SESSION_EFFECTIVE_CLIENT_ID, effectiveClientId);
 
-            String dcApiEncryptionKey = (dcApiEnabled && requestObject != null)
-                    ? requestObject.responseEncryptionPrivateJwk() : null;
+        String dcApiEncryptionKey = (dcApiEnabled && requestObject != null)
+                ? requestObject.responseEncryptionPrivateJwk() : null;
 
-            Oid4vpRedirectFlowService.SignedRequestObject signedRequest = redirectFlowService.buildSignedRequestObject(
-                    legacyConfig, effectiveClientId, getConfig().getClientIdScheme(),
-                    sessionState.formActionUrl(), sessionState.state(), sessionState.nonce(),
-                    getConfig().getX509CertificatePem(), getConfig().getX509SigningKeyJwk(), dcApiEncryptionKey);
+        String rootSessionId = authSession.getParentSession() != null
+                ? authSession.getParentSession().getId() : null;
+        String clientIdForSession = authSession.getClient() != null
+                ? authSession.getClient().getClientId() : null;
 
-            storeRedirectFlowSessionNotes(authSession, sessionState.formActionUrl(), signedRequest, dcApiEnabled);
+        String sameDeviceWalletUrl = null;
+        String crossDeviceWalletUrl = null;
+        String qrCodeBase64 = null;
 
-            String requestObjectId = storeRequestObject(authSession, signedRequest, sessionState,
-                    effectiveClientId, legacyConfig);
+        // Track whether indexes have been stored in this transaction.
+        // Infinispan transactions don't allow two put() calls for the same key,
+        // so only the first store() call creates state and kid indexes.
+        boolean indexesStored = false;
 
-            URI requestUri = request.getUriInfo().getBaseUriBuilder()
-                    .path("realms").path(request.getRealm().getName())
-                    .path("broker").path(getConfig().getAlias())
-                    .path("endpoint").path("request-object").path(requestObjectId)
-                    .build();
+        if (sameDeviceEnabled) {
+            try {
+                // Same-device: response_uri = clean base endpoint URL (no session params).
+                // The wallet uses this exact value for the mDoc SessionTranscript, so it must
+                // NOT include session-specific query params (state, tab_id, session_code, client_data)
+                // that the verifier would strip. State is sent as a form param instead.
+                String sameDeviceResponseUri = stripQueryParams(sessionState.redirectUri());
+                URI sameDeviceRequestUri = buildSignStoreRequestObject(request, authSession, legacyConfig,
+                        sessionState, effectiveClientId, sameDeviceResponseUri, dcApiEncryptionKey,
+                        dcApiEnabled, rootSessionId, clientIdForSession, indexesStored);
+                indexesStored = true;
 
-            return buildWalletUrls(effectiveClientId, requestUri, sameDeviceEnabled, crossDeviceEnabled);
-
-        } catch (Exception e) {
-            LOG.warnf(e, "[OID4VP-IDP] Failed to build redirect flow request object: %s", e.getMessage());
-            return RedirectFlowData.EMPTY;
+                sameDeviceWalletUrl = redirectFlowService.buildWalletAuthorizationUrl(
+                        getConfig().getSameDeviceWalletUrl(), getConfig().getSameDeviceWalletScheme(),
+                        effectiveClientId, "plain", sameDeviceRequestUri).toString();
+                LOG.infof("[OID4VP-IDP] Same-device wallet URL: %s", sameDeviceWalletUrl);
+            } catch (Exception e) {
+                LOG.errorf(e, "[OID4VP-IDP] Failed to build same-device request object: %s", e.getMessage());
+            }
         }
+
+        if (crossDeviceEnabled) {
+            try {
+                // Cross-device: response_uri = clean base endpoint URL + ?flow=cross_device.
+                // Same rationale as same-device: no session params to avoid SessionTranscript mismatch.
+                String crossDeviceResponseUri = stripQueryParams(sessionState.redirectUri())
+                        + "?flow=cross_device";
+                URI crossDeviceRequestUri = buildSignStoreRequestObject(request, authSession, legacyConfig,
+                        sessionState, effectiveClientId, crossDeviceResponseUri, dcApiEncryptionKey,
+                        dcApiEnabled, rootSessionId, clientIdForSession, indexesStored);
+
+                crossDeviceWalletUrl = redirectFlowService.buildWalletAuthorizationUrl(
+                        null, "openid4vp://", effectiveClientId, "plain", crossDeviceRequestUri).toString();
+                qrCodeBase64 = qrCodeService.generateQrCode(crossDeviceWalletUrl, 250, 250);
+                LOG.infof("[OID4VP-IDP] Cross-device wallet URL: %s", crossDeviceWalletUrl);
+            } catch (Exception e) {
+                LOG.errorf(e, "[OID4VP-IDP] Failed to build cross-device request object: %s", e.getMessage());
+            }
+        }
+
+        return new RedirectFlowData(sameDeviceWalletUrl, crossDeviceWalletUrl, qrCodeBase64);
+    }
+
+    /**
+     * Builds a signed request object, stores it, and returns the request-object URI.
+     * When multiple request objects share the same state/kid (same-device + cross-device),
+     * only the first call should create indexes (skipIndexes=false).
+     * Subsequent calls must use skipIndexes=true because Infinispan transactions
+     * don't allow two put() calls for the same key.
+     */
+    private URI buildSignStoreRequestObject(AuthenticationRequest request,
+                                             AuthenticationSessionModel authSession,
+                                             Oid4vpConfig legacyConfig,
+                                             Oid4vpSessionState sessionState,
+                                             String effectiveClientId,
+                                             String responseUri,
+                                             String dcApiEncryptionKey,
+                                             boolean dcApiEnabled,
+                                             String rootSessionId,
+                                             String clientIdForSession,
+                                             boolean skipIndexes) {
+        Oid4vpRedirectFlowService.SignedRequestObject signedRequest = redirectFlowService.buildSignedRequestObject(
+                legacyConfig, effectiveClientId, getConfig().getClientIdScheme(),
+                responseUri, sessionState.state(), sessionState.nonce(),
+                getConfig().getX509CertificatePem(), getConfig().getX509SigningKeyJwk(), dcApiEncryptionKey);
+
+        // Store response_uri and encryption key in auth session for VP token verification.
+        // Note: if both same-device and cross-device are enabled, the second call overwrites
+        // these notes. This is OK because SESSION_RESPONSE_URI is corrected at POST time
+        // from the actual request URL.
+        authSession.setAuthNote(SESSION_REDIRECT_FLOW_RESPONSE_URI, responseUri);
+        if (!dcApiEnabled) {
+            authSession.setAuthNote(SESSION_RESPONSE_URI, responseUri);
+            if (signedRequest.encryptionKeyJson() != null) {
+                authSession.setAuthNote(SESSION_ENCRYPTION_KEY, signedRequest.encryptionKeyJson());
+            }
+        }
+
+        String encryptionPublicKeyJson = extractEncryptionPublicKey(signedRequest.encryptionKeyJson());
+
+        Oid4vpRequestObjectStore.RebuildParams rebuildParams = new Oid4vpRequestObjectStore.RebuildParams(
+                effectiveClientId, getConfig().getClientIdScheme(), responseUri,
+                legacyConfig != null ? legacyConfig.dcqlQuery() : null,
+                getConfig().getX509CertificatePem(), getConfig().getX509SigningKeyJwk(), encryptionPublicKeyJson);
+
+        String requestObjectId = REQUEST_OBJECT_STORE.store(session, signedRequest.jwt(), signedRequest.encryptionKeyJson(),
+                sessionState.state(), sessionState.nonce(), rootSessionId, clientIdForSession, rebuildParams, skipIndexes);
+
+        return request.getUriInfo().getBaseUriBuilder()
+                .path("realms").path(request.getRealm().getName())
+                .path("broker").path(getConfig().getAlias())
+                .path("endpoint").path("request-object").path(requestObjectId)
+                .build();
     }
 
     private String computeEffectiveClientId(String clientId) {
@@ -263,39 +353,6 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
             return redirectFlowService.computeX509HashClientId(x509Pem);
         }
         return clientId;
-    }
-
-    private void storeRedirectFlowSessionNotes(AuthenticationSessionModel authSession, String redirectResponseUri,
-                                                Oid4vpRedirectFlowService.SignedRequestObject signedRequest,
-                                                boolean dcApiEnabled) {
-        authSession.setAuthNote(SESSION_REDIRECT_FLOW_RESPONSE_URI, redirectResponseUri);
-        if (!dcApiEnabled) {
-            authSession.setAuthNote(SESSION_RESPONSE_URI, redirectResponseUri);
-        }
-        if (signedRequest.encryptionKeyJson() != null && !dcApiEnabled) {
-            authSession.setAuthNote(SESSION_ENCRYPTION_KEY, signedRequest.encryptionKeyJson());
-        }
-    }
-
-    private String storeRequestObject(AuthenticationSessionModel authSession,
-                                       Oid4vpRedirectFlowService.SignedRequestObject signedRequest,
-                                       Oid4vpSessionState sessionState,
-                                       String effectiveClientId,
-                                       Oid4vpConfig legacyConfig) {
-        String rootSessionId = authSession.getParentSession() != null
-                ? authSession.getParentSession().getId() : null;
-        String clientIdForSession = authSession.getClient() != null
-                ? authSession.getClient().getClientId() : null;
-
-        String encryptionPublicKeyJson = extractEncryptionPublicKey(signedRequest.encryptionKeyJson());
-
-        Oid4vpRequestObjectStore.RebuildParams rebuildParams = new Oid4vpRequestObjectStore.RebuildParams(
-                effectiveClientId, getConfig().getClientIdScheme(), sessionState.formActionUrl(),
-                legacyConfig != null ? legacyConfig.dcqlQuery() : null,
-                getConfig().getX509CertificatePem(), getConfig().getX509SigningKeyJwk(), encryptionPublicKeyJson);
-
-        return REQUEST_OBJECT_STORE.store(session, signedRequest.jwt(), signedRequest.encryptionKeyJson(),
-                sessionState.state(), sessionState.nonce(), rootSessionId, clientIdForSession, rebuildParams);
     }
 
     private String extractEncryptionPublicKey(String encryptionKeyJson) {
@@ -311,29 +368,13 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         }
     }
 
-    private RedirectFlowData buildWalletUrls(String effectiveClientId, URI requestUri,
-                                              boolean sameDeviceEnabled, boolean crossDeviceEnabled) {
-        String sameDeviceWalletUrl = null;
-        String crossDeviceWalletUrl = null;
-        String qrCodeBase64 = null;
-
-        if (sameDeviceEnabled) {
-            URI sameDeviceUri = redirectFlowService.buildWalletAuthorizationUrl(
-                    getConfig().getSameDeviceWalletUrl(), getConfig().getSameDeviceWalletScheme(),
-                    effectiveClientId, "plain", requestUri);
-            sameDeviceWalletUrl = sameDeviceUri.toString();
-            LOG.infof("[OID4VP-IDP] Same-device wallet URL: %s", sameDeviceWalletUrl);
+    private String buildCrossDeviceStatusUrl() {
+        String baseUri = session.getContext().getUri().getBaseUri().toString();
+        if (!baseUri.endsWith("/")) {
+            baseUri += "/";
         }
-
-        if (crossDeviceEnabled) {
-            URI crossDeviceUri = redirectFlowService.buildWalletAuthorizationUrl(
-                    null, "openid4vp://", effectiveClientId, "plain", requestUri);
-            crossDeviceWalletUrl = crossDeviceUri.toString();
-            qrCodeBase64 = qrCodeService.generateQrCode(crossDeviceWalletUrl, 250, 250);
-            LOG.infof("[OID4VP-IDP] Cross-device wallet URL: %s", crossDeviceWalletUrl);
-        }
-
-        return new RedirectFlowData(sameDeviceWalletUrl, crossDeviceWalletUrl, qrCodeBase64);
+        return baseUri + "realms/" + session.getContext().getRealm().getName()
+                + "/broker/" + getConfig().getAlias() + "/endpoint/cross-device/status";
     }
 
     private Response buildLoginFormResponse(AuthenticationSessionModel authSession,
@@ -359,6 +400,7 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
                 .setAttribute("sameDeviceWalletUrl", redirectFlowData.sameDeviceWalletUrl())
                 .setAttribute("crossDeviceWalletUrl", redirectFlowData.crossDeviceWalletUrl())
                 .setAttribute("qrCodeBase64", redirectFlowData.qrCodeBase64())
+                .setAttribute("crossDeviceStatusUrl", (crossDeviceEnabled || sameDeviceEnabled) ? buildCrossDeviceStatusUrl() : null)
                 .createForm("login-oid4vp-idp.ftl");
     }
 
@@ -416,13 +458,19 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         }
 
         // Decrypt response if encrypted
+        String mdocGeneratedNonce = null;
         if ((vpToken == null || vpToken.isBlank()) && encryptedResponse != null && !encryptedResponse.isBlank()) {
             LOG.infof("[OID4VP-IDP] Decrypting encrypted response...");
             String encryptionKey = authSession.getAuthNote(SESSION_ENCRYPTION_KEY);
             LOG.infof("[OID4VP-IDP] Encryption key present: %b", encryptionKey != null && !encryptionKey.isBlank());
             try {
-                var node = dcApiRequestObjectService.decryptEncryptedResponse(encryptedResponse, encryptionKey);
+                var decrypted = dcApiRequestObjectService.decryptEncryptedResponse(encryptedResponse, encryptionKey);
+                var node = decrypted.payload();
+                mdocGeneratedNonce = decrypted.mdocGeneratedNonce();
                 LOG.infof("[OID4VP-IDP] Decrypted response: %s", node != null ? node.toString().substring(0, Math.min(200, node.toString().length())) : "null");
+                if (mdocGeneratedNonce != null) {
+                    LOG.infof("[OID4VP-IDP] Extracted mdoc_generated_nonce from JWE apu: '%s'", mdocGeneratedNonce);
+                }
                 if (node.hasNonNull("error")) {
                     String err = node.get("error").asText("");
                     String desc = node.hasNonNull("error_description") ? node.get("error_description").asText("") : "";
@@ -442,6 +490,15 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
             } catch (Exception e) {
                 LOG.errorf(e, "[OID4VP-IDP] Failed to decrypt response: %s", e.getMessage());
                 throw new IdentityBrokerException("Failed to decrypt response: " + e.getMessage(), e);
+            }
+        }
+
+        // If mdocGeneratedNonce was pre-extracted (JWE decrypted in endpoint), pick it up from auth note
+        if (mdocGeneratedNonce == null) {
+            mdocGeneratedNonce = authSession.getAuthNote(SESSION_MDOC_GENERATED_NONCE);
+            if (mdocGeneratedNonce != null) {
+                LOG.infof("[OID4VP-IDP] Using pre-extracted mdoc_generated_nonce from auth session: '%s'", mdocGeneratedNonce);
+                authSession.removeAuthNote(SESSION_MDOC_GENERATED_NONCE);
             }
         }
 
@@ -485,6 +542,9 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
         // Verify the VP token using VpTokenProcessor (handles format detection and retry)
         boolean trustX5c = getConfig().getEffectiveTrustX5cFromCredential();
         String redirectFlowResponseUri = authSession.getAuthNote(SESSION_REDIRECT_FLOW_RESPONSE_URI);
+        if (getConfig().isSkipTrustListVerification()) {
+            LOG.warnf("[OID4VP-IDP] Trust list verification SKIPPED (skipTrustListVerification=true), auto-trusting x5c");
+        }
         LOG.infof("[OID4VP-IDP] Verifying VP token with trustListId: %s, trustX5c: %b",
                 getConfig().getTrustListId(), trustX5c);
 
@@ -496,10 +556,19 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
                 responseUri,
                 jwkThumbprint,
                 trustX5c,
-                redirectFlowResponseUri
+                redirectFlowResponseUri,
+                mdocGeneratedNonce
         );
         LOG.infof("[OID4VP-IDP] VP token verified, format: %s, credentials: %d",
                 result.format(), result.credentials().size());
+
+        // Log received credentials for debugging
+        for (var entry : result.credentials().entrySet()) {
+            var cred = entry.getValue();
+            LOG.infof("[OID4VP-IDP] Credential [%s]: type=%s, issuer=%s, format=%s, claims=%s",
+                    entry.getKey(), cred.credentialType(), cred.issuer(), cred.presentationType(),
+                    cred.claims());
+        }
 
         // Extract identity info from verified credentials
         Map<String, Object> claims;
@@ -852,7 +921,9 @@ public class Oid4vpIdentityProvider extends AbstractIdentityProvider<Oid4vpIdent
                 config.getEffectiveDcApiRequestMode(), // Use HAIP-enforced value
                 config.getDcApiClientId(),
                 config.getDcApiSigningKeyId(),
-                config.getVerifierInfo()
+                config.getVerifierInfo(),
+                config.getX509SigningKeyJwk(),
+                config.getX509CertificatePem()
         );
     }
 

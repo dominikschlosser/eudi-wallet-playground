@@ -16,7 +16,7 @@
       "defaultValue" : "Erika",
       "required" : true
     }, {
-      "name" : "birth_date",
+      "name" : "birthdate",
       "label" : "Date of Birth",
       "defaultValue" : "1984-01-26",
       "required" : true
@@ -103,7 +103,7 @@
       "defaultValue" : "Erika",
       "required" : true
     }, {
-      "name" : "birth_date",
+      "name" : "birthdate",
       "label" : "Date of Birth",
       "defaultValue" : "1984-01-26",
       "required" : true
@@ -117,6 +117,11 @@
       "label" : "Nationalities",
       "defaultValue" : "[\"DE\"]",
       "required" : true
+    }, {
+      "name" : "address",
+      "label" : "Address",
+      "defaultValue" : "{\"street_address\":\"Hauptstrasse 1\",\"locality\":\"Berlin\",\"postal_code\":\"10115\",\"country\":\"DE\"}",
+      "required" : false
     }, {
       "name" : "issuing_country",
       "label" : "Issuing Country",
@@ -165,9 +170,24 @@
       "defaultValue" : "DE",
       "required" : true
     }, {
-      "name" : "address",
-      "label" : "Address",
-      "defaultValue" : "{\"street_address\":\"Hauptstrasse 1\",\"locality\":\"Berlin\",\"postal_code\":\"10115\",\"country\":\"DE\"}",
+      "name" : "resident_street",
+      "label" : "Street",
+      "defaultValue" : "Hauptstrasse 1",
+      "required" : false
+    }, {
+      "name" : "resident_city",
+      "label" : "City",
+      "defaultValue" : "Berlin",
+      "required" : false
+    }, {
+      "name" : "resident_postal_code",
+      "label" : "Postal Code",
+      "defaultValue" : "10115",
+      "required" : false
+    }, {
+      "name" : "resident_country",
+      "label" : "Country",
+      "defaultValue" : "DE",
       "required" : false
     }, {
       "name" : "administrative_number",

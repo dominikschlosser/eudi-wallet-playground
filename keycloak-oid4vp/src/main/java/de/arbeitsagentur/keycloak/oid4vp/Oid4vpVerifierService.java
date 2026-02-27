@@ -63,6 +63,21 @@ public final class Oid4vpVerifierService {
                                 String expectedResponseUri,
                                 byte[] expectedJwkThumbprint,
                                 boolean trustX5cFromCredential) throws Exception {
+        return verify(vpToken, trustListId, expectedClientId, expectedNonce, expectedResponseUri,
+                expectedJwkThumbprint, trustX5cFromCredential, null);
+    }
+
+    /**
+     * Verify a VP token with optional mdoc_generated_nonce for ISO 18013-7 SessionTranscript.
+     */
+    public VerifiedPresentation verify(String vpToken,
+                                String trustListId,
+                                String expectedClientId,
+                                String expectedNonce,
+                                String expectedResponseUri,
+                                byte[] expectedJwkThumbprint,
+                                boolean trustX5cFromCredential,
+                                String mdocGeneratedNonce) throws Exception {
         String extracted = extractFirstVpToken(vpToken);
         if (extracted == null || extracted.isBlank()) {
             throw new IllegalArgumentException("Missing vp_token");
@@ -72,7 +87,7 @@ public final class Oid4vpVerifierService {
 
         return verifyCredentialWithAudienceFallback(
                 normalized, trustListId, expectedClientId, expectedDcApiAudience,
-                expectedNonce, expectedResponseUri, expectedJwkThumbprint);
+                expectedNonce, expectedResponseUri, expectedJwkThumbprint, mdocGeneratedNonce);
     }
 
     /**
@@ -87,13 +102,26 @@ public final class Oid4vpVerifierService {
             String expectedNonce,
             String expectedResponseUri,
             byte[] expectedJwkThumbprint) throws Exception {
+        return verifyCredentialWithAudienceFallback(credential, trustListId, expectedClientId,
+                expectedDcApiAudience, expectedNonce, expectedResponseUri, expectedJwkThumbprint, null);
+    }
+
+    private VerifiedPresentation verifyCredentialWithAudienceFallback(
+            String credential,
+            String trustListId,
+            String expectedClientId,
+            String expectedDcApiAudience,
+            String expectedNonce,
+            String expectedResponseUri,
+            byte[] expectedJwkThumbprint,
+            String mdocGeneratedNonce) throws Exception {
 
         if (sdJwtVerifier.isSdJwt(credential)) {
             return verifySdJwtWithFallback(credential, trustListId, expectedClientId, expectedDcApiAudience, expectedNonce);
         }
         if (mdocVerifier.isMdoc(credential)) {
             return verifyMdocWithFallback(credential, trustListId, expectedClientId, expectedDcApiAudience,
-                    expectedNonce, expectedResponseUri, expectedJwkThumbprint);
+                    expectedNonce, expectedResponseUri, expectedJwkThumbprint, mdocGeneratedNonce);
         }
         throw new IllegalArgumentException("Unsupported credential format");
     }
@@ -124,14 +152,15 @@ public final class Oid4vpVerifierService {
     private VerifiedPresentation verifyMdocWithFallback(String credential, String trustListId,
                                                          String primaryAudience, String fallbackAudience,
                                                          String expectedNonce, String expectedResponseUri,
-                                                         byte[] expectedJwkThumbprint) {
-        LOG.debugf("Detected mDoc format: primaryAudience=%s, expectedNonce=%s, expectedResponseUri=%s, fallbackAudience=%s",
-                primaryAudience, expectedNonce, expectedResponseUri, fallbackAudience);
+                                                         byte[] expectedJwkThumbprint,
+                                                         String mdocGeneratedNonce) {
+        LOG.debugf("Detected mDoc format: primaryAudience=%s, expectedNonce=%s, expectedResponseUri=%s, fallbackAudience=%s, mdocGeneratedNonce=%s",
+                primaryAudience, expectedNonce, expectedResponseUri, fallbackAudience, mdocGeneratedNonce != null ? "present" : "null");
 
         RuntimeException firstError = null;
         try {
             Map<String, Object> claims = mdocVerifier.verify(credential, trustListId, primaryAudience,
-                    expectedNonce, expectedResponseUri, expectedJwkThumbprint, null);
+                    expectedNonce, expectedResponseUri, expectedJwkThumbprint, mdocGeneratedNonce, null);
             return new VerifiedPresentation(PresentationType.MDOC, claims);
         } catch (RuntimeException e) {
             LOG.debugf("First mDoc verification attempt failed: %s", e.getMessage());
@@ -142,7 +171,7 @@ public final class Oid4vpVerifierService {
             LOG.debugf("Retrying mDoc verification with fallback audience: %s", fallbackAudience);
             try {
                 Map<String, Object> claims = mdocVerifier.verify(credential, trustListId, fallbackAudience,
-                        expectedNonce, expectedResponseUri, expectedJwkThumbprint, null);
+                        expectedNonce, expectedResponseUri, expectedJwkThumbprint, mdocGeneratedNonce, null);
                 return new VerifiedPresentation(PresentationType.MDOC, claims);
             } catch (RuntimeException e) {
                 LOG.debugf("Second mDoc verification attempt also failed: %s", e.getMessage());
@@ -172,6 +201,18 @@ public final class Oid4vpVerifierService {
                                                                      String expectedResponseUri,
                                                                      byte[] expectedJwkThumbprint,
                                                                      boolean trustX5cFromCredential) throws Exception {
+        return verifyMultiCredential(vpToken, trustListId, expectedClientId, expectedNonce, expectedResponseUri,
+                expectedJwkThumbprint, trustX5cFromCredential, null);
+    }
+
+    public Map<String, VerifiedPresentation> verifyMultiCredential(String vpToken,
+                                                                     String trustListId,
+                                                                     String expectedClientId,
+                                                                     String expectedNonce,
+                                                                     String expectedResponseUri,
+                                                                     byte[] expectedJwkThumbprint,
+                                                                     boolean trustX5cFromCredential,
+                                                                     String mdocGeneratedNonce) throws Exception {
         LOG.debugf("verifyMultiCredential called: trustX5cFromCredential=%b, trustListId=%s",
                 trustX5cFromCredential, trustListId);
         Map<String, VerifiedPresentation> results = new LinkedHashMap<>();
@@ -183,7 +224,7 @@ public final class Oid4vpVerifierService {
         String trimmed = vpToken.trim();
         if (!trimmed.startsWith("{")) {
             // Not a JSON object, treat as single credential
-            VerifiedPresentation single = verify(vpToken, trustListId, expectedClientId, expectedNonce, expectedResponseUri, expectedJwkThumbprint, trustX5cFromCredential);
+            VerifiedPresentation single = verify(vpToken, trustListId, expectedClientId, expectedNonce, expectedResponseUri, expectedJwkThumbprint, trustX5cFromCredential, mdocGeneratedNonce);
             results.put("single", single);
             return results;
         }
@@ -199,7 +240,8 @@ public final class Oid4vpVerifierService {
 
             for (var entry : node.properties()) {
                 VerifiedPresentation verified = verifyCredentialEntry(entry, trustListId, expectedClientId,
-                        expectedDcApiAudience, expectedNonce, expectedResponseUri, expectedJwkThumbprint, trustX5cFromCredential);
+                        expectedDcApiAudience, expectedNonce, expectedResponseUri, expectedJwkThumbprint, trustX5cFromCredential,
+                        mdocGeneratedNonce);
                 if (verified != null) {
                     results.put(entry.getKey(), verified);
                 }
@@ -224,7 +266,8 @@ public final class Oid4vpVerifierService {
                                                         String expectedNonce,
                                                         String expectedResponseUri,
                                                         byte[] expectedJwkThumbprint,
-                                                        boolean trustX5cFromCredential) throws Exception {
+                                                        boolean trustX5cFromCredential,
+                                                        String mdocGeneratedNonce) throws Exception {
         String credentialId = entry.getKey();
         JsonNode credentialArray = entry.getValue();
 
@@ -243,7 +286,8 @@ public final class Oid4vpVerifierService {
 
         try {
             VerifiedPresentation verified = verifySingleCredential(credential, trustListId, expectedClientId,
-                    expectedDcApiAudience, expectedNonce, expectedResponseUri, expectedJwkThumbprint, trustX5cFromCredential);
+                    expectedDcApiAudience, expectedNonce, expectedResponseUri, expectedJwkThumbprint, trustX5cFromCredential,
+                    mdocGeneratedNonce);
             LOG.infof("Credential '%s' verified successfully, type: %s", credentialId, verified.type());
             return verified;
         } catch (Exception e) {
@@ -262,7 +306,8 @@ public final class Oid4vpVerifierService {
                                                          String expectedNonce,
                                                          String expectedResponseUri,
                                                          byte[] expectedJwkThumbprint,
-                                                         boolean trustX5cFromCredential) throws Exception {
+                                                         boolean trustX5cFromCredential,
+                                                         String mdocGeneratedNonce) throws Exception {
         String normalized = credential.trim();
 
         if (trustX5cFromCredential) {
@@ -272,7 +317,7 @@ public final class Oid4vpVerifierService {
 
         return verifyCredentialWithAudienceFallback(
                 normalized, trustListId, expectedClientId, expectedDcApiAudience,
-                expectedNonce, expectedResponseUri, expectedJwkThumbprint);
+                expectedNonce, expectedResponseUri, expectedJwkThumbprint, mdocGeneratedNonce);
     }
 
     /**

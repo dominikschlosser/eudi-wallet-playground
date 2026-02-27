@@ -15,6 +15,7 @@
  */
 package de.arbeitsagentur.keycloak.oid4vp;
 
+import org.jboss.logging.Logger;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.SingleUseObjectProvider;
 
@@ -30,9 +31,11 @@ import java.util.UUID;
  */
 public class Oid4vpRequestObjectStore {
 
+    private static final Logger LOG = Logger.getLogger(Oid4vpRequestObjectStore.class);
     private static final Duration DEFAULT_TTL = Duration.ofMinutes(10);
     private static final String KEY_PREFIX = "oid4vp_request:";
     private static final String STATE_INDEX_PREFIX = "oid4vp_state:";
+    private static final String KID_INDEX_PREFIX = "oid4vp_kid:";
 
     // Map keys for serialization
     private static final String KEY_REQUEST_OBJECT_JWT = "requestObjectJwt";
@@ -105,6 +108,20 @@ public class Oid4vpRequestObjectStore {
      */
     public String store(KeycloakSession session, String requestObjectJwt, String encryptionKeyJson, String state, String nonce,
                         String rootSessionId, String clientId, RebuildParams rebuildParams) {
+        return store(session, requestObjectJwt, encryptionKeyJson, state, nonce, rootSessionId, clientId, rebuildParams, false);
+    }
+
+    /**
+     * Store a request object, optionally skipping index entries (state and kid).
+     * Use skipIndexes=true when storing multiple request objects with the same state/kid
+     * in the same Keycloak transaction (Infinispan doesn't allow two put() calls for
+     * the same key within one transaction).
+     *
+     * @param skipIndexes If true, skip creating state→id and kid→id index entries
+     * @return Unique ID for retrieving the request object
+     */
+    public String store(KeycloakSession session, String requestObjectJwt, String encryptionKeyJson, String state, String nonce,
+                        String rootSessionId, String clientId, RebuildParams rebuildParams, boolean skipIndexes) {
         SingleUseObjectProvider singleUseStore = session.singleUseObjects();
         String id = UUID.randomUUID().toString();
         long lifespanSeconds = ttl.toSeconds();
@@ -131,11 +148,28 @@ public class Oid4vpRequestObjectStore {
         // Store main entry
         singleUseStore.put(KEY_PREFIX + id, lifespanSeconds, notes);
 
-        // Store state index for resolveByState lookup
-        if (state != null && !state.isBlank()) {
-            singleUseStore.put(STATE_INDEX_PREFIX + state, lifespanSeconds, Map.of("id", id));
+        // Store state and kid indexes for lookup.
+        // Skip when another store() in the same transaction already created indexes
+        // (Infinispan transactions don't allow two put() calls for the same key).
+        if (!skipIndexes) {
+            if (state != null && !state.isBlank()) {
+                singleUseStore.put(STATE_INDEX_PREFIX + state, lifespanSeconds, Map.of("id", id));
+                LOG.infof("[REQUEST-STORE] Stored state index: key=%s%s → id=%s (ttl=%ds)",
+                        STATE_INDEX_PREFIX, state, id, lifespanSeconds);
+            }
+
+            // Store kid index for resolveByKid lookup (used when state is only inside JWE).
+            if (encryptionKeyJson != null) {
+                String kid = extractKidFromJwk(encryptionKeyJson);
+                if (kid != null) {
+                    singleUseStore.put(KID_INDEX_PREFIX + kid, lifespanSeconds, Map.of("id", id));
+                    LOG.infof("[REQUEST-STORE] Stored kid index: key=%s%s → id=%s", KID_INDEX_PREFIX, kid, id);
+                }
+            }
         }
 
+        LOG.infof("[REQUEST-STORE] Stored request object: id=%s, state=%s, rootSessionId=%s, skipIndexes=%b",
+                id, state, rootSessionId, skipIndexes);
         return id;
     }
 
@@ -152,18 +186,58 @@ public class Oid4vpRequestObjectStore {
         }
         SingleUseObjectProvider singleUseStore = session.singleUseObjects();
 
-        // Look up ID from state index (non-destructive using replace)
-        Map<String, String> indexEntry = singleUseStore.get(STATE_INDEX_PREFIX + state);
+        // Look up ID from state index (non-destructive)
+        String indexKey = STATE_INDEX_PREFIX + state;
+        Map<String, String> indexEntry = singleUseStore.get(indexKey);
         if (indexEntry == null) {
+            LOG.warnf("[REQUEST-STORE] State index NOT FOUND: key=%s", indexKey);
+            // Also check if we can find the entry using contains()
+            boolean exists = singleUseStore.contains(indexKey);
+            LOG.warnf("[REQUEST-STORE] contains(%s) = %b", indexKey, exists);
             return null;
         }
 
         String id = indexEntry.get("id");
+        LOG.infof("[REQUEST-STORE] State index found: key=%s → id=%s", indexKey, id);
         if (id == null || id.isBlank()) {
             return null;
         }
 
         // Resolve by ID
+        StoredRequestObject result = resolve(session, id);
+        if (result == null) {
+            LOG.warnf("[REQUEST-STORE] Main entry NOT FOUND for id=%s (state index was present)", id);
+        }
+        return result;
+    }
+
+    /**
+     * Look up a stored request object by the kid of its encryption key.
+     * Used when the wallet sends an encrypted response without external state parameter.
+     *
+     * @param session The Keycloak session
+     * @param kid The JWE key ID from the encrypted response header
+     * @return The stored request object, or null if not found or expired
+     */
+    public StoredRequestObject resolveByKid(KeycloakSession session, String kid) {
+        if (kid == null || kid.isBlank()) {
+            return null;
+        }
+        SingleUseObjectProvider singleUseStore = session.singleUseObjects();
+
+        String indexKey = KID_INDEX_PREFIX + kid;
+        Map<String, String> indexEntry = singleUseStore.get(indexKey);
+        if (indexEntry == null) {
+            LOG.warnf("[REQUEST-STORE] Kid index NOT FOUND: key=%s", indexKey);
+            return null;
+        }
+
+        String id = indexEntry.get("id");
+        LOG.infof("[REQUEST-STORE] Kid index found: key=%s → id=%s", indexKey, id);
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+
         return resolve(session, id);
     }
 
@@ -181,19 +255,10 @@ public class Oid4vpRequestObjectStore {
         }
         SingleUseObjectProvider singleUseStore = session.singleUseObjects();
 
-        // Get the entry (this removes it from store)
+        // get() is non-destructive — entry remains in store with its TTL
         Map<String, String> notes = singleUseStore.get(KEY_PREFIX + id);
         if (notes == null) {
             return null;
-        }
-
-        // Re-store immediately for subsequent reads (request objects may be retrieved multiple times)
-        singleUseStore.put(KEY_PREFIX + id, ttl.toSeconds(), notes);
-
-        // Also re-store the state index if present
-        String state = notes.get(KEY_STATE);
-        if (state != null && !state.isBlank()) {
-            singleUseStore.put(STATE_INDEX_PREFIX + state, ttl.toSeconds(), Map.of("id", id));
         }
 
         return deserialize(notes);
@@ -211,15 +276,22 @@ public class Oid4vpRequestObjectStore {
         }
         SingleUseObjectProvider singleUseStore = session.singleUseObjects();
 
-        // Get the entry to find the state for index cleanup
+        // Read the entry to find the state and kid for index cleanup, then remove all
         Map<String, String> notes = singleUseStore.get(KEY_PREFIX + id);
         if (notes != null) {
             String state = notes.get(KEY_STATE);
             if (state != null && !state.isBlank()) {
                 singleUseStore.remove(STATE_INDEX_PREFIX + state);
             }
+            String encKeyJson = notes.get(KEY_ENCRYPTION_KEY_JSON);
+            if (encKeyJson != null) {
+                String kid = extractKidFromJwk(encKeyJson);
+                if (kid != null) {
+                    singleUseStore.remove(KID_INDEX_PREFIX + kid);
+                }
+            }
         }
-        // Note: get() already removed the main entry
+        singleUseStore.remove(KEY_PREFIX + id);
     }
 
     /**
@@ -235,16 +307,48 @@ public class Oid4vpRequestObjectStore {
         }
         SingleUseObjectProvider singleUseStore = session.singleUseObjects();
 
-        // Get and remove the state index entry
+        // Read the state index to find the ID, then remove the main entry and all indices
         Map<String, String> indexEntry = singleUseStore.get(STATE_INDEX_PREFIX + state);
         if (indexEntry != null) {
             String id = indexEntry.get("id");
             if (id != null && !id.isBlank()) {
-                // Remove main entry
+                // Clean up kid index from the main entry before removing it
+                Map<String, String> notes = singleUseStore.get(KEY_PREFIX + id);
+                if (notes != null) {
+                    String encKeyJson = notes.get(KEY_ENCRYPTION_KEY_JSON);
+                    if (encKeyJson != null) {
+                        String kid = extractKidFromJwk(encKeyJson);
+                        if (kid != null) {
+                            singleUseStore.remove(KID_INDEX_PREFIX + kid);
+                        }
+                    }
+                }
                 singleUseStore.remove(KEY_PREFIX + id);
             }
         }
-        // Note: get() already removed the state index entry
+        singleUseStore.remove(STATE_INDEX_PREFIX + state);
+    }
+
+    /**
+     * Extract the "kid" field from a JWK JSON string.
+     */
+    private static String extractKidFromJwk(String jwkJson) {
+        try {
+            // Simple JSON parsing — avoid pulling in a full JSON library dependency.
+            // The JWK JSON is always a flat object produced by our own code.
+            int kidIdx = jwkJson.indexOf("\"kid\"");
+            if (kidIdx < 0) return null;
+            int colon = jwkJson.indexOf(':', kidIdx + 5);
+            if (colon < 0) return null;
+            int firstQuote = jwkJson.indexOf('"', colon + 1);
+            if (firstQuote < 0) return null;
+            int secondQuote = jwkJson.indexOf('"', firstQuote + 1);
+            if (secondQuote < 0) return null;
+            return jwkJson.substring(firstQuote + 1, secondQuote);
+        } catch (Exception e) {
+            LOG.warnf("[REQUEST-STORE] Failed to extract kid from JWK: %s", e.getMessage());
+            return null;
+        }
     }
 
     private void putIfNotNull(Map<String, String> map, String key, String value) {

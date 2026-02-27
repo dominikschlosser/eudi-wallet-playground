@@ -12,7 +12,7 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-demo-ngrok.sh [port] [--domain <name>] [--ngrok-only] [-- <maven args>]
+Usage: scripts/run-demo-ngrok.sh [port] [--domain <name>] [--proxy] [--ngrok-only] [-- <maven args>]
 
 Starts ngrok and the demo app (wallet + verifier) with a public HTTPS URL.
 Useful for testing with mobile devices that need to reach your local server.
@@ -20,7 +20,10 @@ Useful for testing with mobile devices that need to reach your local server.
 Options:
   --domain <name>  Use a custom ngrok domain (registered in your ngrok account).
                    Overrides the auto-detected domain from the sandbox cert.
-  --ngrok-only     Start only ngrok and print env vars to copy/paste.
+  --proxy          Force-enable ssi-debugger reverse proxy (auto-enabled if
+                   ssi-debugger is in PATH). Dashboard: http://localhost:9091
+  --no-proxy       Disable ssi-debugger proxy even if installed.
+  --ngrok-only     Start only ngrok (and proxy if enabled) and print env vars.
 
 Sandbox certificate:
   If sandbox/sandbox-ngrok-combined.pem exists, the script automatically:
@@ -36,6 +39,7 @@ Defaults:
 Examples:
   scripts/run-demo-ngrok.sh
   scripts/run-demo-ngrok.sh 3000
+  scripts/run-demo-ngrok.sh --proxy
   scripts/run-demo-ngrok.sh --domain myapp.ngrok-free.app
   scripts/run-demo-ngrok.sh 3000 --domain myapp.ngrok-free.app --ngrok-only
   scripts/run-demo-ngrok.sh 3000 -- -Dspring-boot.run.profiles=dev
@@ -63,6 +67,14 @@ PORT="${PORT:-3000}"
 PORT_SET=0
 NGROK_ONLY=false
 NGROK_DOMAIN=""
+PROXY_PORT=9090
+PROXY_DASHBOARD_PORT=9091
+# Auto-enable proxy if ssi-debugger is installed; --no-proxy to override
+if command -v ssi-debugger >/dev/null 2>&1; then
+  USE_PROXY=true
+else
+  USE_PROXY=false
+fi
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -78,6 +90,14 @@ while [ $# -gt 0 ]; do
       fi
       NGROK_DOMAIN="$2"
       shift 2
+      ;;
+    --proxy)
+      USE_PROXY=true
+      shift
+      ;;
+    --no-proxy)
+      USE_PROXY=false
+      shift
       ;;
     --ngrok-only|--tunnel-only|--no-app)
       NGROK_ONLY=true
@@ -127,6 +147,9 @@ cleanup() {
   if [ -n "${APP_PID:-}" ]; then
     kill "${APP_PID}" >/dev/null 2>&1 || true
   fi
+  if [ -n "${PROXY_PID:-}" ]; then
+    kill "${PROXY_PID}" >/dev/null 2>&1 || true
+  fi
   if [ -n "${NGROK_PID:-}" ]; then
     kill "${NGROK_PID}" >/dev/null 2>&1 || true
   fi
@@ -134,6 +157,16 @@ cleanup() {
 }
 
 trap cleanup INT TERM EXIT
+
+# When proxy is enabled, ngrok forwards to the proxy port; proxy forwards to the app port.
+NGROK_TARGET_PORT="$PORT"
+if [ "$USE_PROXY" = "true" ]; then
+  if ! command -v ssi-debugger >/dev/null 2>&1; then
+    echo "ssi-debugger not found in PATH. Install it or use --no-proxy." >&2
+    exit 1
+  fi
+  NGROK_TARGET_PORT="$PROXY_PORT"
+fi
 
 NGROK_CERT_FILE="$ROOT_DIR/sandbox/sandbox-ngrok-combined.pem"
 if [ -z "$NGROK_DOMAIN" ] && command -v openssl >/dev/null 2>&1 && [ -f "$NGROK_CERT_FILE" ]; then
@@ -144,7 +177,7 @@ if [ -z "$NGROK_DOMAIN" ] && command -v openssl >/dev/null 2>&1 && [ -f "$NGROK_
   fi
 fi
 
-NGROK_ARGS="http $PORT --log=stdout --log-format=json"
+NGROK_ARGS="http $NGROK_TARGET_PORT --log=stdout --log-format=json"
 if [ -n "$NGROK_DOMAIN" ]; then
   NGROK_ARGS="$NGROK_ARGS --url=$NGROK_DOMAIN"
 fi
@@ -177,6 +210,13 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$ROOT_DIR/target"
 keys_file="$ROOT_DIR/target/verifier-keys-ngrok-$timestamp.json"
 
+# Start ssi-debugger proxy if enabled
+if [ "$USE_PROXY" = "true" ]; then
+  ssi-debugger proxy --target "http://127.0.0.1:$PORT" --port "$PROXY_PORT" --dashboard "$PROXY_DASHBOARD_PORT" &
+  PROXY_PID="$!"
+  echo "ssi-debugger proxy started (pid $PROXY_PID), target: http://127.0.0.1:$PORT"
+fi
+
 export PORT="$PORT"
 export WALLET_PUBLIC_BASE_URL="$public_url"
 export VERIFIER_KEYS_FILE="$keys_file"
@@ -198,6 +238,18 @@ Conformance UI:
 
 ngrok dashboard:
   http://127.0.0.1:4040
+EOF
+
+if [ "$USE_PROXY" = "true" ]; then
+  cat <<EOF
+
+ssi-debugger proxy (pid $PROXY_PID):
+  http://127.0.0.1:$PROXY_PORT -> http://127.0.0.1:$PORT
+  Dashboard: http://127.0.0.1:$PROXY_DASHBOARD_PORT
+EOF
+fi
+
+cat <<EOF
 
 Env (applied to the app process):
   PORT=$PORT

@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Builder for DCQL (Digital Credentials Query Language) queries.
@@ -190,7 +191,10 @@ public class DcqlQueryBuilder {
 
         for (ClaimSpec claimSpec : claimSpecs) {
             String claimId = "claim" + claimIndex++;
-            claims.add(Map.of("id", claimId, "path", splitClaimPath(claimSpec.path(), format, type)));
+            Map<String, Object> claim = new LinkedHashMap<>();
+            claim.put("id", claimId);
+            claim.put("path", splitClaimPath(claimSpec.path(), format, type));
+            claims.add(claim);
             allClaimIds.add(claimId);
             if (claimSpec.optional()) {
                 hasOptionalClaims = true;
@@ -270,37 +274,55 @@ public class DcqlQueryBuilder {
      * {@code ["namespace", "element_identifier"]}. If only a simple element name is given,
      * the namespace is derived from the doctype by removing its last segment
      * (e.g., "org.iso.18013.5.1.mDL" → "org.iso.18013.5.1").
+     * <p>
+     * A literal {@code "null"} segment is converted to JSON {@code null}, which acts as a DCQL
+     * wildcard for array element selection (e.g., {@code "nationalities/null"} →
+     * {@code ["nationalities", null]}). Non-negative integer segments are converted to JSON
+     * numbers for specific array index selection (e.g., {@code "nationalities/0"} →
+     * {@code ["nationalities", 0]}).
      *
      * @param path   the claim path (e.g., "eu.europa.ec.eudi.pid.1/family_name" or "given_name")
      * @param format the credential format (may be null)
      * @param type   the credential type / doctype (may be null)
-     * @return list of path segments
+     * @return list of path segments (may contain {@code null} for array wildcard selectors)
      */
-    private static List<String> splitClaimPath(String path, String format, String type) {
+    private static List<Object> splitClaimPath(String path, String format, String type) {
         if (path == null || path.isBlank()) {
             return List.of();
         }
         if (path.contains(PATH_SEPARATOR)) {
-            return Arrays.asList(path.split(PATH_SEPARATOR));
+            return Arrays.stream(path.split(PATH_SEPARATOR))
+                    .<Object>map(DcqlQueryBuilder::parsePathSegment)
+                    .collect(Collectors.toList());
         }
         // For mso_mdoc, claim paths must be [namespace, element_identifier]
+        // The namespace is the doctype itself (e.g., "eu.europa.ec.eudi.pid.1")
         if (Oid4vpIdentityProviderConfig.FORMAT_MSO_MDOC.equals(format) && type != null) {
-            String namespace = deriveNamespace(type);
-            return List.of(namespace, path);
+            return List.of(type, path);
         }
         return List.of(path);
     }
 
     /**
-     * Derives the default namespace from an mdoc doctype by removing the last dot-separated segment.
-     * Example: "org.iso.18013.5.1.mDL" → "org.iso.18013.5.1"
+     * Parses a single path segment from its string representation.
+     * <ul>
+     *   <li>{@code "null"} → JSON {@code null} (array wildcard)</li>
+     *   <li>Non-negative integer strings (e.g. {@code "0"}, {@code "42"}) → {@link Integer}</li>
+     *   <li>Everything else → kept as {@link String}</li>
+     * </ul>
      */
-    private static String deriveNamespace(String doctype) {
-        int lastDot = doctype.lastIndexOf('.');
-        if (lastDot > 0) {
-            return doctype.substring(0, lastDot);
+    private static Object parsePathSegment(String segment) {
+        if ("null".equals(segment)) {
+            return null;
         }
-        return doctype;
+        try {
+            int index = Integer.parseInt(segment);
+            if (index >= 0) {
+                return index;
+            }
+        } catch (NumberFormatException ignored) {
+        }
+        return segment;
     }
 
     /**
