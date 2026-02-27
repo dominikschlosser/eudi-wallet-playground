@@ -224,9 +224,10 @@ class Oid4vpIdentityProviderEndpointResponseTest {
             when(uriInfo.getBaseUri()).thenReturn(URI.create("https://kc/"));
 
             // Same-device: no flow param, no tab_id/session_code/client_data (wallet direct POST)
+            // Use encryptedResponse to satisfy direct_post.jwt enforcement
             Response response = endpoint.handlePost(
                     state, null, null, null, null,
-                    null, "vp_token_value", null, null, null);
+                    null, "vp_token_value", "dummy.encrypted.response", null, null);
 
             assertThat(response.getStatus()).isEqualTo(200);
             assertThat(response.getMediaType()).isEqualTo(MediaType.APPLICATION_JSON_TYPE);
@@ -249,7 +250,7 @@ class Oid4vpIdentityProviderEndpointResponseTest {
             when(uriInfo.getBaseUri()).thenReturn(URI.create("https://kc/"));
 
             endpoint.handlePost(state, null, null, null, null,
-                    null, "vp_token_value", null, null, null);
+                    null, "vp_token_value", "dummy.encrypted.response", null, null);
 
             // Deferred auth signal (for /complete-auth) should be stored
             verify(singleUseObjects).put(eq("oid4vp_deferred:" + state), anyLong(), any());
@@ -269,7 +270,7 @@ class Oid4vpIdentityProviderEndpointResponseTest {
 
             Response response = endpoint.handlePost(
                     state, null, null, null, null,
-                    null, "bad_vp_token", null, null, null);
+                    null, "bad_vp_token", "dummy.encrypted.response", null, null);
 
             assertThat(response.getStatus()).isEqualTo(400);
             assertThat(response.getMediaType()).isEqualTo(MediaType.APPLICATION_JSON_TYPE);
@@ -295,9 +296,10 @@ class Oid4vpIdentityProviderEndpointResponseTest {
             when(uriInfo.getBaseUri()).thenReturn(URI.create("https://kc/"));
 
             // Cross-device: flow=cross_device
+            // Use encryptedResponse to satisfy direct_post.jwt enforcement
             Response response = endpoint.handlePost(
                     state, null, null, null, "cross_device",
-                    null, "vp_token_value", null, null, null);
+                    null, "vp_token_value", "dummy.encrypted.response", null, null);
 
             assertThat(response.getStatus()).isEqualTo(200);
             assertThat(response.getMediaType()).isEqualTo(MediaType.APPLICATION_JSON_TYPE);
@@ -317,7 +319,7 @@ class Oid4vpIdentityProviderEndpointResponseTest {
             when(uriInfo.getBaseUri()).thenReturn(URI.create("https://kc/"));
 
             endpoint.handlePost(state, null, null, null, "cross_device",
-                    null, "vp_token_value", null, null, null);
+                    null, "vp_token_value", "dummy.encrypted.response", null, null);
 
             // Both deferred auth signal AND SSE signal should be stored for cross-device
             verify(singleUseObjects).put(eq("oid4vp_deferred:" + state), anyLong(), any());
@@ -336,7 +338,7 @@ class Oid4vpIdentityProviderEndpointResponseTest {
 
             Response response = endpoint.handlePost(
                     state, null, null, null, "cross_device",
-                    null, "bad_vp_token", null, null, null);
+                    null, "bad_vp_token", "dummy.encrypted.response", null, null);
 
             assertThat(response.getStatus()).isEqualTo(400);
             assertThat(response.getMediaType()).isEqualTo(MediaType.APPLICATION_JSON_TYPE);

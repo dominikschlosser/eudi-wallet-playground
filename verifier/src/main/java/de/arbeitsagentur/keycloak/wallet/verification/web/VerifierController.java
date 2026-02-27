@@ -609,6 +609,21 @@ public class VerifierController {
             storeResult(state, "Invalid verifier session", false, steps, parseVpTokens(vpTokenRaw), vpTokenRaw, idToken, Map.of());
             return callbackErrorResponse("Invalid verifier session");
         }
+        // Enforce encrypted response for direct_post.jwt response_mode.
+        // If the session's response_mode is direct_post.jwt, the wallet MUST send the
+        // "response" parameter (JWE/JWS), not a plain "vp_token".
+        String sessionResponseMode = verifierSession.responseMode();
+        if (sessionResponseMode != null && sessionResponseMode.endsWith(".jwt")
+                && (encryptedResponse == null || encryptedResponse.isBlank())) {
+            steps.add("Encrypted response required",
+                    "response_mode is " + sessionResponseMode + " but wallet sent plain vp_token instead of encrypted response parameter.",
+                    "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-8.3.1");
+            LOG.warn("direct_post.jwt callback rejected: wallet sent plain vp_token without encrypted response, state={}", state);
+            storeResult(state, "response_mode is " + sessionResponseMode + " but no encrypted response was provided",
+                    false, steps, parseVpTokens(vpTokenRaw), vpTokenRaw, idToken, Map.of());
+            return callbackErrorResponse("response_mode is " + sessionResponseMode + " but no encrypted response was provided");
+        }
+
         // Build redirect_uri for the result page
         URI resultUri = baseUri(request).path("/verifier/result/" + state).build().toUri();
         try {
