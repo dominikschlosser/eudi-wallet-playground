@@ -24,40 +24,48 @@ import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitForSelectorState;
 import com.microsoft.playwright.options.WaitUntilState;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import tools.jackson.databind.ObjectMapper;
+import io.github.dominikschlosser.oid4vc.Credential;
+import io.github.dominikschlosser.oid4vc.Oid4vcContainer;
+import io.github.dominikschlosser.oid4vc.PresentationResponse;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.MountableFile;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.time.Instant;
+import java.util.Base64;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * End-to-end integration tests for the German PID Binding Identity Provider.
+ * End-to-end integration tests for the German PID Binding Identity Provider
+ * using the oid4vc-dev Docker wallet ({@code ghcr.io/dominikschlosser/oid4vc-dev}).
+ * <p>
  * Tests the two-phase authentication flow:
  * <ol>
- *   <li>First-time users: PID only -> username/password -> credential issuance</li>
+ *   <li>First-time users: PID only -> username/password -> credential issuance via OID4VCI</li>
  *   <li>Returning users: PID + ba-login-credential -> direct login</li>
  * </ol>
- * <p>
- * All tests run in headless mode using the same-device (redirect) flow.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class PidBindingE2eIT {
@@ -71,123 +79,79 @@ class PidBindingE2eIT {
     private static final String TEST_USER = "test";
     private static final String TEST_PASSWORD = "test";
 
-    private static Oid4vpTestDcApiMockWalletServer wallet;
+    private static GenericContainer<?> keycloak;
+    private static Oid4vcContainer wallet;
     private static Oid4vpTestCallbackServer callback;
     private static KeycloakAdminClient adminClient;
-    private static String adminBaseUrl;
-    private static String browserBaseUrl;
-    private static String callbackUrl;
-    private static String walletAuthEndpoint;
 
-    private static GenericContainer<?> keycloak;
     private static Playwright playwright;
     private static Browser browser;
     private static BrowserContext context;
     private static Page page;
 
+    private static String kcHostUrl;
+    private static String callbackUrl;
+
     // Store the user ID from the first login
     private static String issuedUserId;
-    // OID4VCI client for receiving credentials
-    private static Oid4vciTestClient oid4vciClient;
-    // The actual credential issued via OID4VCI
-    private static String issuedCredential;
 
     @BeforeAll
     static void setUp() throws Exception {
-        wallet = new Oid4vpTestDcApiMockWalletServer(OBJECT_MAPPER, "localhost");
         callback = new Oid4vpTestCallbackServer();
+        callbackUrl = callback.localCallbackUrl();
 
         keycloak = new GenericContainer<>("quay.io/keycloak/keycloak:26.5.0")
                 .withEnv("KEYCLOAK_ADMIN", "admin")
                 .withEnv("KEYCLOAK_ADMIN_PASSWORD", "admin")
                 .withEnv("KC_PROXY_HEADERS", "xforwarded")
                 .withExposedPorts(8080)
-                // Run build first to properly discover providers, then start-dev
                 .withCreateContainerCmdModifier(cmd -> cmd.withEntrypoint("/bin/sh"))
                 .withCommand("-c",
                         "/opt/keycloak/bin/kc.sh build --features=oid4vc-vci && " +
                         "/opt/keycloak/bin/kc.sh start-dev --import-realm --features=oid4vc-vci")
                 .waitingFor(Wait.forHttp("/realms/" + REALM).forPort(8080).withStartupTimeout(Duration.ofSeconds(180)))
-                .withLogConsumer(frame -> {
-                    String log = frame.getUtf8String();
-                    if (log.contains("PID") || log.contains("pid") ||
-                            log.contains("binding") || log.contains("ERROR") ||
-                            log.contains("WARN") || log.contains("OID4VP") ||
-                            log.contains("VERIFIER") || log.contains("x5c") ||
-                            log.contains("OID4VCI") || log.contains("oid4vc") ||
-                            log.contains("credential-offer") || log.contains("CREDENTIAL") ||
-                            log.contains("Keycloak") || log.contains("quarkus")) {
-                        LOG.info("[KC] {}", log.stripTrailing());
-                    }
-                });
+                .withLogConsumer(frame -> LOG.info("[KC] {}", frame.getUtf8String().stripTrailing()));
 
         copyRealmImport();
         copyProviderJars();
         keycloak.start();
 
-        // Setup Playwright in headless mode (no extension needed)
+        int kcMappedPort = keycloak.getMappedPort(8080);
+        kcHostUrl = "http://localhost:" + kcMappedPort;
+
+        wallet = new Oid4vcContainer("ghcr.io/dominikschlosser/oid4vc-dev:v0.13.3")
+                .withHostAccess()
+                .withLogConsumer(frame -> LOG.info("[OID4VC] {}", frame.getUtf8String().stripTrailing()));
+        wallet.start();
+
         playwright = Playwright.create();
         browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(true));
         context = browser.newContext();
         page = context.newPage();
 
-        String keycloakHost = keycloak.getHost();
-        String adminHost = "localhost".equalsIgnoreCase(keycloakHost) ? "127.0.0.1" : keycloakHost;
-        adminBaseUrl = "http://%s:%d".formatted(adminHost, keycloak.getMappedPort(8080));
-        browserBaseUrl = adminBaseUrl;
-        callbackUrl = callback.localCallbackUrl();
-        walletAuthEndpoint = wallet.localBaseUrl() + "/oid4vp/auth";
-
-        adminClient = KeycloakAdminClient.login(OBJECT_MAPPER, adminBaseUrl, "admin", "admin");
+        adminClient = KeycloakAdminClient.login(OBJECT_MAPPER, kcHostUrl, "admin", "admin");
         Oid4vpTestKeycloakSetup.addRedirectUriToClient(adminClient, REALM, CLIENT_ID, callbackUrl);
 
-        // Configure wallet for German PID mode (no unique identifiers)
-        wallet.setUseGermanPid(true);
+        // Configure IdP with wallet trust list and same-device wallet URL
+        configureIdpForDockerWallet(wallet.client().getTrustList(), wallet.getAuthorizeUrl());
 
-        // Enable same-device flow for the german-pid IdP
-        Oid4vpTestKeycloakSetup.configureSameDeviceFlow(adminClient, REALM, IDP_ALIAS, true, walletAuthEndpoint);
-
-        // Initialize OID4VCI client for credential issuance
-        oid4vciClient = new Oid4vciTestClient(OBJECT_MAPPER);
-
-        // Share the holder key between OID4VCI client and mock wallet
-        wallet.setHolderKey(oid4vciClient.getHolderKey());
+        LOG.info("Setup complete. KC: {}, Wallet: {}", kcHostUrl, wallet.getBaseUrl());
     }
 
     @AfterAll
-    static void tearDown() throws Exception {
-        if (page != null) {
-            page.close();
-            page = null;
-        }
-        if (context != null) {
-            context.close();
-            context = null;
-        }
-        if (browser != null) {
-            browser.close();
-            browser = null;
-        }
-        if (playwright != null) {
-            playwright.close();
-            playwright = null;
-        }
-        if (keycloak != null) {
-            keycloak.stop();
-        }
-        if (callback != null) {
-            callback.close();
-        }
-        if (wallet != null) {
-            wallet.close();
-        }
-        adminClient = null;
+    static void tearDown() {
+        if (page != null) page.close();
+        if (context != null) context.close();
+        if (browser != null) browser.close();
+        if (playwright != null) playwright.close();
+        if (keycloak != null) keycloak.stop();
+        if (wallet != null) wallet.stop();
+        if (callback != null) callback.close();
     }
 
     @Test
     @Order(1)
-    void loginPageShowsGermanPidIdpButton() throws Exception {
-        callback.reset();
+    void loginPageShowsGermanPidIdpButton() {
         clearBrowserSession();
 
         safeNavigate(buildAuthRequestUri().toString());
@@ -205,23 +169,28 @@ class PidBindingE2eIT {
     void firstTimeUserWithPidOnlyRequiresUsernamePassword() throws Exception {
         callback.reset();
         clearBrowserSession();
-        wallet.clearSimulatedCredentials();
+
+        // Delete all non-PID credentials from the wallet to simulate PID-only
+        deleteAllNonPidCredentials();
 
         safeNavigate(buildAuthRequestUri().toString());
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
-        // Click the IdP link
         page.locator("a#social-german-pid").click();
-
-        // Wait for wallet login page with same-device link
         waitForOpenWalletLink();
 
-        // Click to start wallet flow via same-device redirect
-        int walletRequestsBefore = wallet.requestCount();
-        page.locator("a:has-text('Open Wallet App')").click();
-        waitForWalletRequest(walletRequestsBefore + 1, Duration.ofSeconds(15));
+        // Extract wallet URL and submit via API
+        String walletUrl = page.locator("a:has-text('Open Wallet App')").getAttribute("href");
+        String presentationUri = convertToOpenid4vpUri(walletUrl);
+        PresentationResponse walletResponse = wallet.acceptPresentationRequest(presentationUri);
 
-        // Wait for redirect to first broker login (username/password form)
+        String redirectUri = walletResponse.redirectUri();
+        if (redirectUri != null) {
+            page.navigate(redirectUri);
+            page.waitForLoadState(LoadState.NETWORKIDLE);
+        }
+
+        // Wait for first broker login (username/password form)
         try {
             page.waitForURL(url ->
                             url.contains("first-broker-login") ||
@@ -230,20 +199,15 @@ class PidBindingE2eIT {
                                     page.locator("input[name='password']").count() > 0,
                     new Page.WaitForURLOptions().setTimeout(30000));
         } catch (Exception e) {
-            String currentUrl = "(unavailable)";
-            String bodyText = "(unavailable)";
-            try {
-                currentUrl = page.url();
-                bodyText = page.locator("body").textContent();
-            } catch (Exception ignored) {}
-            throw new AssertionError("Expected first-broker-login flow. URL: " + currentUrl + ", Body: " + bodyText, e);
+            throw new AssertionError("Expected first-broker-login flow. URL: " + page.url(), e);
         }
 
         page.waitForLoadState(LoadState.NETWORKIDLE);
         LOG.info("[Test] First broker login page URL: {}", page.url());
 
         // Handle Review Profile step if present
-        if (page.locator("input[name='firstName']").count() > 0) {
+        if (page.locator("input[name='firstName']").count() > 0 &&
+                page.locator("input[name='password']").count() == 0) {
             LOG.info("[Test] Review Profile page detected, filling profile info");
             page.locator("input[name='firstName']").fill("Test");
             page.locator("input[name='lastName']").fill("User");
@@ -252,7 +216,6 @@ class PidBindingE2eIT {
             }
             page.locator("input[type='submit'], button[type='submit']").first().click();
             page.waitForLoadState(LoadState.NETWORKIDLE);
-            LOG.info("[Test] After review profile, URL: {}", page.url());
         }
 
         // Handle "Add to existing account" step if present
@@ -271,7 +234,6 @@ class PidBindingE2eIT {
                 .as("Expected username/password form for first-time PID user. URL: " + page.url())
                 .isTrue();
 
-        // Fill in the credentials to link the account
         if (hasUsernameField) {
             page.locator("input[name='username']").fill(TEST_USER);
         }
@@ -294,8 +256,8 @@ class PidBindingE2eIT {
         LOG.info("[Test] Page content after login: {}", pageContent.substring(0, Math.min(1000, pageContent.length())));
 
         assertThat(hasCredentialIssuancePage)
-                .as("Credential issuance page must be shown after username/password authentication. URL: %s, Content: %s",
-                        page.url(), pageContent.substring(0, Math.min(500, pageContent.length())))
+                .as("Credential issuance page must be shown after username/password authentication. URL: %s",
+                        page.url())
                 .isTrue();
 
         assertThat(page.locator("button[name='skip']").count())
@@ -306,58 +268,43 @@ class PidBindingE2eIT {
                 .as("Should have 'Continue' button")
                 .isGreaterThan(0);
 
-        // Verify the same-device wallet link OR QR code section is present
-        Locator sameDeviceLink = page.locator("a:has-text('Open Wallet')");
-        boolean hasSameDeviceLink = sameDeviceLink.count() > 0;
-
-        Locator qrCodeSection = page.locator("#qrcode");
-        boolean hasQrCode = qrCodeSection.count() > 0;
-
-        assertThat(hasSameDeviceLink || hasQrCode)
-                .as("Should have either same-device wallet link or QR code for credential issuance")
-                .isTrue();
-
         // Extract the credential offer URL from the same-device link
-        String credentialOfferUrl = null;
-        if (hasSameDeviceLink) {
-            String sameDeviceUrl = sameDeviceLink.getAttribute("href");
-            LOG.info("[Test] Same-device wallet URL: {}", sameDeviceUrl);
+        Locator sameDeviceLink = page.locator("a:has-text('Open Wallet')");
+        assertThat(sameDeviceLink.count()).as("Should have same-device wallet link").isGreaterThan(0);
 
-            if (sameDeviceUrl != null && sameDeviceUrl.contains("credentialOffer=")) {
-                int startIdx = sameDeviceUrl.indexOf("credentialOffer=") + "credentialOffer=".length();
-                String encodedOffer = sameDeviceUrl.substring(startIdx);
-                credentialOfferUrl = java.net.URLDecoder.decode(encodedOffer, java.nio.charset.StandardCharsets.UTF_8);
-            }
+        String sameDeviceUrl = sameDeviceLink.getAttribute("href");
+        LOG.info("[Test] Same-device wallet URL: {}", sameDeviceUrl);
+
+        String credentialOfferUrl = null;
+        if (sameDeviceUrl != null && sameDeviceUrl.contains("credentialOffer=")) {
+            int startIdx = sameDeviceUrl.indexOf("credentialOffer=") + "credentialOffer=".length();
+            String encodedOffer = sameDeviceUrl.substring(startIdx);
+            credentialOfferUrl = URLDecoder.decode(encodedOffer, StandardCharsets.UTF_8);
         }
 
-        LOG.info("[Test] Credential offer URL: {}", credentialOfferUrl);
         assertThat(credentialOfferUrl)
                 .as("Credential offer URL should start with openid-credential-offer://")
                 .isNotNull()
                 .startsWith("openid-credential-offer://");
 
-        // Call the OID4VCI endpoint to receive the credential
-        LOG.info("[Test] Issuing credential via OID4VCI...");
-        issuedCredential = oid4vciClient.receiveCredential(credentialOfferUrl);
-        LOG.info("[Test] Successfully received credential via OID4VCI! Length: {}", issuedCredential.length());
-        wallet.storeIssuedCredential(issuedCredential);
+        // Accept the credential offer via wallet API
+        LOG.info("[Test] Accepting credential offer via wallet API...");
+        wallet.acceptCredentialOffer(credentialOfferUrl);
+        LOG.info("[Test] Credential offer accepted");
 
-        // Click continue - user indicates they've added the credential to their wallet
+        // Click continue
         page.locator("button[name='continue']").click();
 
-        // Wait for successful login (callback with code)
         try {
             page.waitForURL(url -> url.startsWith(callbackUrl) && url.contains("code="),
                     new Page.WaitForURLOptions().setTimeout(10000));
         } catch (Exception e) {
-            throw new AssertionError("First broker login did not complete. URL: " + page.url() +
-                    ", Body: " + page.locator("body").textContent().substring(0, Math.min(500, page.locator("body").textContent().length())), e);
+            throw new AssertionError("First broker login did not complete. URL: " + page.url(), e);
         }
 
         assertThat(page.url()).contains("code=");
         LOG.info("[Test] First-time user successfully authenticated via username/password");
 
-        // Get the user ID to verify the credential contains the correct user_id claim
         issuedUserId = Oid4vpTestKeycloakSetup.resolveUserId(adminClient, REALM, TEST_USER);
         LOG.info("[Test] Resolved Keycloak user ID: {}", issuedUserId);
 
@@ -370,7 +317,7 @@ class PidBindingE2eIT {
                 .isNotNull();
 
         String actualLookupKey = String.valueOf(federatedIdentity.get("userId"));
-        String expectedLookupKey = Oid4vpTestKeycloakSetup.computeExpectedLookupKey(adminBaseUrl, REALM, issuedUserId);
+        String expectedLookupKey = Oid4vpTestKeycloakSetup.computeExpectedLookupKey(kcHostUrl, REALM, issuedUserId);
 
         LOG.info("[Test] Expected lookup key: {}", expectedLookupKey);
         LOG.info("[Test] Actual lookup key:   {}", actualLookupKey);
@@ -387,52 +334,54 @@ class PidBindingE2eIT {
         clearBrowserSession();
 
         assertThat(issuedUserId).as("User ID should be set from previous test").isNotNull();
-        assertThat(issuedCredential).as("Credential should have been issued via OID4VCI in previous test").isNotNull();
-        assertThat(wallet.hasIssuedCredential()).as("Wallet should have the issued credential").isTrue();
+
+        // Verify wallet has the ba-login-credential
+        assertThat(wallet.client().hasCredentialWithType("urn:arbeitsagentur:user_credential:1"))
+                .as("Wallet should have the ba-login-credential from previous test. Wallet credentials: %s", wallet.listCredentials())
+                .isTrue();
 
         safeNavigate(buildAuthRequestUri().toString());
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         page.locator("a#social-german-pid").click();
-
         waitForOpenWalletLink();
 
-        // Click to start wallet flow - wallet presents PID + ba-login-credential
-        int walletRequestsBefore = wallet.requestCount();
-        long startTime = System.currentTimeMillis();
-        page.locator("a:has-text('Open Wallet App')").click();
-        waitForWalletRequest(walletRequestsBefore + 1, Duration.ofSeconds(15));
+        String walletUrl = page.locator("a:has-text('Open Wallet App')").getAttribute("href");
+        String presentationUri = convertToOpenid4vpUri(walletUrl);
 
-        // For returning users, we should go directly to callback WITHOUT any login form
+        long startTime = System.currentTimeMillis();
+        PresentationResponse walletResponse = wallet.acceptPresentationRequest(presentationUri);
+
+        String redirectUri = walletResponse.redirectUri();
+        if (redirectUri != null) {
+            page.navigate(redirectUri);
+            page.waitForLoadState(LoadState.NETWORKIDLE);
+        }
+
+        // Returning users should go directly to callback WITHOUT any login form
         try {
             page.waitForURL(url -> url.startsWith(callbackUrl),
                     new Page.WaitForURLOptions().setTimeout(15000));
         } catch (Exception e) {
-            String currentUrl = page.url();
-            String bodyText = page.locator("body").textContent();
-
             boolean hasLoginForm = page.locator("input[name='username']").count() > 0 ||
                     page.locator("input[name='password']").count() > 0;
 
             var identity = Oid4vpTestKeycloakSetup.getFederatedIdentity(adminClient, REALM, issuedUserId, IDP_ALIAS);
             String actualKey = identity != null ? String.valueOf(identity.get("userId")) : "NOT FOUND";
-            String expectedKey = Oid4vpTestKeycloakSetup.computeExpectedLookupKey(adminBaseUrl, REALM, issuedUserId);
+            String expectedKey = Oid4vpTestKeycloakSetup.computeExpectedLookupKey(kcHostUrl, REALM, issuedUserId);
 
             throw new AssertionError(
                     "RETURNING USER SHOULD GET DIRECT LOGIN without username/password!\n" +
                             "Has login form: " + hasLoginForm + "\n" +
                             "Expected lookup key: " + expectedKey + "\n" +
                             "Actual lookup key:   " + actualKey + "\n" +
-                            "URL: " + currentUrl, e);
+                            "URL: " + page.url(), e);
         }
 
         long duration = System.currentTimeMillis() - startTime;
 
         assertThat(page.url()).contains("code=");
-
         LOG.info("[Test] SUCCESS: Returning user got DIRECT LOGIN in {}ms", duration);
-
-        wallet.clearSimulatedCredentials();
     }
 
     @Test
@@ -440,35 +389,64 @@ class PidBindingE2eIT {
     void dcqlQueryHasCorrectStructureAndNestedClaimPaths() throws Exception {
         callback.reset();
         clearBrowserSession();
-        wallet.clearSimulatedCredentials();
+
+        // Delete all non-PID credentials so wallet only has PID
+        deleteAllNonPidCredentials();
 
         safeNavigate(buildAuthRequestUri().toString());
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         page.locator("a#social-german-pid").click();
-
         waitForOpenWalletLink();
 
-        // Click to start - we want to inspect the DCQL query sent to the wallet
-        int walletRequestsBefore = wallet.requestCount();
-        page.locator("a:has-text('Open Wallet App')").click();
-        waitForWalletRequest(walletRequestsBefore + 1, Duration.ofSeconds(15));
+        // Extract the wallet URL to get the request_uri parameter
+        String walletUrl = page.locator("a:has-text('Open Wallet App')").getAttribute("href");
+        assertThat(walletUrl).as("Wallet URL should be present").isNotEmpty();
 
-        // Verify we received a request with a DCQL query
-        String dcqlRaw = wallet.lastDcqlQuery();
-        assertThat(dcqlRaw).as("Wallet should have received a DCQL query").isNotNull();
-        LOG.info("[Test] Received DCQL query: {}", dcqlRaw);
+        // Parse the wallet URL to extract request_uri
+        URI walletUri = URI.create(walletUrl);
+        String query = walletUri.getQuery();
+        String requestUri = null;
+        for (String param : query.split("&")) {
+            if (param.startsWith("request_uri=")) {
+                requestUri = URLDecoder.decode(param.substring("request_uri=".length()), StandardCharsets.UTF_8);
+                break;
+            }
+        }
 
-        tools.jackson.databind.JsonNode dcql = OBJECT_MAPPER.readTree(dcqlRaw);
+        assertThat(requestUri).as("request_uri parameter should be present in wallet URL").isNotNull();
+
+        // Fetch the request JWT from the request_uri
+        HttpResponse<String> jwtResponse = HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder()
+                        .uri(URI.create(requestUri))
+                        .timeout(Duration.ofSeconds(10))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertThat(jwtResponse.statusCode()).as("Request URI fetch should succeed").isEqualTo(200);
+
+        String jwt = jwtResponse.body().strip();
+        // Decode JWT payload (second part)
+        String[] jwtParts = jwt.split("\\.");
+        assertThat(jwtParts.length).as("JWT should have 3 parts").isGreaterThanOrEqualTo(3);
+
+        String payloadJson = new String(Base64.getUrlDecoder().decode(jwtParts[1]), StandardCharsets.UTF_8);
+        JsonNode payload = OBJECT_MAPPER.readTree(payloadJson);
+
+        JsonNode dcql = payload.get("dcql_query");
+        assertThat(dcql).as("JWT payload must contain dcql_query").isNotNull();
+
+        LOG.info("[Test] Decoded DCQL query: {}", dcql);
 
         // Verify credential structure: should have german_pid and ba_login_credential
-        tools.jackson.databind.JsonNode credentials = dcql.get("credentials");
+        JsonNode credentials = dcql.get("credentials");
         assertThat(credentials).as("DCQL must have credentials array").isNotNull();
         assertThat(credentials.size()).as("Should request 2 credentials (PID + login)").isEqualTo(2);
 
-        // Find PID credential by id
-        tools.jackson.databind.JsonNode pidCred = null;
-        tools.jackson.databind.JsonNode loginCred = null;
+        JsonNode pidCred = null;
+        JsonNode loginCred = null;
         for (var cred : credentials) {
             String id = cred.get("id").asText();
             if ("german_pid".equals(id)) pidCred = cred;
@@ -482,20 +460,20 @@ class PidBindingE2eIT {
         assertThat(pidCred.get("meta").get("vct_values").get(0).asText()).isEqualTo("urn:eudi:pid:de:1");
 
         // Verify nested claim paths are correctly split
-        tools.jackson.databind.JsonNode pidClaims = pidCred.get("claims");
+        JsonNode pidClaims = pidCred.get("claims");
         assertThat(pidClaims).as("PID credential should have claims").isNotNull();
 
         boolean foundStreetAddress = false;
         boolean foundLocality = false;
         for (var claim : pidClaims) {
-            tools.jackson.databind.JsonNode path = claim.get("path");
+            JsonNode path = claim.get("path");
             if (path.size() == 2 && "address".equals(path.get(0).asText()) && "street_address".equals(path.get(1).asText())) {
                 foundStreetAddress = true;
             }
             if (path.size() == 2 && "address".equals(path.get(0).asText()) && "locality".equals(path.get(1).asText())) {
                 foundLocality = true;
             }
-            // Verify NO path contains a slash in a single element (the old bug)
+            // Verify NO path contains a slash in a single element
             if (path.size() == 1) {
                 assertThat(path.get(0).asText())
                         .as("Single-element claim path must not contain '/'")
@@ -509,8 +487,8 @@ class PidBindingE2eIT {
                 .as("DCQL must contain path [\"address\", \"locality\"]")
                 .isTrue();
 
-        // Verify credential_sets allows PID+login or PID-only
-        tools.jackson.databind.JsonNode credentialSets = dcql.get("credential_sets");
+        // Verify credential_sets
+        JsonNode credentialSets = dcql.get("credential_sets");
         assertThat(credentialSets).as("Should have credential_sets").isNotNull();
         assertThat(credentialSets.size()).isGreaterThan(0);
 
@@ -523,22 +501,29 @@ class PidBindingE2eIT {
         callback.reset();
         clearBrowserSession();
 
-        wallet.clearSimulatedCredentials();
-        assertThat(wallet.hasIssuedCredential()).as("Wallet should have no credential").isFalse();
+        // Delete the ba-login-credential from the wallet (simulate lost credential)
+        deleteAllNonPidCredentials();
+        assertThat(wallet.client().hasCredentialWithType("urn:arbeitsagentur:user_credential:1"))
+                .as("Wallet should NOT have ba-login-credential after deletion")
+                .isFalse();
 
         safeNavigate(buildAuthRequestUri().toString());
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         page.locator("a#social-german-pid").click();
-
         waitForOpenWalletLink();
 
-        // Click to start wallet flow - wallet will only present PID (no credential)
-        int walletRequestsBefore = wallet.requestCount();
-        page.locator("a:has-text('Open Wallet App')").click();
-        waitForWalletRequest(walletRequestsBefore + 1, Duration.ofSeconds(15));
+        String walletUrl = page.locator("a:has-text('Open Wallet App')").getAttribute("href");
+        String presentationUri = convertToOpenid4vpUri(walletUrl);
+        PresentationResponse walletResponse = wallet.acceptPresentationRequest(presentationUri);
 
-        // Since user has no credential, they should be directed to first-broker-login
+        String redirectUri = walletResponse.redirectUri();
+        if (redirectUri != null) {
+            page.navigate(redirectUri);
+            page.waitForLoadState(LoadState.NETWORKIDLE);
+        }
+
+        // Since user has no ba-login-credential, they should be directed to first-broker-login
         try {
             page.waitForURL(url ->
                             url.contains("first-broker-login") ||
@@ -547,23 +532,21 @@ class PidBindingE2eIT {
                                     page.locator("input[name='password']").count() > 0,
                     new Page.WaitForURLOptions().setTimeout(30000));
         } catch (Exception e) {
-            String currentUrl = page.url();
-            if (currentUrl.contains("code=")) {
+            if (page.url().contains("code=")) {
                 LOG.info("[Test] Re-issuance: User was directly authenticated");
                 return;
             }
-            throw new AssertionError("Expected first-broker-login flow for re-issuance. URL: " + currentUrl, e);
+            throw new AssertionError("Expected first-broker-login flow for re-issuance. URL: " + page.url(), e);
         }
 
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
-        // Handle any intermediate steps
+        // Handle "Add to existing account" step if present
         if (page.locator("a:has-text('Add to existing account'), a:has-text('Link')").count() > 0) {
             page.locator("a:has-text('Add to existing account'), a:has-text('Link')").first().click();
             page.waitForLoadState(LoadState.NETWORKIDLE);
         }
 
-        // Fill in credentials for re-authentication
         boolean hasUsernameField = page.locator("input[name='username']").count() > 0;
         boolean hasPasswordField = page.locator("input[name='password']").count() > 0;
 
@@ -599,16 +582,15 @@ class PidBindingE2eIT {
             if (sameDeviceUrl != null && sameDeviceUrl.contains("credentialOffer=")) {
                 int startIdx = sameDeviceUrl.indexOf("credentialOffer=") + "credentialOffer=".length();
                 String encodedOffer = sameDeviceUrl.substring(startIdx);
-                credentialOfferUrl = java.net.URLDecoder.decode(encodedOffer, java.nio.charset.StandardCharsets.UTF_8);
+                credentialOfferUrl = URLDecoder.decode(encodedOffer, StandardCharsets.UTF_8);
             }
         }
 
         assertThat(credentialOfferUrl).as("New credential offer URL should be present").isNotNull();
 
-        // Issue the new credential
-        String newCredential = oid4vciClient.receiveCredential(credentialOfferUrl);
-        LOG.info("[Test] Re-issuance: Successfully received new credential! Length: {}", newCredential.length());
-        wallet.storeIssuedCredential(newCredential);
+        // Accept the new credential via wallet API
+        wallet.acceptCredentialOffer(credentialOfferUrl);
+        LOG.info("[Test] Re-issuance: credential offer accepted");
 
         // Click continue
         page.locator("button[name='continue']").click();
@@ -622,7 +604,7 @@ class PidBindingE2eIT {
 
         assertThat(page.url()).contains("code=");
 
-        // Verify the federated identity was correctly overridden
+        // Verify the federated identity was correctly maintained
         var reissuedIdentity = Oid4vpTestKeycloakSetup.getFederatedIdentity(
                 adminClient, REALM, issuedUserId, IDP_ALIAS);
 
@@ -631,7 +613,7 @@ class PidBindingE2eIT {
                 .isNotNull();
 
         String actualKey = String.valueOf(reissuedIdentity.get("userId"));
-        String expectedKey = Oid4vpTestKeycloakSetup.computeExpectedLookupKey(adminBaseUrl, REALM, issuedUserId);
+        String expectedKey = Oid4vpTestKeycloakSetup.computeExpectedLookupKey(kcHostUrl, REALM, issuedUserId);
 
         assertThat(actualKey)
                 .as("Federated identity must have the correct lookup key after re-issuance")
@@ -645,97 +627,88 @@ class PidBindingE2eIT {
         clearBrowserSession();
 
         assertThat(issuedUserId).as("User ID should be set from test 2").isNotNull();
-        assertThat(wallet.hasIssuedCredential())
-                .as("Wallet should have the re-issued credential from test 5")
+        assertThat(wallet.client().hasCredentialWithType("urn:arbeitsagentur:user_credential:1"))
+                .as("Wallet should have the re-issued ba-login-credential from test 5")
                 .isTrue();
 
         safeNavigate(buildAuthRequestUri().toString());
         page.waitForLoadState(LoadState.NETWORKIDLE);
 
         page.locator("a#social-german-pid").click();
-
         waitForOpenWalletLink();
 
-        // Start wallet flow — wallet presents PID + re-issued ba-login-credential
-        int walletRequestsBefore = wallet.requestCount();
+        String walletUrl = page.locator("a:has-text('Open Wallet App')").getAttribute("href");
+        String presentationUri = convertToOpenid4vpUri(walletUrl);
+
         long startTime = System.currentTimeMillis();
-        page.locator("a:has-text('Open Wallet App')").click();
-        waitForWalletRequest(walletRequestsBefore + 1, Duration.ofSeconds(15));
+        PresentationResponse walletResponse = wallet.acceptPresentationRequest(presentationUri);
+
+        String redirectUri = walletResponse.redirectUri();
+        if (redirectUri != null) {
+            page.navigate(redirectUri);
+            page.waitForLoadState(LoadState.NETWORKIDLE);
+        }
 
         // Returning user with re-issued credential should get DIRECT LOGIN
         try {
             page.waitForURL(url -> url.startsWith(callbackUrl),
                     new Page.WaitForURLOptions().setTimeout(15000));
         } catch (Exception e) {
-            String currentUrl = page.url();
             boolean hasLoginForm = page.locator("input[name='username']").count() > 0 ||
                     page.locator("input[name='password']").count() > 0;
 
             var identity = Oid4vpTestKeycloakSetup.getFederatedIdentity(adminClient, REALM, issuedUserId, IDP_ALIAS);
             String actualKey = identity != null ? String.valueOf(identity.get("userId")) : "NOT FOUND";
-            String expectedKey = Oid4vpTestKeycloakSetup.computeExpectedLookupKey(adminBaseUrl, REALM, issuedUserId);
+            String expectedKey = Oid4vpTestKeycloakSetup.computeExpectedLookupKey(kcHostUrl, REALM, issuedUserId);
 
             throw new AssertionError(
                     "DIRECT LOGIN WITH RE-ISSUED CREDENTIAL FAILED!\n" +
                             "Has login form: " + hasLoginForm + "\n" +
                             "Expected lookup key: " + expectedKey + "\n" +
                             "Actual lookup key:   " + actualKey + "\n" +
-                            "URL: " + currentUrl, e);
+                            "URL: " + page.url(), e);
         }
 
         long duration = System.currentTimeMillis() - startTime;
 
         assertThat(page.url()).contains("code=");
         LOG.info("[Test] SUCCESS: Direct login with re-issued credential in {}ms", duration);
-
-        wallet.clearSimulatedCredentials();
     }
 
-    // ========== Helper Methods ==========
+    // ===== Wallet Helpers =====
 
-    private URI buildAuthRequestUri() {
-        String state = "s-" + System.nanoTime();
-        String codeVerifier = generateCodeVerifier();
-        String codeChallenge = generateCodeChallenge(codeVerifier);
-        return URI.create("%s/realms/%s/protocol/openid-connect/auth?client_id=%s&redirect_uri=%s&response_type=code&scope=openid+profile+email&state=%s&code_challenge=%s&code_challenge_method=S256"
-                .formatted(browserBaseUrl, REALM, CLIENT_ID,
-                        URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8),
-                        URLEncoder.encode(state, StandardCharsets.UTF_8),
-                        URLEncoder.encode(codeChallenge, StandardCharsets.UTF_8)));
-    }
-
-    private static String generateCodeVerifier() {
-        byte[] bytes = new byte[32];
-        new java.security.SecureRandom().nextBytes(bytes);
-        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-    }
-
-    private static String generateCodeChallenge(String codeVerifier) {
-        try {
-            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(codeVerifier.getBytes(StandardCharsets.US_ASCII));
-            return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
-        } catch (java.security.NoSuchAlgorithmException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private void clearBrowserSession() throws InterruptedException {
-        context.clearCookies();
-        Thread.sleep(100);
-    }
-
-    private void safeNavigate(String url) {
-        try {
-            page.navigate(url, new Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT));
-        } catch (Exception e) {
-            if (e.getMessage() != null && e.getMessage().contains("interrupted by another navigation")) {
-                LOG.debug("Navigation to {} was redirected (expected behavior)", url);
-            } else {
-                throw e;
+    private void deleteAllNonPidCredentials() {
+        for (Credential cred : wallet.listCredentials()) {
+            String type = cred.type();
+            boolean isPid = type != null && (type.contains("pid") ||
+                    type.equals("urn:eudi:pid:de:1") || type.equals("eu.europa.ec.eudi.pid.1"));
+            if (!isPid) {
+                LOG.info("[Test] Deleting non-PID credential: id={}, type={}", cred.id(), type);
+                wallet.client().deleteCredential(cred.id());
             }
         }
     }
+
+    private String convertToOpenid4vpUri(String walletUrl) {
+        return walletUrl.replace(wallet.getAuthorizeUrl() + "?", "openid4vp://authorize?");
+    }
+
+    // ===== Setup Helpers =====
+
+    private static void configureIdpForDockerWallet(String trustListJwt, String walletAuthorizeUrl) throws Exception {
+        var idp = adminClient.getJson("/admin/realms/" + REALM + "/identity-provider/instances/" + IDP_ALIAS);
+        @SuppressWarnings("unchecked")
+        var config = (java.util.Map<String, String>) idp.get("config");
+
+        config.put("trustListJwt", trustListJwt);
+        config.put("sameDeviceEnabled", "true");
+        config.put("sameDeviceWalletUrl", walletAuthorizeUrl);
+        config.put("dcApiRequestMode", "signed");
+
+        adminClient.putJson("/admin/realms/" + REALM + "/identity-provider/instances/" + IDP_ALIAS, idp);
+    }
+
+    // ===== Test Helper Methods =====
 
     private void waitForOpenWalletLink() {
         try {
@@ -749,27 +722,56 @@ class PidBindingE2eIT {
         }
     }
 
-    private void waitForWalletRequest(int expectedCount, Duration timeout) throws InterruptedException {
-        Instant deadline = Instant.now().plus(timeout);
-        while (Instant.now().isBefore(deadline)) {
-            if (wallet.requestCount() >= expectedCount) {
-                return;
-            }
-            Thread.sleep(100);
+    private URI buildAuthRequestUri() {
+        String state = "s-" + System.nanoTime();
+        byte[] bytes = new byte[32];
+        new java.security.SecureRandom().nextBytes(bytes);
+        String codeVerifier = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        String codeChallenge;
+        try {
+            byte[] hash = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(codeVerifier.getBytes(StandardCharsets.US_ASCII));
+            codeChallenge = Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
-        throw new AssertionError("Wallet did not receive expected request count: " + expectedCount +
-                " (current: " + wallet.requestCount() + ")");
+
+        return URI.create("%s/realms/%s/protocol/openid-connect/auth?client_id=%s&redirect_uri=%s&response_type=code&scope=openid+profile+email&state=%s&code_challenge=%s&code_challenge_method=S256"
+                .formatted(kcHostUrl, REALM, CLIENT_ID,
+                        URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8),
+                        URLEncoder.encode(state, StandardCharsets.UTF_8),
+                        URLEncoder.encode(codeChallenge, StandardCharsets.UTF_8)));
     }
 
-    private static Path repoRootDir() {
-        Path current = Path.of(System.getProperty("user.dir"));
-        while (current != null) {
-            if (Files.exists(current.resolve("pom.xml")) && Files.exists(current.resolve("keycloak-oid4vp"))) {
-                return current;
+    private void clearBrowserSession() {
+        context.clearCookies();
+        try {
+            page.navigate(kcHostUrl + "/realms/" + REALM + "/",
+                    new Page.NavigateOptions().setTimeout(10000));
+        } catch (Exception e) {
+            LOG.warn("Initial navigation failed: {}", e.getMessage());
+            try {
+                page.navigate("about:blank");
+            } catch (Exception ignored) {
             }
-            current = current.getParent();
         }
-        throw new IllegalStateException("Could not find repository root");
+        try {
+            page.evaluate("() => { window.localStorage.clear(); window.sessionStorage.clear(); }");
+        } catch (Exception ignored) {
+        }
+        context.clearCookies();
+    }
+
+    private void safeNavigate(String url) {
+        try {
+            page.navigate(url, new Page.NavigateOptions().setWaitUntil(WaitUntilState.COMMIT));
+        } catch (Exception e) {
+            if (e.getMessage() != null && e.getMessage().contains("interrupted by another navigation")) {
+                LOG.debug("Navigation to {} was redirected (expected behavior)", url);
+            } else {
+                throw e;
+            }
+        }
     }
 
     private static void copyRealmImport() throws IOException {
@@ -785,7 +787,8 @@ class PidBindingE2eIT {
 
     private static void copyProviderJars() throws IOException {
         Path providerJar = findProviderJar();
-        keycloak.withCopyFileToContainer(MountableFile.forHostPath(providerJar), "/opt/keycloak/providers/" + providerJar.getFileName());
+        keycloak.withCopyFileToContainer(MountableFile.forHostPath(providerJar),
+                "/opt/keycloak/providers/" + providerJar.getFileName());
 
         Path deps = moduleDir().resolve("target/providers").toAbsolutePath();
         if (!Files.isDirectory(deps)) {
@@ -793,7 +796,8 @@ class PidBindingE2eIT {
         }
         try (Stream<Path> stream = Files.list(deps)) {
             for (Path jar : stream.filter(p -> p.getFileName().toString().endsWith(".jar")).toList()) {
-                keycloak.withCopyFileToContainer(MountableFile.forHostPath(jar), "/opt/keycloak/providers/" + jar.getFileName());
+                keycloak.withCopyFileToContainer(MountableFile.forHostPath(jar),
+                        "/opt/keycloak/providers/" + jar.getFileName());
             }
         }
     }
@@ -821,5 +825,11 @@ class PidBindingE2eIT {
             return child;
         }
         throw new IllegalStateException("Cannot determine module directory from: " + dir);
+    }
+
+    private static Path repoRootDir() {
+        Path module = moduleDir();
+        Path parent = module.getParent();
+        return parent != null ? parent : module;
     }
 }

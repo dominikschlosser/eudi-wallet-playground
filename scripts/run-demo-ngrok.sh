@@ -20,9 +20,9 @@ Useful for testing with mobile devices that need to reach your local server.
 Options:
   --domain <name>  Use a custom ngrok domain (registered in your ngrok account).
                    Overrides the auto-detected domain from the sandbox cert.
-  --proxy          Force-enable ssi-debugger reverse proxy (auto-enabled if
-                   ssi-debugger is in PATH). Dashboard: http://localhost:9091
-  --no-proxy       Disable ssi-debugger proxy even if installed.
+  --proxy          Force-enable oid4vc-dev reverse proxy (auto-enabled if
+                   oid4vc-dev is in PATH). Dashboard: http://localhost:9091
+  --no-proxy       Disable oid4vc-dev proxy even if installed.
   --ngrok-only     Start only ngrok (and proxy if enabled) and print env vars.
 
 Sandbox certificate:
@@ -69,8 +69,8 @@ NGROK_ONLY=false
 NGROK_DOMAIN=""
 PROXY_PORT=9090
 PROXY_DASHBOARD_PORT=9091
-# Auto-enable proxy if ssi-debugger is installed; --no-proxy to override
-if command -v ssi-debugger >/dev/null 2>&1; then
+# Auto-enable proxy if oid4vc-dev is installed; --no-proxy to override
+if command -v oid4vc-dev >/dev/null 2>&1; then
   USE_PROXY=true
 else
   USE_PROXY=false
@@ -161,8 +161,8 @@ trap cleanup INT TERM EXIT
 # When proxy is enabled, ngrok forwards to the proxy port; proxy forwards to the app port.
 NGROK_TARGET_PORT="$PORT"
 if [ "$USE_PROXY" = "true" ]; then
-  if ! command -v ssi-debugger >/dev/null 2>&1; then
-    echo "ssi-debugger not found in PATH. Install it or use --no-proxy." >&2
+  if ! command -v oid4vc-dev >/dev/null 2>&1; then
+    echo "oid4vc-dev not found in PATH. Install it or use --no-proxy." >&2
     exit 1
   fi
   NGROK_TARGET_PORT="$PROXY_PORT"
@@ -210,11 +210,11 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$ROOT_DIR/target"
 keys_file="$ROOT_DIR/target/verifier-keys-ngrok-$timestamp.json"
 
-# Start ssi-debugger proxy if enabled
+# Start oid4vc-dev proxy if enabled
 if [ "$USE_PROXY" = "true" ]; then
-  ssi-debugger proxy --target "http://127.0.0.1:$PORT" --port "$PROXY_PORT" --dashboard "$PROXY_DASHBOARD_PORT" &
+  oid4vc-dev proxy --target "http://127.0.0.1:$PORT" --port "$PROXY_PORT" --dashboard "$PROXY_DASHBOARD_PORT" &
   PROXY_PID="$!"
-  echo "ssi-debugger proxy started (pid $PROXY_PID), target: http://127.0.0.1:$PORT"
+  echo "oid4vc-dev proxy started (pid $PROXY_PID), target: http://127.0.0.1:$PORT"
 fi
 
 export PORT="$PORT"
@@ -243,7 +243,7 @@ EOF
 if [ "$USE_PROXY" = "true" ]; then
   cat <<EOF
 
-ssi-debugger proxy (pid $PROXY_PID):
+oid4vc-dev proxy (pid $PROXY_PID):
   http://127.0.0.1:$PROXY_PORT -> http://127.0.0.1:$PORT
   Dashboard: http://127.0.0.1:$PROXY_DASHBOARD_PORT
 EOF
